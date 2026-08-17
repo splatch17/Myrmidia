@@ -1006,6 +1006,7 @@ var FS = [
   'uniform vec3 uFogIn, uFogOut;',
   'uniform vec3 uLightPos[8]; uniform vec3 uLightCol[8];',
   'uniform float uExposure, uFogDensity, uDayMul, uSpec, uShadowOn;',
+  'uniform float uOccNear, uOccFar;',
   'uniform sampler2D uShadow; uniform vec2 uShadowTexel;',
 
   'float unpackDepth(vec4 c){',
@@ -1031,7 +1032,20 @@ var FS = [
   '  if (!gl_FrontFacing) N = -N;',
   '  vec3 base = vCol * uColMul;',
   '  float day = vDay * uDayMul;',
-  '  vec3 V = normalize(uCamPos - vWorld);',
+  '  vec3 toCam = uCamPos - vWorld;',
+  '  float distCam = length(toCam);',
+  '  vec3 V = toCam / max(distCam, 0.0001);',
+
+  // an occluder hugging the eye (a mushroom cap the close camera ended up
+  // inside of) can't be fixed by pulling the camera toward the ant — the
+  // ant is right behind it too — so instead we dither it away near the eye.
+  // uOccFar left at 0 (close mode off, e.g. isometric) disables this cheaply.
+  '  if (uOccFar > uOccNear) {',
+  '    float occFade = smoothstep(uOccNear, uOccFar, distCam);',
+  '    float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);',
+  '    if (dither > occFade) discard;',
+  '  }',
+
   '  float sh = sunShadow();',
   '  float ndl = max(dot(N, uSunDir), 0.0);',
   '  vec3 amb = mix(uBounceCol, uSkyCol, N.y * 0.5 + 0.5);',
@@ -1056,8 +1070,7 @@ var FS = [
   '  }',
   '  float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);',
   '  c += uRimCol * rim * day * 0.42;',
-  '  float dist = length(uCamPos - vWorld);',
-  '  float fog = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);',
+  '  float fog = 1.0 - exp(-uFogDensity * uFogDensity * distCam * distCam);',
   '  vec3 fogCol = mix(uFogIn, uFogOut, clamp(day * 1.3, 0.0, 1.0));',
   '  c = mix(c, fogCol, clamp(fog, 0.0, 1.0));',
   '  c *= uExposure;',
@@ -1197,7 +1210,7 @@ try {
 var U = {};
 ['uProj','uView','uModel','uNrmMat','uSunDir','uSunCol','uSkyCol','uBounceCol',
  'uCamPos','uRimCol','uColMul','uExposure','uFogDensity','uDayMul','uSpec','uShadowOn',
- 'uFogIn','uFogOut',
+ 'uFogIn','uFogOut','uOccNear','uOccFar',
  'uShadow','uShadowTexel','uLightVP','uTime','uWind']
   .forEach(function (k) { U[k] = gl.getUniformLocation(prog, k); });
 U.uLightPos = gl.getUniformLocation(prog, 'uLightPos');
@@ -1603,7 +1616,10 @@ function desiredCamera() {
   return { eye: eye2, aim: head, fov: 0.52 };
 }
 
-/* Pull the camera in until nothing tall sits between it and the ant. */
+/* Pull the camera in until nothing tall sits between it and the ant. This only
+   knows about GRASS (the one occluder tracked as instances); baked geometry
+   like fungus caps is handled separately, in the fragment shader (uOccNear/
+   uOccFar), by fading it out near the eye instead. */
 function unoccludedFraction(aim, eye) {
   var dx = eye[0] - aim[0], dz = eye[2] - aim[2];
   var len2 = dx*dx + dz*dz;
@@ -1995,6 +2011,10 @@ function frame(now) {
   gl.uniform1f(U.uExposure, exposure);
   gl.uniform1f(U.uFogDensity, fogDensity);
   gl.uniform1f(U.uShadowOn, shadowOn);
+  // only close mode plants the eye where clutter (fungus caps) can swallow it;
+  // isometric keeps enough distance that the fade would never trigger anyway
+  gl.uniform1f(U.uOccNear, camMode === 'close' ? 1.0 : 0.0);
+  gl.uniform1f(U.uOccFar, camMode === 'close' ? 3.8 : 0.0);
   gl.uniform1f(U.uTime, t);
   gl.uniform1f(U.uWind, wind);
   gl.uniform2f(U.uShadowTexel, 1 / shadowRT.w, 1 / shadowRT.h);
