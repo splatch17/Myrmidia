@@ -2,9 +2,9 @@
 
 ## `sortie-fourmiliere.html` — Sortie de la Fourmilière
 
-Premier prototype jouable. Une page HTML autonome (WebGL 1, aucune dépendance, aucun build) : ouvrir le fichier dans un navigateur.
+Prototype jouable. Une page HTML autonome (WebGL 1, aucune dépendance, aucun build) : ouvrir le fichier dans un navigateur.
 
-**But de ce prototype** : valider les sensations avant de valider l'esthétique. La scène choisie est le passage de l'ombre des galeries à la lumière de la pelouse — le moment qui vend l'échelle du monde d'un seul coup d'œil.
+Le joueur commence dans la **chambre de la reine**, traverse la galerie, et débouche sur la pelouse. Trois ambiances enchaînées : le foyer, le passage, puis l'immensité.
 
 ### Commandes
 
@@ -18,38 +18,46 @@ Premier prototype jouable. Une page HTML autonome (WebGL 1, aucune dépendance, 
 
 Sur mobile, glisser sur la moitié gauche fait apparaître un stick virtuel.
 
+### La chambre de la reine
+
+La reine est plusieurs fois la taille d'une ouvrière, posée sur une butte de terre, entourée de son couvain. Elle ne marche pas, mais elle n'est pas un décor : son gastre respire et ses antennes lisent l'air.
+
+Autour d'elle, ce qui rend le lieu habité : des piles d'œufs, des jardins de champignons luminescents, des racines qui traversent le plafond, des radicelles suspendues, des grains de terre pris dans les parois, et des **perles lumineuses** accrochées à des fils — la note fantastique, et la raison pour laquelle la chambre est chaude alors que la galerie est froide.
+
 ### Ce que le prototype met à l'épreuve
 
-- **L'échelle.** 1 unité ≈ 1,2 mm. La fourmi fait ~7 unités, un brin d'herbe 26 à 100 — soit une forêt de tours. C'est le point qui décide si l'univers fonctionne.
-- **Les deux caméras.** Rapprochée (façon MMO moderne) contre isométrique fixe (façon Dofus), commutables à chaud pour trancher en la voyant plutôt qu'en en discutant.
-- **La locomotion hexapode procédurale.** Les six pattes ne jouent pas de cycle d'animation : chaque pied vise une cible au sol, et le genou est résolu par IK deux os à chaque image, avec une démarche en trépied cadencée sur la distance parcourue (pas de glissement de pied). C'est la version jouet du pilier « animation » du README principal.
-- **La transition lumineuse.** Exposition adaptative, brouillard et teinte de contre-jour interpolés entre la galerie et la surface, pour que la sortie se ressente au lieu d'être simplement franchie.
-- **L'occlusion caméra.** À hauteur de fourmi, l'herbe passe son temps entre le joueur et sa caméra ; le prototype rapproche la caméra en tenant compte de l'affinement des brins. C'est un vrai problème de conception que ce jeu aura, découvert en jouant.
+- **L'échelle.** 1 unité ≈ 1,2 mm. La fourmi fait ~7 unités, un brin d'herbe 26 à 100 — une forêt de tours. La chambre fait 64 unités de large sous 28 de haut : une cathédrale à hauteur d'insecte.
+- **Les deux caméras.** Rapprochée (façon MMO moderne) contre isométrique fixe (façon Dofus), commutables à chaud pour trancher en la voyant.
+- **La locomotion hexapode procédurale.** Aucun cycle d'animation : chaque pied vise une cible au sol, le genou est résolu par IK deux os à chaque image, démarche en trépied cadencée sur la distance parcourue (donc pas de glissement de pied).
+- **La transition lumineuse.** Exposition adaptative, brouillard et contre-jour interpolés entre la galerie et la surface.
 
-### Passe artistique
+### Rendu
 
-Le rendu se fait en trois passes, toutes écrites à la main en WebGL 1 sans extension obligatoire :
+Trois passes, écrites à la main en WebGL 1 sans extension obligatoire :
 
-1. **Profondeur vue du soleil** → carte d'ombre 1024², profondeur encodée dans un RGBA8 (aucune extension de texture de profondeur supposée), cadrée sur une boîte orthographique qui suit le joueur. Filtrage PCF 3×3.
-2. **La scène**, rendue hors écran. Le vent est appliqué à l'identique dans cette passe et dans la précédente, sinon l'ombre d'un brin ne suivrait pas le brin.
-3. **Rayons de lumière**, diffusion radiale depuis la position écran du soleil, composée à l'écran.
+1. **Profondeur vue du soleil** → carte d'ombre 1024², profondeur encodée dans un RGBA8, boîte orthographique qui suit le joueur, filtrage PCF 3×3.
+2. **La scène**, hors écran. Le vent est appliqué à l'identique ici et dans la passe d'ombre, sinon l'ombre d'un brin ne suivrait pas le brin.
+3. **Rayons de lumière**, diffusion radiale depuis la position écran du soleil.
 
-Trois détails qui portent l'image bien au-delà de leur coût :
+Détails qui portent l'image bien au-delà de leur coût :
 
-- **Translucidité du feuillage.** Un brin d'herbe est fin : à contre-jour, la lumière le traverse. Un seul terme dans le shader, et la pelouse cesse d'être un décor pour devenir une matière.
-- **Brouillard choisi par fragment, pas par caméra.** Depuis la galerie, la pelouse doit *briller* par l'ouverture. Un brouillard indexé sur la position de la caméra noyait la sortie dans la pénombre de la galerie ; l'indexer sur l'exposition propre au fragment transforme l'ouverture en trou de lumière.
-- **Spéculaire de chitine.** Un lobe serré appliqué à la seule fourmi, pour qu'elle lise comme une carapace dure au milieu d'un monde mat.
+- **Éclairage local, nombreux et petit.** Chaque champignon, chaque perle, chaque pile de couvain porte sa propre lampe ; seules les huit plus proches atteignent le shader. Ce sont les flaques de lumière séparées par du noir qui font qu'un souterrain se lit comme un lieu, et non comme un brouillard brun.
+- **Parois creusées, pas tubulaires.** Le rayon de la galerie est bruité sur trois octaves, échantillonné le long d'un cercle pour rester continu au raccord. Les creux gardent leur propre ombre, cuite par sommet : sans ça, une paroi lisse reste illisible quelle que soit la lumière.
+- **Translucidité du feuillage.** À contre-jour, la lumière traverse les brins d'herbe.
+- **Brouillard choisi par fragment, pas par caméra.** Depuis la galerie, la pelouse doit *briller* par l'ouverture ; un brouillard indexé sur la caméra la noyait dans la pénombre de la galerie.
+- **Spéculaire de chitine** sur les seules fourmis, pour qu'elles lisent comme des carapaces dures dans un monde mat.
 
 ### Ce que le prototype ne fait pas
 
-Pas de combat, pas de grimpe, pas de PNJ, pas de réseau. Le HUD est décoratif (seule la jauge de phéromone bouge, pour donner l'idée).
+Pas de combat, pas de grimpe, pas de PNJ, pas de réseau, pas de son. Le HUD est décoratif (seule la jauge de phéromone bouge, pour donner l'idée).
 
 ### Aperçus
 
+![La chambre de la reine](apercu-chambre-reine.png)
+![La reine](apercu-reine.png)
 ![La galerie](apercu-galerie.png)
 ![La pelouse](apercu-pelouse.png)
-![Vue isométrique](apercu-isometrique.png)
 
 ### Suite
 
-Grimpe des tiges, combat, PNJ. Une conception alternative sera aussi essayée en parallèle.
+Salles supplémentaires (greniers, couvoirs, dépotoirs), grimpe des tiges, PNJ ouvrières en circulation, ambiance sonore. Une conception alternative sera aussi essayée en parallèle.

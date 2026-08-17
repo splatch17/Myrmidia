@@ -45,9 +45,23 @@ Palette chitine chaude et terreuse plutôt que le vert criard habituel des insec
 
 Le document complet de brainstorming (esquisses de classes, carte du monde, HUD, arbre de compétences) est dans [`design/concept.html`](design/concept.html).
 
+## Boucle de jeu
+
+*Piste de travail, à approfondir.*
+
+L'objectif du joueur est de **faire grandir sa fourmilière** : creuser de nouvelles salles, en agrandir d'anciennes, et faire vivre une colonie de plus en plus nombreuse. Le nid est la mesure du progrès, pas un niveau de personnage.
+
+Ce qui alimente cette croissance :
+
+- **La récolte.** Sortir en surface, rapporter graines, résine, miellat, matériaux. Chaque sortie est un risque : la surface est vaste, éclairée, et peuplée de prédateurs.
+- **Les quêtes.** Données par la colonie et par ses castes, elles orientent la récolte et ouvrent des territoires.
+- **La recherche et la trouvaille.** Certaines salles, techniques et espèces de champignons ne s'achètent pas : elles se découvrent — en explorant, en rapportant un spécimen inconnu, en observant une colonie rivale. C'est le versant curiosité de la progression, en regard du versant travail qu'est la récolte.
+
+La chambre de la reine est le cœur de ce système : c'est d'elle que dépend la population, et donc tout le reste.
+
 ## État du projet
 
-Phase de brainstorming / pré-production. Rien n'est encore codé.
+Phase de brainstorming / pré-production. Un prototype jouable existe (voir `design/prototypes/`) ; rien du jeu lui-même n'est encore codé.
 
 ## Structure du dépôt
 

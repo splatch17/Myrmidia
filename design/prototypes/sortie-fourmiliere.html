@@ -202,7 +202,7 @@
 
   <div class="hud" id="objective">
     <div class="lbl">Objectif</div>
-    <div class="txt" id="objtxt">Remonter la galerie jusqu'à la surface</div>
+    <div class="txt" id="objtxt">Quitter la chambre de la reine</div>
   </div>
 
   <div class="hud" id="tag">
@@ -243,8 +243,8 @@
   </div>
 
   <div id="titlecard">
-    <div class="big" id="tcbig">LA PELOUSE</div>
-    <div class="small" id="tcsmall">Un brin d'herbe fait seize fois votre taille</div>
+    <div class="big" id="tcbig">LA CHAMBRE DE LA REINE</div>
+    <div class="small" id="tcsmall">Tout commence ici</div>
   </div>
 
   <div id="stick"><div class="nub"></div></div>
@@ -394,16 +394,42 @@ function rng(seed) {
       where the ground is, and how much light reaches a point.
    ========================================================================== */
 
-var TUNNEL_BACK  = -96;    // dead end of the gallery
+var TUNNEL_BACK  = -166;   // back wall of the queen's chamber
 var TUNNEL_MOUTH = 0;      // where the gallery opens onto the lawn
 var TUNNEL_R     = 7.2;
 var TUNNEL_RISE  = 4.0;    // tube centre height, so the floor lands near y=0
 
+var CH_Z = -132, CH_R = 32;          // the chamber is a bulge in the same tube
+var START = [-9, -140];
+var QUEEN = [13, 0, -124];
+var DAIS_R = 15, DAIS_H = 2.6;
+
+/* The gallery and the chamber are one tube whose radius swells in the middle. */
+function profileR(z) {
+  var t = (z - CH_Z) / CH_R;
+  if (t > -1 && t < 1) {
+    return TUNNEL_R + (CH_R - TUNNEL_R) * Math.pow(Math.sqrt(1 - t * t), 0.72);
+  }
+  return TUNNEL_R;
+}
+
+/* One floor function, used both to build the floor and to stand the ants on it,
+   so nothing hovers or sinks. */
+function undergroundFloor(x, z) {
+  var y = 0.22 * vnoise(x * 0.11 + 11, z * 0.11 + 5);
+  var d = Math.hypot(x - QUEEN[0], z - QUEEN[2]);
+  if (d < DAIS_R) {
+    var t = 1 - d / DAIS_R;
+    y += DAIS_H * t * t * (3 - 2 * t);
+  }
+  return y;
+}
+
 function groundY(x, z) {
-  if (z < TUNNEL_MOUTH) return 0;                       // gallery floor: flat
+  if (z < TUNNEL_MOUTH) return undergroundFloor(x, z);
   var h = (vnoise(x*0.012, z*0.012) - 0.5) * 4.2
         + (vnoise(x*0.052, z*0.052) - 0.5) * 1.3;
-  return h * clamp(z / 26, 0, 1);                       // blend out at the mouth
+  return h * clamp(z / 26, 0, 1) + undergroundFloor(x, 0) * (1 - clamp(z / 26, 0, 1));
 }
 
 function groundNormal(x, z) {
@@ -419,16 +445,14 @@ function daylight(x, y, z) {
   return 0.12 + 0.88 * Math.pow(t, 1.6);
 }
 
-/* Fungus clusters double as the gallery's only real light sources. */
+/* Every light is local and small. Pools of light with dark between them is what
+   makes an underground space read as a place rather than a brown fog. */
+var ALL_LIGHTS = [];
+var LIGHT_SLOTS = 8;
+
 /* Blade footprints, kept so the camera can avoid ending up inside one.
    At ant scale the grass is the main thing between you and your character. */
 var GRASS = [];
-
-var LIGHTS = [
-  { p: [-4.6, 2.2, -74], c: [0.85, 0.40, 1.10] },
-  { p: [ 4.8, 3.0, -34], c: [0.75, 0.34, 1.00] },
-  { p: [ 0.0, 5.0,  3.0], c: [1.30, 0.90, 0.40] }   // skylight spilling in at the mouth
-];
 
 /* ==========================================================================
    2. Mesh building — one interleaved layout used by every draw call:
@@ -539,6 +563,10 @@ var C_SOIL_A = col('#6d5130'), C_SOIL_B = col('#463320');
 var C_MOSS_A = col('#4c5f2f'), C_MOSS_B = col('#7d9c4e'), C_MOSS_TIP = col('#a8c774');
 var C_WALL_A = col('#5a4226'), C_WALL_B = col('#332412');
 var C_STONE  = col('#6a6154');
+var C_ROOT   = col('#4a3418'), C_ROOTLET = col('#7a5f38');
+var C_BROOD  = col('#efdcb0'), C_GRAIN = col('#7a6040');
+var C_QUEEN_A= col('#b07226'), C_QUEEN_B = col('#5e3d16');
+var C_GLOW   = col('#ffc46a');
 var C_SPORE  = col('#c497d9');
 var C_LEAF_A = col('#5d7a37'), C_LEAF_B = col('#93b25c');
 var C_TWIG   = col('#4a3a24');
@@ -551,33 +579,55 @@ function buildWorld() {
   var cyl = unitCylinder(8);
   var tmp = m4();
 
-  /* ---- the gallery: an irregular tube with a flattened floor ---- */
-  var slices = [], SL = 2.6;
-  var ANG = 16;
+  /* ---- gallery and chamber: one tube whose radius swells into a room ---- */
+
+  // seamless around the ring: sampling a circle means angle 0 and 2pi agree
+  function wallN(th, z, k, sz) {
+    return vnoise(Math.cos(th) * k + z * sz + 37, Math.sin(th) * k + z * sz * 0.7 + 91);
+  }
+  function vsqAt(r) { return 0.86 * Math.pow(TUNNEL_R / r, 0.35); }
+  function riseAt(z) { var r = profileR(z); return 1.2 + r * vsqAt(r) * 0.62; }
+
+  // where a point on the wall sits, given angle and depth — props reuse this
+  function wallPoint(th, z, inset) {
+    var baseR = profileR(z), vsq = vsqAt(baseR);
+    var wob = 0.84 + 0.20 * wallN(th, z, 1.6, 0.10)
+                   + 0.10 * wallN(th, z, 4.1, 0.29)
+                   + 0.05 * wallN(th, z, 9.3, 0.62);
+    var rr = baseR * wob * (1 - (inset || 0));
+    var px = Math.cos(th) * rr;
+    var py = Math.sin(th) * rr * vsq + riseAt(z);
+    var fl = undergroundFloor(px, z);
+    return [px, Math.max(py, fl), z, wob];
+  }
+
+  var ANG = 44, SL = 1.7;
+  var slices = [];
   for (var z = TUNNEL_BACK; z <= 3.0001; z += SL) {
     var ring = [];
     for (var a = 0; a < ANG; a++) {
-      var th = 2*Math.PI * a / ANG;
-      var wob = 0.80 + 0.34 * vnoise(a * 0.9, z * 0.11);
-      var rr = TUNNEL_R * wob;
-      var px = Math.cos(th) * rr;
-      var py = Math.sin(th) * rr * 0.86 + TUNNEL_RISE;
-      if (py < 0.35) py = 0.35 * (0.4 + 0.6 * vnoise(px * 0.2, z * 0.2));  // floor
-      // the mouth flares open
+      var th = 2 * Math.PI * a / ANG;
+      var p = wallPoint(th, z, 0);
+      // the mouth flares open into daylight
       var flare = z > -14 ? 1 + Math.pow((z + 14) / 17, 2) * 0.9 : 1;
-      ring.push([px * flare, py * (flare * 0.5 + 0.5), z]);
+      ring.push([p[0] * flare, Math.max(p[1] * (flare * 0.5 + 0.5), undergroundFloor(p[0] * flare, z)), z, p[3]]);
     }
     slices.push(ring);
   }
-  for (var s = 0; s < slices.length; s++) {
+  for (var si = 0; si < slices.length; si++) {
     var idxRow = [];
     for (var a2 = 0; a2 < ANG; a2++) {
-      var v = slices[s][a2];
-      var up = clamp((v[1] - 0.4) / 8, 0, 1);
-      var c = mixc(C_SOIL_B, C_WALL_A, up * 0.7 + vnoise(v[0]*0.3, v[2]*0.3) * 0.3);
-      idxRow.push(vtx(M, v[0], v[1], v[2], c, daylight(v[0], v[1], v[2])));
+      var v = slices[si][a2];
+      var warmth = clamp(1 - Math.abs(v[2] - CH_Z) / (CH_R * 1.6), 0, 1);   // the chamber is warmer earth
+      var proud = clamp((v[3] - 0.84) / 0.34 + 0.45, 0, 1);                 // ridge vs crevice
+      var damp2 = vnoise(v[0] * 0.13 + 3, v[2] * 0.13 + 8);
+      var c = mixc(C_WALL_B, C_WALL_A, proud * 0.8 + 0.12);
+      c = mixc(c, C_SOIL_A, warmth * 0.45 + damp2 * 0.2);
+      // crevices hold their own shade: this is what makes the walls legible
+      var cav = 0.42 + 0.58 * proud;
+      idxRow.push(vtx(M, v[0], v[1], v[2], c, daylight(v[0], v[1], v[2]) * cav));
     }
-    slices[s].idx = idxRow;
+    slices[si].idx = idxRow;
   }
   for (var s2 = 0; s2 < slices.length - 1; s2++) {
     for (var a3 = 0; a3 < ANG; a3++) {
@@ -586,11 +636,172 @@ function buildWorld() {
               slices[s2+1].idx[n3], slices[s2+1].idx[a3]);
     }
   }
-  // cap the dead end so you can't see out the back
-  var capC = vtx(M, 0, TUNNEL_RISE, TUNNEL_BACK - 0.5, C_SOIL_B, daylight(0,0,TUNNEL_BACK));
-  for (var a4 = 0; a4 < ANG; a4++) {
-    tri(M, capC, slices[0].idx[a4], slices[0].idx[(a4+1)%ANG]);
+  (function () {
+    var prev = slices[0].idx, steps = 4;
+    for (var k = 1; k <= steps; k++) {
+      var shrink = Math.cos(k / steps * Math.PI * 0.5);
+      var back = TUNNEL_BACK - Math.sin(k / steps * Math.PI * 0.5) * 9;
+      var row = [];
+      for (var a4 = 0; a4 < ANG; a4++) {
+        var th4 = 2 * Math.PI * a4 / ANG;
+        var v0 = slices[0][a4];
+        var lump = 0.86 + 0.28 * wallN(th4, back * 1.7, 2.3, 0.2);
+        var cx4 = v0[0] * shrink * lump;
+        var cy4 = riseAt(TUNNEL_BACK) + (v0[1] - riseAt(TUNNEL_BACK)) * shrink * lump;
+        var cc4 = mixc(C_WALL_B, C_WALL_A, 0.15 + lump * 0.4);
+        row.push(vtx(M, cx4, Math.max(cy4, undergroundFloor(cx4, back)), back, cc4,
+                     daylight(0, 0, back) * (0.35 + 0.3 * lump)));
+      }
+      for (var a5 = 0; a5 < ANG; a5++) {
+        var n5 = (a5 + 1) % ANG;
+        quad(M, prev[a5], prev[n5], row[n5], row[a5]);
+      }
+      prev = row;
+    }
+    var capC = vtx(M, 0, riseAt(TUNNEL_BACK) * 0.6, TUNNEL_BACK - 10, C_WALL_B, daylight(0,0,TUNNEL_BACK) * 0.3);
+    for (var a6 = 0; a6 < ANG; a6++) tri(M, capC, prev[a6], prev[(a6+1)%ANG]);
+  })();
+
+  /* ---- the dais, tessellated finely from the same height function ---- */
+  (function () {
+    var rings = 9, segs = 30, ids = [];
+    for (var ri = 0; ri <= rings; ri++) {
+      var row = [];
+      for (var ai = 0; ai <= segs; ai++) {
+        var th = 2 * Math.PI * ai / segs, rad = DAIS_R * 1.02 * ri / rings;
+        var x = QUEEN[0] + Math.cos(th) * rad, zz = QUEEN[2] + Math.sin(th) * rad;
+        var y = undergroundFloor(x, zz) + 0.08;
+        var cc = mixc(C_SOIL_A, C_WALL_A, 0.3 + vnoise(x*0.2, zz*0.2) * 0.5);
+        row.push(vtx(M, x, y, zz, cc, daylight(x, y, zz) * (0.65 + 0.35 * (1 - ri/rings))));
+      }
+      ids.push(row);
+    }
+    for (var r2 = 0; r2 < rings; r2++)
+      for (var a5 = 0; a5 < segs; a5++)
+        quad(M, ids[r2][a5], ids[r2][a5+1], ids[r2+1][a5+1], ids[r2+1][a5]);
+  })();
+
+  /* ---- roots arching through the ceiling ---- */
+  var grainGeo = unitSphere(6, 4);
+  function rootArc(z0, th0, th1, thick, sag, drift) {
+    var segs = 8, prev = null;
+    for (var i = 0; i <= segs; i++) {
+      var u = i / segs, bulge = Math.sin(u * Math.PI);
+      var th = lerp(th0, th1, u);
+      var p = wallPoint(th, z0 + drift * bulge, sag * bulge);
+      if (prev) {
+        segMat(prev, p, thick * (0.65 + 0.5 * bulge), tmp);
+        bake(M, cyl, tmp, function (x, y, zz) {
+          return [C_ROOT[0], C_ROOT[1], C_ROOT[2], daylight(x, y, zz) * 0.8];
+        });
+      }
+      prev = p;
+    }
   }
+  for (var rt = 0; rt < 30; rt++) {
+    var rz = TUNNEL_BACK + 8 + R() * (Math.abs(TUNNEL_BACK) - 16);
+    var base = Math.PI * (0.15 + R() * 0.7);
+    rootArc(rz, base, base + 0.5 + R() * 1.3, 0.5 + R() * 0.9, 0.06 + R() * 0.16, (R() - 0.5) * 9);
+  }
+
+  /* ---- rootlets hanging from the ceiling ---- */
+  for (var hl = 0; hl < 150; hl++) {
+    var hz = TUNNEL_BACK + 5 + R() * (Math.abs(TUNNEL_BACK) - 10);
+    var hth = Math.PI * (0.18 + R() * 0.64);
+    var hp = wallPoint(hth, hz, 0.02);
+    var len = 1.2 + R() * (profileR(hz) > 16 ? 7 : 3);
+    segMat(hp, [hp[0] + (R()-0.5)*0.8, hp[1] - len, hp[2] + (R()-0.5)*0.8], 0.09 + R()*0.1, tmp);
+    bake(M, cyl, tmp, function (x, y, zz) {
+      return [C_ROOTLET[0], C_ROOTLET[1], C_ROOTLET[2], daylight(x, y, zz) * 0.9];
+    });
+  }
+
+  /* ---- grains of earth caught in the walls, so surfaces have a size ---- */
+  for (var gn = 0; gn < 520; gn++) {
+    var gz = TUNNEL_BACK + 3 + R() * (Math.abs(TUNNEL_BACK) - 5);
+    var gth = R() * Math.PI * 2;
+    var gp = wallPoint(gth, gz, 0.01);
+    var gs = 0.22 + R() * 0.55;
+    m4Basis([gs,0,0], [0,gs*0.8,0], [0,0,gs], gp, tmp);
+    var sd = 0.7 + R() * 0.7;
+    bake(M, grainGeo, tmp, function (x, y, zz) {
+      return [C_GRAIN[0]*sd, C_GRAIN[1]*sd, C_GRAIN[2]*sd, daylight(x, y, zz) * (0.5 + R() * 0.5)];
+    });
+  }
+
+  /* ---- pebbles and husks on the floor ---- */
+  for (var fd = 0; fd < 120; fd++) {
+    var fz = TUNNEL_BACK + 5 + R() * (Math.abs(TUNNEL_BACK) - 8);
+    var lim = profileR(fz) * 0.7;
+    var fx = (R() - 0.5) * 2 * lim;
+    var fs = 0.3 + R() * 0.9;
+    m4Basis([fs*1.3,0,0], [0,fs*0.7,0], [0,0,fs*1.1], [fx, undergroundFloor(fx, fz) + fs*0.3, fz], tmp);
+    var sd2 = 0.6 + R() * 0.8;
+    bake(M, grainGeo, tmp, function (x, y, zz) {
+      return [C_STONE[0]*sd2, C_STONE[1]*sd2, C_STONE[2]*sd2, daylight(x, y, zz) * 0.8];
+    });
+  }
+
+  /* ---- fungus gardens: the gallery's only real light ---- */
+  function fungusCluster(cx, cz, n, scale, tint, lightCol) {
+    // nothing grows where the player stands up
+    if (Math.hypot(cx - START[0], cz - START[1]) < 15) return;
+    for (var i = 0; i < n; i++) {
+      var fx = cx + (R() - 0.5) * 7, fz = cz + (R() - 0.5) * 7;
+      var sc = scale * (0.45 + R() * 0.9);
+      var fy = undergroundFloor(fx, fz);
+      var top = [fx, fy + 1.7 * sc, fz];
+      segMat([fx, fy, fz], top, 0.22 * sc, tmp);
+      bake(M, cyl, tmp, function () { return [tint[0]*0.3, tint[1]*0.28, tint[2]*0.4, 0.85]; });
+      m4Basis([1.15*sc,0,0], [0,0.8*sc,0], [0,0,1.15*sc], top, tmp);
+      bake(M, sphere, tmp, function () { return [tint[0]*1.5, tint[1]*1.0, tint[2]*1.9, 1]; });
+    }
+    ALL_LIGHTS.push({ p: [cx, undergroundFloor(cx, cz) + 2.4, cz], c: lightCol });
+  }
+  var SPORE_TINT = C_SPORE, SPORE_LIGHT = [1.15, 0.50, 1.45];
+  var GLOW_LIGHT = [1.75, 1.10, 0.48];
+  for (var fg = 0; fg < 9; fg++) {
+    var fgz = -14 - fg * 10.5;
+    fungusCluster((fg % 2 ? 1 : -1) * (3.5 + R() * 1.8), fgz, 4 + Math.floor(R() * 4),
+                  1.3, SPORE_TINT, SPORE_LIGHT);
+  }
+
+  /* ---- the chamber: brood, gardens, and warm glow-beads on the roots ---- */
+  for (var bg = 0; bg < 8; bg++) {
+    var bth = R() * Math.PI * 2, brad = 17 + R() * 9;
+    var bx2 = QUEEN[0] + Math.cos(bth) * brad, bz2 = QUEEN[2] + Math.sin(bth) * brad;
+    var roomHere = profileR(bz2) * 0.72;               // don't plant them in the wall
+    if (Math.abs(bx2) > roomHere) bx2 = Math.sign(bx2) * roomHere;
+    fungusCluster(bx2, bz2, 5 + Math.floor(R() * 5), 1.9, SPORE_TINT, SPORE_LIGHT);
+  }
+  // glow-beads: the fantastical note, and the reason the chamber is warm
+  for (var gb = 0; gb < 26; gb++) {
+    var gth2 = Math.PI * (0.2 + R() * 0.6);
+    var gz2 = CH_Z + (R() - 0.5) * CH_R * 1.5;
+    var gp2 = wallPoint(gth2, gz2, 0.03);
+    var drop = 3 + R() * 11;
+    var bp = [gp2[0], gp2[1] - drop, gp2[2]];
+    segMat(gp2, bp, 0.07, tmp);
+    bake(M, cyl, tmp, function () { return [C_ROOTLET[0]*0.6, C_ROOTLET[1]*0.6, C_ROOTLET[2]*0.6, 0.6]; });
+    var br = 0.55 + R() * 0.75;
+    m4Basis([br,0,0], [0,br*1.25,0], [0,0,br], bp, tmp);
+    bake(M, sphere, tmp, function () { return [C_GLOW[0]*2.6, C_GLOW[1]*1.9, C_GLOW[2]*0.9, 1]; });
+    if (gb % 3 === 0) ALL_LIGHTS.push({ p: bp, c: GLOW_LIGHT });
+  }
+  // brood piles at the queen's flanks
+  for (var bp2 = 0; bp2 < 5; bp2++) {
+    var pth = Math.PI * (0.15 + bp2 * 0.42), prad = 8 + R() * 5;
+    var px2 = QUEEN[0] + Math.cos(pth) * prad, pz2 = QUEEN[2] + Math.sin(pth) * prad;
+    for (var eg = 0; eg < 22; eg++) {
+      var ex = px2 + (R() - 0.5) * 5.5, ez = pz2 + (R() - 0.5) * 5.5;
+      var es = 0.5 + R() * 0.35;
+      m4Basis([es*0.72,0,0], [0,es*0.72,0], [0,0,es*1.5], [ex, undergroundFloor(ex, ez) + es*0.6, ez], tmp);
+      bake(M, sphere, tmp, function () { return [C_BROOD[0]*0.95, C_BROOD[1]*0.88, C_BROOD[2]*0.72, 0.8]; });
+    }
+    ALL_LIGHTS.push({ p: [px2, undergroundFloor(px2, pz2) + 1.5, pz2], c: [0.55, 0.42, 0.22] });
+  }
+  ALL_LIGHTS.push({ p: [QUEEN[0], undergroundFloor(QUEEN[0], QUEEN[2]) + 9, QUEEN[2]], c: [1.5, 1.05, 0.5] });
+  ALL_LIGHTS.push({ p: [0, 5, 3], c: [1.30, 0.90, 0.40] });          // daylight at the mouth
 
   /* ---- the mound face: a wall of earth with the mouth punched through ---- */
   var WX0 = -210, WX1 = 210, WSTEP = 6, WROWS = 22;
@@ -728,23 +939,6 @@ function buildWorld() {
     bake(M, sphere, tmp, function () { return [C_DEW[0]*1.05, C_DEW[1]*1.15, C_DEW[2]*1.45, 1]; });
   }
 
-  /* ---- glowing fungus in the gallery: the only reason you can see in there ---- */
-  function fungus(fx, fy, fz, scale) {
-    var stalkTop = [fx, fy + 1.7*scale, fz];
-    segMat([fx, fy, fz], stalkTop, 0.22*scale, tmp);
-    bake(M, cyl, tmp, function () { return [C_SPORE[0]*0.35, C_SPORE[1]*0.3, C_SPORE[2]*0.45, 0.9]; });
-    m4Basis([1.15*scale,0,0], [0,0.8*scale,0], [0,0,1.15*scale], stalkTop, tmp);
-    bake(M, sphere, tmp, function () { return [C_SPORE[0]*1.5, C_SPORE[1]*0.95, C_SPORE[2]*1.9, 1]; });
-  }
-  var fungusSpots = [
-    [-4.6, 0.4, -74, 1.5], [-6.2, 0.5, -70, 1.0], [-3.0, 0.4, -78, 0.8],
-    [ 4.8, 0.4, -34, 1.6], [ 6.0, 0.5, -30, 1.0], [ 3.6, 0.4, -38, 0.9],
-    [-5.4, 0.4, -54, 1.1], [ 5.2, 0.4, -88, 1.0], [-4.0, 0.4, -14, 0.9]
-  ];
-  for (var f = 0; f < fungusSpots.length; f++) {
-    fungus(fungusSpots[f][0], fungusSpots[f][1], fungusSpots[f][2], fungusSpots[f][3]);
-  }
-
   computeNormals(M);
   return M;
 }
@@ -810,7 +1004,7 @@ var FS = [
   'varying float vSway; varying vec4 vLightPos;',
   'uniform vec3 uSunDir, uSunCol, uSkyCol, uBounceCol, uCamPos, uRimCol, uColMul;',
   'uniform vec3 uFogIn, uFogOut;',
-  'uniform vec3 uLightPos[3]; uniform vec3 uLightCol[3];',
+  'uniform vec3 uLightPos[8]; uniform vec3 uLightCol[8];',
   'uniform float uExposure, uFogDensity, uDayMul, uSpec, uShadowOn;',
   'uniform sampler2D uShadow; uniform vec2 uShadowTexel;',
 
@@ -854,10 +1048,10 @@ var FS = [
   '    c += uSunCol * pow(max(dot(N, H), 0.0), 46.0) * uSpec * day * sh;',
   '  }',
 
-  '  for (int i = 0; i < 3; i++) {',
+  '  for (int i = 0; i < 8; i++) {',
   '    vec3 L = uLightPos[i] - vWorld;',
   '    float d = length(L);',
-  '    float att = 1.0 / (1.0 + d * d * 0.011);',
+  '    float att = 1.0 / (1.0 + d * d * 0.017);',
   '    c += base * uLightCol[i] * max(dot(N, L / max(d, 0.001)), 0.0) * att;',
   '  }',
   '  float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);',
@@ -919,7 +1113,7 @@ var POST_FS = [
   '      uv -= step;',
   '      vec3 sm = texture2D(uScene, clamp(uv, 0.0, 1.0)).rgb;',
   '      float lum = max(max(sm.r, sm.g), sm.b);',
-  '      acc += sm * smoothstep(0.40, 0.88, lum) * illum;',
+  '      acc += sm * smoothstep(0.58, 0.95, lum) * illum;',
   '      illum *= 0.955;',
   '    }',
   '    acc *= uRays / 26.0;',
@@ -1180,7 +1374,7 @@ var LEGS = [
 ];
 
 var ant = {
-  x: 0, y: 0, z: -78,
+  x: -9, y: 0, z: -140,
   yaw: 0,                  // 0 = facing +Z, i.e. toward the mouth
   speed: 0,
   travel: 0,               // distance walked, drives the gait
@@ -1361,7 +1555,8 @@ canvas.addEventListener('wheel', function (e) {
    ========================================================================== */
 
 var camMode = 'close';
-var camEye = [0, 8, -96], camAim = [0, 3, -78];
+var camReady = false;
+var camEye = [-16, 12, -176], camAim = [-16, 4, -158];
 var camBtn = document.getElementById('camtoggle');
 
 function toggleCam() {
@@ -1376,16 +1571,18 @@ function desiredCamera() {
     var yaw = camYaw;
     var pitch = wantPitch;
     var inTunnel = ant.z < TUNNEL_MOUTH - 2;
-    var d = inTunnel ? Math.min(camDist, 13.5) : camDist;
+    var room = inTunnel ? profileR(ant.z) : TUNNEL_R;
+    var d = inTunnel ? Math.min(camDist, Math.max(13.5, room * 1.5)) : camDist;
     var eye = [
       head[0] - Math.sin(yaw) * Math.cos(pitch) * d,
       head[1] - Math.sin(pitch) * d + 3.4,
       head[2] - Math.cos(yaw) * Math.cos(pitch) * d
     ];
-    if (inTunnel) {                       // keep the camera inside the gallery
-      eye[0] = clamp(eye[0], -4.2, 4.2);
-      eye[1] = clamp(eye[1], 1.6, 7.6);
-      eye[2] = Math.max(eye[2], TUNNEL_BACK + 2);
+    if (inTunnel) {                       // keep the camera inside the nest
+      eye[2] = Math.max(eye[2], TUNNEL_BACK + 5);
+      var here = profileR(eye[2]);        // the room at the camera, not at the ant
+      eye[0] = clamp(eye[0], -(here * 0.72), here * 0.72);
+      eye[1] = clamp(eye[1], groundY(eye[0], eye[2]) + 1.6, 1.5 + here * 1.0);
     } else {
       eye[1] = Math.max(eye[1], groundY(eye[0], eye[2]) + 2.2);
     }
@@ -1399,8 +1596,9 @@ function desiredCamera() {
     head[1] + Math.sin(isoPitch) * isoD,
     head[2] - Math.cos(isoYaw) * Math.cos(isoPitch) * isoD
   ];
-  if (ant.z < TUNNEL_MOUTH - 2) {         // underground: pull in, look along the gallery
-    eye2 = [head[0] - 13, head[1] + 15, head[2] - 24];
+  if (ant.z < TUNNEL_MOUTH - 2) {         // underground: pull in, look along the nest
+    var rm = profileR(ant.z);
+    eye2 = [head[0] - rm * 0.8, head[1] + 9 + rm * 0.55, head[2] - 12 - rm];
   }
   return { eye: eye2, aim: head, fov: 0.52 };
 }
@@ -1446,10 +1644,28 @@ var SUN_COL = [1.55, 1.24, 0.82];
 var SKY_AMB = [0.34, 0.40, 0.50], BOUNCE = [0.20, 0.15, 0.09];
 var RIM_OUT = [1.0, 0.72, 0.38], RIM_IN = [0.42, 0.24, 0.50];
 
-var lightPos = new Float32Array(9), lightCol = new Float32Array(9);
-for (var li = 0; li < 3; li++) {
-  lightPos[li*3] = LIGHTS[li].p[0]; lightPos[li*3+1] = LIGHTS[li].p[1]; lightPos[li*3+2] = LIGHTS[li].p[2];
-  lightCol[li*3] = LIGHTS[li].c[0]; lightCol[li*3+1] = LIGHTS[li].c[1]; lightCol[li*3+2] = LIGHTS[li].c[2];
+var lightPos = new Float32Array(LIGHT_SLOTS * 3);
+var lightCol = new Float32Array(LIGHT_SLOTS * 3);
+
+/* Only the nearest few lights reach the shader, so the nest can be lit with as
+   many small sources as it needs. */
+function updateLights(cx, cy, cz) {
+  for (var i = 0; i < ALL_LIGHTS.length; i++) {
+    var L = ALL_LIGHTS[i];
+    var dx = L.p[0]-cx, dy = L.p[1]-cy, dz = L.p[2]-cz;
+    L._d = dx*dx + dy*dy + dz*dz;
+  }
+  var near = ALL_LIGHTS.slice().sort(function (a, b) { return a._d - b._d; });
+  for (var k = 0; k < LIGHT_SLOTS; k++) {
+    var L2 = near[k];
+    if (L2) {
+      lightPos[k*3] = L2.p[0]; lightPos[k*3+1] = L2.p[1]; lightPos[k*3+2] = L2.p[2];
+      lightCol[k*3] = L2.c[0]; lightCol[k*3+1] = L2.c[1]; lightCol[k*3+2] = L2.c[2];
+    } else {
+      lightCol[k*3] = lightCol[k*3+1] = lightCol[k*3+2] = 0;
+      lightPos[k*3] = lightPos[k*3+1] = lightPos[k*3+2] = 0;
+    }
+  }
 }
 
 var exposure = 2.2, curFov = 0.98;
@@ -1546,6 +1762,64 @@ function drawAnt(t) {
   }
 }
 
+/* The queen never walks, but she must not look like furniture: her gaster
+   breathes and her antennae read the air. */
+function drawQueen(t) {
+  var S = 2.4;
+  var base = [QUEEN[0], undergroundFloor(QUEEN[0], QUEEN[2]), QUEEN[2]];
+  var yaw = Math.PI;                       // she faces the length of the chamber
+  var fwd = [Math.sin(yaw), 0, Math.cos(yaw)];
+  var up = [0, 1, 0];
+  var side = nrm3(cross3(up, fwd));
+  var mat = m4Basis(side, up, fwd, [base[0], base[1] + 1.05 * S, base[2]], m4());
+  var day = daylight(base[0], base[1], base[2]);
+  var m = m4();
+  var breathe = 1 + Math.sin(t * 0.55) * 0.04;
+
+  function ell(local, rx, ry, rz, tint) {
+    var w = localToWorld(mat, scl3(local, S));
+    m4Basis(scl3(side, rx * S), scl3(up, ry * S), scl3(fwd, rz * S), w, m);
+    drawMesh(sphereMesh, m, tint, day);
+  }
+  function bone(a, b, r, tint) { segMat(a, b, r, m); drawMesh(cylMesh, m, tint, day); }
+
+  ell([0, 1.5, -5.4], 1.34 * breathe, 1.30 * breathe, 1.9, C_QUEEN_B);
+  ell([0, 1.55, -3.2], 1.60 * breathe, 1.54 * breathe, 2.1, C_QUEEN_B);
+  ell([0, 1.5, -1.2], 0.5, 0.5, 0.62, C_QUEEN_B);
+  ell([0, 1.62, 0.5], 1.06, 1.02, 1.75, C_QUEEN_A);
+  ell([0, 1.66, 2.7], 1.18, 1.02, 1.12, C_QUEEN_A);
+  ell([0.76, 2.12, 3.1], 0.3, 0.26, 0.3, C_EYE);
+  ell([-0.76, 2.12, 3.1], 0.3, 0.26, 0.3, C_EYE);
+
+  for (var sM = -1; sM <= 1; sM += 2) {
+    bone(localToWorld(mat, scl3([sM * 0.55, 1.45, 3.5], S)),
+         localToWorld(mat, scl3([sM * 0.34, 1.2, 4.8], S)), 0.17 * S, C_QUEEN_A);
+  }
+  for (var sA = -1; sA <= 1; sA += 2) {
+    var sw = Math.sin(t * 1.1 + (sA > 0 ? 0 : 1.3)) * 0.35;
+    var root = localToWorld(mat, scl3([sA * 0.58, 2.1, 3.2], S));
+    var elbow = localToWorld(mat, scl3([sA * (1.4 + sw * 0.3), 3.3, 4.2], S));
+    var tipA = localToWorld(mat, scl3([sA * (1.85 + sw), 3.2 + sw * 0.4, 6.1], S));
+    bone(root, elbow, 0.14 * S, C_QUEEN_B);
+    bone(elbow, tipA, 0.11 * S, C_QUEEN_B);
+  }
+
+  var QH = [[0.92,1.5,1.7],[-0.92,1.5,1.7],[1.02,1.4,0.4],[-1.02,1.4,0.4],[0.92,1.4,-1.15],[-0.92,1.4,-1.15]];
+  var QF = [[4.1,0,3.9],[-4.1,0,3.9],[4.9,0,0.3],[-4.9,0,0.3],[4.5,0,-3.5],[-4.5,0,-3.5]];
+  for (var i = 0; i < 6; i++) {
+    var hip = localToWorld(mat, scl3(QH[i], S));
+    var foot = localToWorld(mat, scl3(QF[i], S));
+    foot[1] = undergroundFloor(foot[0], foot[2]);
+    var outward = QH[i][0] > 0 ? side : scl3(side, -1);
+    var knee = solveKnee(hip, foot, LEG_L1 * S, LEG_L2 * S,
+                         nrm3(add3(up, scl3(outward, 0.75))));
+    bone(hip, knee, 0.2 * S, C_QUEEN_B);
+    bone(knee, foot, 0.14 * S, C_QUEEN_B);
+    m4Basis([0.3*S,0,0], [0,0.3*S,0], [0,0,0.3*S], knee, m);
+    drawMesh(sphereMesh, m, C_QUEEN_B, day);
+  }
+}
+
 var last = performance.now(), fpsAcc = 0, fpsN = 0, started = false;
 
 function frame(now) {
@@ -1587,8 +1861,21 @@ function frame(now) {
 
   /* --- keep the ant inside the playable volume --- */
   if (ant.z < TUNNEL_MOUTH) {
-    ant.x = clamp(ant.x, -4.6, 4.6);
-    ant.z = Math.max(ant.z, TUNNEL_BACK + 3);
+    var lim = Math.max(profileR(ant.z) * 0.82 - 1.6, 3);
+    ant.x = clamp(ant.x, -lim, lim);
+    ant.z = Math.max(ant.z, TUNNEL_BACK + 5);
+    var qdx = ant.x - QUEEN[0], qdz = ant.z - QUEEN[2];
+    var qd = Math.hypot(qdx, qdz);
+    if (qd < 11 && qd > 0.001) {                   // you walk around the queen, not through her
+      var nx = qdx / qd, nz = qdz / qd;
+      ant.x = QUEEN[0] + nx * 11;
+      ant.z = QUEEN[2] + nz * 11;
+      // and slide along her, so walking straight at her never pins you
+      var tx = -nz, tz = nx;
+      var along = Math.sin(ant.yaw) * tx + Math.cos(ant.yaw) * tz;
+      var slide = step * 0.75 * (along >= 0 ? 1 : -1);
+      ant.x += tx * slide; ant.z += tz * slide;
+    }
   } else {
     if (ant.z < 1.2 && Math.abs(ant.x) > 5.2) ant.z = 1.2;   // the mound face is solid
     ant.x = clamp(ant.x, -175, 175);
@@ -1598,16 +1885,26 @@ function frame(now) {
   ant.bob = Math.sin(ant.travel * (Math.PI * 2 / STRIDE) * 2) * 0.13 * clamp(ant.speed / 8, 0, 1);
   updateLegs(dt);
 
-  /* --- the emergence beat --- */
+  /* --- the beats: leaving the chamber, then reaching the surface --- */
+  if (!ant.leftChamber && ant.z > -96) {
+    ant.leftChamber = true;
+    objtxt.textContent = 'Remonter la galerie jusqu\u2019\u00e0 la surface';
+  }
   if (!ant.emerged && ant.z > 9) {
     ant.emerged = true;
-    objtxt.textContent = 'Explorer la pelouse — repérer les colonies voisines';
+    objtxt.textContent = 'Explorer la pelouse \u2014 rep\u00e9rer les colonies voisines';
+    document.getElementById('tcbig').textContent = 'LA PELOUSE';
+    document.getElementById('tcsmall').textContent = 'Un brin d\u2019herbe fait seize fois votre taille';
     titlecard.classList.add('on');
     setTimeout(function () { titlecard.classList.remove('on'); }, 3800);
   }
 
   /* --- camera --- */
   var want = desiredCamera();
+  if (!camReady) {
+    camReady = true;
+    camEye = want.eye.slice(); camAim = want.aim.slice(); curFov = want.fov;
+  }
   var occ = camMode === 'close' ? unoccludedFraction(want.aim, want.eye) : 1;
   if (occ < 1) {
     for (var q = 0; q < 3; q++) want.eye[q] = want.aim[q] + (want.eye[q] - want.aim[q]) * occ;
@@ -1622,7 +1919,7 @@ function frame(now) {
 
   /* --- light/atmosphere blend between gallery and lawn --- */
   var outness = clamp((ant.z + 12) / 30, 0, 1);
-  exposure = damp(exposure, lerp(2.35, 0.85, outness), 1.6, dt);
+  exposure = damp(exposure, lerp(1.55, 0.85, outness), 1.6, dt);
   var rimCol = mixc(RIM_IN, RIM_OUT, outness);
   var fogDensity = lerp(0.0125, 0.0028, outness);
 
@@ -1692,6 +1989,7 @@ function frame(now) {
   gl.uniform3fv(U.uFogOut, FOG_OUT);
   gl.uniform3fv(U.uRimCol, rimCol);
   gl.uniform3fv(U.uCamPos, camEye);
+  updateLights(ant.x, groundY(ant.x, ant.z) + 3, ant.z);
   gl.uniform3fv(U.uLightPos, lightPos);
   gl.uniform3fv(U.uLightCol, lightCol);
   gl.uniform1f(U.uExposure, exposure);
@@ -1706,8 +2004,9 @@ function frame(now) {
 
   gl.uniform1f(U.uSpec, 0);
   drawMesh(worldMesh, identM, [1, 1, 1], 1);
-  gl.uniform1f(U.uSpec, 0.8);            // only the ant is glossy
+  gl.uniform1f(U.uSpec, 0.8);            // only chitin is glossy
   drawAnt(t);
+  if (ant.z < TUNNEL_MOUTH) drawQueen(t);
   gl.uniform1f(U.uSpec, 0);
 
   gl.useProgram(moteProg);
@@ -1732,7 +2031,7 @@ function frame(now) {
     var rays = 0;
     if (suv) {
       var off = Math.max(Math.abs(suv[0] - 0.5), Math.abs(suv[1] - 0.5));
-      rays = clamp(1.7 - off * 1.6, 0, 1) * lerp(1.7, 0.8, outness);
+      rays = clamp(1.7 - off * 1.6, 0, 1) * lerp(0.7, 0.85, outness);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, canvas.width, canvas.height);
@@ -1763,6 +2062,8 @@ function frame(now) {
 
   if (!started) {
     started = true;
+    titlecard.classList.add('on');
+    setTimeout(function () { titlecard.classList.remove('on'); }, 4200);
     boot.classList.add('gone');
     setTimeout(function () { boot.style.display = 'none'; }, 900);
   }
