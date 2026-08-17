@@ -26,9 +26,23 @@ Sur mobile, glisser sur la moitié gauche fait apparaître un stick virtuel.
 - **La transition lumineuse.** Exposition adaptative, brouillard et teinte de contre-jour interpolés entre la galerie et la surface, pour que la sortie se ressente au lieu d'être simplement franchie.
 - **L'occlusion caméra.** À hauteur de fourmi, l'herbe passe son temps entre le joueur et sa caméra ; le prototype rapproche la caméra en tenant compte de l'affinement des brins. C'est un vrai problème de conception que ce jeu aura, découvert en jouant.
 
+### Passe artistique
+
+Le rendu se fait en trois passes, toutes écrites à la main en WebGL 1 sans extension obligatoire :
+
+1. **Profondeur vue du soleil** → carte d'ombre 1024², profondeur encodée dans un RGBA8 (aucune extension de texture de profondeur supposée), cadrée sur une boîte orthographique qui suit le joueur. Filtrage PCF 3×3.
+2. **La scène**, rendue hors écran. Le vent est appliqué à l'identique dans cette passe et dans la précédente, sinon l'ombre d'un brin ne suivrait pas le brin.
+3. **Rayons de lumière**, diffusion radiale depuis la position écran du soleil, composée à l'écran.
+
+Trois détails qui portent l'image bien au-delà de leur coût :
+
+- **Translucidité du feuillage.** Un brin d'herbe est fin : à contre-jour, la lumière le traverse. Un seul terme dans le shader, et la pelouse cesse d'être un décor pour devenir une matière.
+- **Brouillard choisi par fragment, pas par caméra.** Depuis la galerie, la pelouse doit *briller* par l'ouverture. Un brouillard indexé sur la position de la caméra noyait la sortie dans la pénombre de la galerie ; l'indexer sur l'exposition propre au fragment transforme l'ouverture en trou de lumière.
+- **Spéculaire de chitine.** Un lobe serré appliqué à la seule fourmi, pour qu'elle lise comme une carapace dure au milieu d'un monde mat.
+
 ### Ce que le prototype ne fait pas
 
-Pas de combat, pas de grimpe, pas de PNJ, pas de réseau. Le HUD est décoratif (seule la jauge de phéromone bouge, pour donner l'idée). L'éclairage est un modèle simple écrit à la main — ce n'est pas une cible artistique, c'est un banc d'essai de gameplay.
+Pas de combat, pas de grimpe, pas de PNJ, pas de réseau. Le HUD est décoratif (seule la jauge de phéromone bouge, pour donner l'idée).
 
 ### Aperçus
 
@@ -36,6 +50,6 @@ Pas de combat, pas de grimpe, pas de PNJ, pas de réseau. Le HUD est décoratif 
 ![La pelouse](apercu-pelouse.png)
 ![Vue isométrique](apercu-isometrique.png)
 
-### Phase 2
+### Suite
 
-Passe artistique sur cette même scène : silhouettes d'herbe travaillées, rayons de lumière à la sortie, matière de chitine, densité de végétation, ambiance sonore. À faire une fois les sensations validées.
+Grimpe des tiges, combat, PNJ. Une conception alternative sera aussi essayée en parallèle.

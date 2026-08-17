@@ -287,6 +287,23 @@ function m4Persp(fovy, aspect, near, far, o) {
   return o;
 }
 
+function m4Ortho(l, r, b, t, n, f, o) {
+  o[0]=2/(r-l); o[1]=0; o[2]=0; o[3]=0;
+  o[4]=0; o[5]=2/(t-b); o[6]=0; o[7]=0;
+  o[8]=0; o[9]=0; o[10]=-2/(f-n); o[11]=0;
+  o[12]=-(r+l)/(r-l); o[13]=-(t+b)/(t-b); o[14]=-(f+n)/(f-n); o[15]=1;
+  return o;
+}
+
+/* Project a world point to [0,1] screen space; null when it sits behind us. */
+function projectToScreen(p, pv) {
+  var x = pv[0]*p[0] + pv[4]*p[1] + pv[8]*p[2]  + pv[12];
+  var y = pv[1]*p[0] + pv[5]*p[1] + pv[9]*p[2]  + pv[13];
+  var w = pv[3]*p[0] + pv[7]*p[1] + pv[11]*p[2] + pv[15];
+  if (w <= 0.0001) return null;
+  return [(x / w) * 0.5 + 0.5, (y / w) * 0.5 + 0.5];
+}
+
 function m4LookAt(eye, at, up, o) {
   var zx=eye[0]-at[0], zy=eye[1]-at[1], zz=eye[2]-at[2];
   var zl=Math.hypot(zx,zy,zz) || 1; zx/=zl; zy/=zl; zz/=zl;
@@ -418,10 +435,11 @@ var LIGHTS = [
       position(3) normal(3) colour(3) daylight(1) = 10 floats.
    ========================================================================== */
 
-function newMesh() { return { p: [], n: [], c: [], a: [], i: [] }; }
+function newMesh() { return { p: [], n: [], c: [], a: [], s: [], i: [] }; }
 
-function vtx(M, x, y, z, c, a) {
-  M.p.push(x, y, z); M.n.push(0, 0, 0); M.c.push(c[0], c[1], c[2]); M.a.push(a);
+function vtx(M, x, y, z, c, a, sway) {
+  M.p.push(x, y, z); M.n.push(0, 0, 0); M.c.push(c[0], c[1], c[2]);
+  M.a.push(a); M.s.push(sway || 0);
   return (M.p.length / 3) - 1;
 }
 function tri(M, a, b, c) { M.i.push(a, b, c); }
@@ -508,6 +526,7 @@ function bake(M, geo, mat, colorFn) {
     M.p.push(wx, wy, wz); M.n.push(0,0,0);
     M.c.push(c[0], c[1], c[2]);
     M.a.push(c[3] !== undefined ? c[3] : daylight(wx, wy, wz));
+    M.s.push(0);
   }
   for (var k = 0; k < geo.i.length; k++) M.i.push(off + geo.i[k]);
 }
@@ -643,8 +662,8 @@ function buildWorld() {
       var w = w0 * widthK(t) + 0.05;
       var cc = mixc(cA, cB, t);
       var ao = daylight(x, y, zz) * (0.52 + 0.48 * t);
-      var L = vtx(M, x - sx*w, y, zz - sz*w, cc, ao);
-      var Rr = vtx(M, x + sx*w, y, zz + sz*w, cc, ao);
+      var L = vtx(M, x - sx*w, y, zz - sz*w, cc, ao, t);
+      var Rr = vtx(M, x + sx*w, y, zz + sz*w, cc, ao, t);
       if (prevL >= 0) quad(M, prevL, prevR, Rr, L);
       prevL = L; prevR = Rr;
     }
@@ -672,8 +691,8 @@ function buildWorld() {
       var x = lx + t * 34, y = groundY(lx, lz) + t * t * 30, zz = lz + t * 16;
       var w = 11 * leafShape(t) + 0.4;
       var cc = mixc(C_LEAF_A, C_LEAF_B, t * 0.8);
-      var L = vtx(M, x, y, zz - w, cc, 1);
-      var Rr = vtx(M, x, y + w * 0.12, zz + w, cc, 1);
+      var L = vtx(M, x, y, zz - w, cc, 1, t * 0.35);
+      var Rr = vtx(M, x, y + w * 0.12, zz + w, cc, 1, t * 0.35);
       if (prevL >= 0) quad(M, prevL, prevR, Rr, L);
       prevL = L; prevR = Rr;
     }
@@ -756,15 +775,31 @@ if (!gl) {
   return;
 }
 
+/* Wind is applied identically in the main and shadow passes, so a blade's
+   shadow sways with the blade instead of standing still under it. */
+var WIND = [
+  '  if (aSway > 0.0) {',
+  '    float ph = wp.x * 0.07 + wp.z * 0.05;',
+  '    float amp = aSway * aSway * uWind;',
+  '    wp.x += sin(uTime * 1.35 + ph) * amp + sin(uTime * 3.1 + ph * 2.3) * amp * 0.3;',
+  '    wp.z += cos(uTime * 1.05 + ph * 1.4) * amp * 0.75;',
+  '  }'
+].join('\n');
+
 var VS = [
-  'attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol; attribute float aDay;',
-  'uniform mat4 uProj, uView, uModel; uniform mat3 uNrmMat;',
+  'attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol;',
+  'attribute float aDay; attribute float aSway;',
+  'uniform mat4 uProj, uView, uModel, uLightVP; uniform mat3 uNrmMat;',
+  'uniform float uTime, uWind;',
   'varying vec3 vNrm; varying vec3 vCol; varying float vDay; varying vec3 vWorld;',
+  'varying float vSway; varying vec4 vLightPos;',
   'void main(){',
   '  vec4 wp = uModel * vec4(aPos, 1.0);',
+  WIND,
   '  vWorld = wp.xyz;',
   '  vNrm = uNrmMat * aNrm;',
-  '  vCol = aCol; vDay = aDay;',
+  '  vCol = aCol; vDay = aDay; vSway = aSway;',
+  '  vLightPos = uLightVP * wp;',
   '  gl_Position = uProj * uView * wp;',
   '}'
 ].join('\n');
@@ -772,32 +807,151 @@ var VS = [
 var FS = [
   'precision mediump float;',
   'varying vec3 vNrm; varying vec3 vCol; varying float vDay; varying vec3 vWorld;',
-  'uniform vec3 uSunDir, uSunCol, uSkyCol, uBounceCol, uFogCol, uCamPos, uRimCol, uColMul;',
+  'varying float vSway; varying vec4 vLightPos;',
+  'uniform vec3 uSunDir, uSunCol, uSkyCol, uBounceCol, uCamPos, uRimCol, uColMul;',
+  'uniform vec3 uFogIn, uFogOut;',
   'uniform vec3 uLightPos[3]; uniform vec3 uLightCol[3];',
-  'uniform float uExposure, uFogDensity, uDayMul;',
+  'uniform float uExposure, uFogDensity, uDayMul, uSpec, uShadowOn;',
+  'uniform sampler2D uShadow; uniform vec2 uShadowTexel;',
+
+  'float unpackDepth(vec4 c){',
+  '  return dot(c, vec4(1.0, 1.0/255.0, 1.0/65025.0, 1.0/16581375.0));',
+  '}',
+
+  'float sunShadow(){',
+  '  if (uShadowOn < 0.5) return 1.0;',
+  '  vec3 p = vLightPos.xyz * 0.5 + 0.5;',
+  '  if (p.x < 0.01 || p.x > 0.99 || p.y < 0.01 || p.y > 0.99 || p.z > 1.0) return 1.0;',
+  '  float sum = 0.0;',
+  '  for (int i = -1; i <= 1; i++) {',
+  '    for (int j = -1; j <= 1; j++) {',
+  '      vec2 o = vec2(float(i), float(j)) * uShadowTexel;',
+  '      sum += (p.z - 0.0013 > unpackDepth(texture2D(uShadow, p.xy + o))) ? 0.0 : 1.0;',
+  '    }',
+  '  }',
+  '  return sum / 9.0;',
+  '}',
+
   'void main(){',
   '  vec3 N = normalize(vNrm);',
   '  if (!gl_FrontFacing) N = -N;',
   '  vec3 base = vCol * uColMul;',
   '  float day = vDay * uDayMul;',
+  '  vec3 V = normalize(uCamPos - vWorld);',
+  '  float sh = sunShadow();',
   '  float ndl = max(dot(N, uSunDir), 0.0);',
   '  vec3 amb = mix(uBounceCol, uSkyCol, N.y * 0.5 + 0.5);',
-  '  vec3 c = base * (amb + uSunCol * ndl) * day;',
+  '  vec3 c = base * (amb + uSunCol * ndl * sh) * day;',
+
+  // a blade of grass is thin: with the sun behind it, light comes through
+  '  if (vSway > 0.0) {',
+  '    float trans = pow(max(dot(-V, uSunDir), 0.0), 2.5);',
+  '    c += base * uSunCol * trans * vSway * 1.9 * day * sh;',
+  '  }',
+  // chitin is hard and glossy, unlike everything else in the scene
+  '  if (uSpec > 0.0) {',
+  '    vec3 H = normalize(uSunDir + V);',
+  '    c += uSunCol * pow(max(dot(N, H), 0.0), 46.0) * uSpec * day * sh;',
+  '  }',
+
   '  for (int i = 0; i < 3; i++) {',
   '    vec3 L = uLightPos[i] - vWorld;',
   '    float d = length(L);',
   '    float att = 1.0 / (1.0 + d * d * 0.011);',
   '    c += base * uLightCol[i] * max(dot(N, L / max(d, 0.001)), 0.0) * att;',
   '  }',
-  '  vec3 V = normalize(uCamPos - vWorld);',
   '  float rim = pow(1.0 - max(dot(N, V), 0.0), 3.0);',
   '  c += uRimCol * rim * day * 0.42;',
   '  float dist = length(uCamPos - vWorld);',
   '  float fog = 1.0 - exp(-uFogDensity * uFogDensity * dist * dist);',
-  '  c = mix(c, uFogCol, clamp(fog, 0.0, 1.0));',
+  '  vec3 fogCol = mix(uFogIn, uFogOut, clamp(day * 1.3, 0.0, 1.0));',
+  '  c = mix(c, fogCol, clamp(fog, 0.0, 1.0));',
   '  c *= uExposure;',
   '  c = c / (c + vec3(1.0));',
   '  gl_FragColor = vec4(pow(c, vec3(1.0 / 2.2)), 1.0);',
+  '}'
+].join('\n');
+
+/* Depth from the sun, packed into RGBA8 so no float-texture extension is needed. */
+var SHADOW_VS = [
+  'attribute vec3 aPos; attribute float aSway;',
+  'uniform mat4 uLightVP, uModel; uniform float uTime, uWind;',
+  'varying float vD;',
+  'void main(){',
+  '  vec4 wp = uModel * vec4(aPos, 1.0);',
+  WIND,
+  '  vec4 p = uLightVP * wp;',
+  '  vD = p.z * 0.5 + 0.5;',
+  '  gl_Position = p;',
+  '}'
+].join('\n');
+
+var SHADOW_FS = [
+  'precision mediump float;',
+  'varying float vD;',
+  'void main(){',
+  '  vec4 enc = fract(vec4(1.0, 255.0, 65025.0, 16581375.0) * clamp(vD, 0.0, 1.0));',
+  '  enc -= enc.yzww * vec4(1.0/255.0, 1.0/255.0, 1.0/255.0, 0.0);',
+  '  gl_FragColor = enc;',
+  '}'
+].join('\n');
+
+/* Radial light scattering, aimed at whatever bright thing the sun projects to —
+   the gallery mouth from inside, the sky from out on the lawn. */
+var POST_VS = [
+  'attribute vec2 aP; varying vec2 vUV;',
+  'void main(){ vUV = aP * 0.5 + 0.5; gl_Position = vec4(aP, 0.0, 1.0); }'
+].join('\n');
+
+var POST_FS = [
+  'precision mediump float;',
+  'varying vec2 vUV;',
+  'uniform sampler2D uScene;',
+  'uniform vec2 uSunUV; uniform float uRays; uniform vec3 uRayTint;',
+  'void main(){',
+  '  vec3 base = texture2D(uScene, vUV).rgb;',
+  '  vec3 acc = vec3(0.0);',
+  '  if (uRays > 0.002) {',
+  '    vec2 step = (vUV - uSunUV) * (0.9 / 26.0);',
+  '    vec2 uv = vUV;',
+  '    float illum = 1.0;',
+  '    for (int i = 0; i < 26; i++) {',
+  '      uv -= step;',
+  '      vec3 sm = texture2D(uScene, clamp(uv, 0.0, 1.0)).rgb;',
+  '      float lum = max(max(sm.r, sm.g), sm.b);',
+  '      acc += sm * smoothstep(0.40, 0.88, lum) * illum;',
+  '      illum *= 0.955;',
+  '    }',
+  '    acc *= uRays / 26.0;',
+  '  }',
+  '  gl_FragColor = vec4(base + acc * uRayTint, 1.0);',
+  '}'
+].join('\n');
+
+/* Motes of dust and pollen, drifting in whatever light there is. */
+var MOTE_VS = [
+  'attribute vec3 aSeed;',
+  'uniform mat4 uProj, uView; uniform float uTime; uniform vec3 uCenter;',
+  'varying float vA;',
+  'void main(){',
+  '  vec3 p = aSeed;',
+  '  p.x += sin(uTime * 0.35 + aSeed.y * 3.1) * 4.0;',
+  '  p.y += sin(uTime * 0.22 + aSeed.x * 2.3) * 2.5;',
+  '  p.z += cos(uTime * 0.29 + aSeed.z * 1.7) * 4.0;',
+  '  vec3 rel = mod(p - uCenter + 55.0, 110.0) - 55.0;',
+  '  vec4 vp = uView * vec4(uCenter + rel, 1.0);',
+  '  gl_Position = uProj * vp;',
+  '  gl_PointSize = clamp(70.0 / max(-vp.z, 1.0), 1.0, 5.0);',
+  '  vA = clamp(1.0 - length(rel) / 55.0, 0.0, 1.0);',
+  '}'
+].join('\n');
+
+var MOTE_FS = [
+  'precision mediump float;',
+  'varying float vA; uniform vec3 uTint;',
+  'void main(){',
+  '  float a = smoothstep(0.5, 0.0, length(gl_PointCoord - 0.5)) * vA;',
+  '  gl_FragColor = vec4(uTint * a, a);',
   '}'
 ].join('\n');
 
@@ -834,18 +988,23 @@ function program(vs, fs) {
   return p;
 }
 
-var prog, skyProg;
+var prog, skyProg, shadowProg, postProg, moteProg;
 try {
   prog = program(VS, FS);
   skyProg = program(SKY_VS, SKY_FS);
+  shadowProg = program(SHADOW_VS, SHADOW_FS);
+  postProg = program(POST_VS, POST_FS);
+  moteProg = program(MOTE_VS, MOTE_FS);
 } catch (e) {
   bootmsg.textContent = 'Le shader n’a pas pu être compilé sur ce GPU : ' + e.message;
   return;
 }
 
 var U = {};
-['uProj','uView','uModel','uNrmMat','uSunDir','uSunCol','uSkyCol','uBounceCol','uFogCol',
- 'uCamPos','uRimCol','uColMul','uExposure','uFogDensity','uDayMul']
+['uProj','uView','uModel','uNrmMat','uSunDir','uSunCol','uSkyCol','uBounceCol',
+ 'uCamPos','uRimCol','uColMul','uExposure','uFogDensity','uDayMul','uSpec','uShadowOn',
+ 'uFogIn','uFogOut',
+ 'uShadow','uShadowTexel','uLightVP','uTime','uWind']
   .forEach(function (k) { U[k] = gl.getUniformLocation(prog, k); });
 U.uLightPos = gl.getUniformLocation(prog, 'uLightPos');
 U.uLightCol = gl.getUniformLocation(prog, 'uLightCol');
@@ -854,7 +1013,8 @@ var A = {
   pos: gl.getAttribLocation(prog, 'aPos'),
   nrm: gl.getAttribLocation(prog, 'aNrm'),
   col: gl.getAttribLocation(prog, 'aCol'),
-  day: gl.getAttribLocation(prog, 'aDay')
+  day: gl.getAttribLocation(prog, 'aDay'),
+  sway: gl.getAttribLocation(prog, 'aSway')
 };
 
 var SU = {
@@ -864,6 +1024,74 @@ var SU = {
 };
 var SA = gl.getAttribLocation(skyProg, 'aP');
 
+var SH = {};
+['uLightVP','uModel','uTime','uWind'].forEach(function (k) {
+  SH[k] = gl.getUniformLocation(shadowProg, k);
+});
+var SHA = {
+  pos: gl.getAttribLocation(shadowProg, 'aPos'),
+  sway: gl.getAttribLocation(shadowProg, 'aSway')
+};
+
+var PU = {};
+['uScene','uSunUV','uRays','uRayTint'].forEach(function (k) {
+  PU[k] = gl.getUniformLocation(postProg, k);
+});
+var PA = gl.getAttribLocation(postProg, 'aP');
+
+var MU = {};
+['uProj','uView','uTime','uCenter','uTint'].forEach(function (k) {
+  MU[k] = gl.getUniformLocation(moteProg, k);
+});
+var MA = gl.getAttribLocation(moteProg, 'aSeed');
+
+/* Attribute slots can collide between programs, so clear them all, then turn on
+   exactly what this program reads. */
+function useAttribs(locs) {
+  var all = [A.pos, A.nrm, A.col, A.day, A.sway, SHA.pos, SHA.sway, SA, MA, PA];
+  for (var i = 0; i < all.length; i++) if (all[i] >= 0) gl.disableVertexAttribArray(all[i]);
+  for (var j = 0; j < locs.length; j++) if (locs[j] >= 0) gl.enableVertexAttribArray(locs[j]);
+}
+
+/* Offscreen colour target with a depth buffer. RGBA8 only: no float-texture or
+   depth-texture extension is assumed. */
+function makeTarget(w, h, filter) {
+  var tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  var rb = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+  var fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+  var ok = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  return { fb: fb, tex: tex, rb: rb, w: w, h: h, ok: ok };
+}
+
+var shadowRT = makeTarget(1024, 1024, gl.NEAREST);   // packed depth must not be filtered
+var sceneRT = null;
+
+var MOTE_N = 700;
+var moteBuf = gl.createBuffer();
+(function () {
+  var R = rng(77003), d = new Float32Array(MOTE_N * 3);
+  for (var i = 0; i < MOTE_N; i++) {
+    d[i*3] = (R() - 0.5) * 110;
+    d[i*3+1] = R() * 34;
+    d[i*3+2] = (R() - 0.5) * 110;
+  }
+  gl.bindBuffer(gl.ARRAY_BUFFER, moteBuf);
+  gl.bufferData(gl.ARRAY_BUFFER, d, gl.STATIC_DRAW);
+})();
+
 var skyBuf = gl.createBuffer();
 gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
@@ -871,13 +1099,13 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_
 /* Pack a mesh into an interleaved GPU buffer. */
 function upload(M) {
   var n = M.p.length / 3;
-  var data = new Float32Array(n * 10);
+  var data = new Float32Array(n * 11);
   for (var i = 0; i < n; i++) {
-    var o = i * 10;
+    var o = i * 11;
     data[o]   = M.p[i*3];   data[o+1] = M.p[i*3+1]; data[o+2] = M.p[i*3+2];
     data[o+3] = M.n[i*3];   data[o+4] = M.n[i*3+1]; data[o+5] = M.n[i*3+2];
     data[o+6] = M.c[i*3];   data[o+7] = M.c[i*3+1]; data[o+8] = M.c[i*3+2];
-    data[o+9] = M.a[i];
+    data[o+9] = M.a[i];     data[o+10] = M.s[i];
   }
   var vbo = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -899,20 +1127,22 @@ function primToMesh(geo) {
     M.p.push(geo.p[v], geo.p[v+1], geo.p[v+2]);
     M.n.push(geo.n[v], geo.n[v+1], geo.n[v+2]);
     M.c.push(1, 1, 1);
-    M.a.push(1);
+    M.a.push(1); M.s.push(0);
   }
   M.i = geo.i.slice();
   return M;
 }
 
+var VSTRIDE = 44;   // bytes per vertex; not the gait's STRIDE
+
 function bindMesh(m) {
   gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, m.ibo);
-  var st = 40;
-  gl.vertexAttribPointer(A.pos, 3, gl.FLOAT, false, st, 0);
-  gl.vertexAttribPointer(A.nrm, 3, gl.FLOAT, false, st, 12);
-  gl.vertexAttribPointer(A.col, 3, gl.FLOAT, false, st, 24);
-  gl.vertexAttribPointer(A.day, 1, gl.FLOAT, false, st, 36);
+  gl.vertexAttribPointer(A.pos, 3, gl.FLOAT, false, VSTRIDE, 0);
+  gl.vertexAttribPointer(A.nrm, 3, gl.FLOAT, false, VSTRIDE, 12);
+  gl.vertexAttribPointer(A.col, 3, gl.FLOAT, false, VSTRIDE, 24);
+  gl.vertexAttribPointer(A.day, 1, gl.FLOAT, false, VSTRIDE, 36);
+  gl.vertexAttribPointer(A.sway, 1, gl.FLOAT, false, VSTRIDE, 40);
 }
 
 bootmsg.textContent = 'Construction de la galerie…';
@@ -1205,7 +1435,10 @@ function unoccludedFraction(aim, eye) {
    8. Frame loop
    ========================================================================== */
 
-var proj = m4(), view = m4(), model = m4(), nrmMat = new Float32Array(9), tmpM = m4();
+var proj = m4(), view = m4(), nrmMat = new Float32Array(9);
+var lightView = m4(), lightProj = m4(), lightVP = m4(), pvM = m4(), identM = m4();
+var RAY_TINT = [1.0, 0.80, 0.52];
+var MOTE_WARM = [1.0, 0.78, 0.44], MOTE_SPORE = [0.72, 0.45, 0.95];
 var SUN_DIR = nrm3([0.42, 0.52, 0.74]);
 var SKY_TOP = col('#5f8fb4'), SKY_HOR = col('#f0d3a0');
 var FOG_OUT = col('#d9c39a'), FOG_IN = col('#150f07');
@@ -1235,7 +1468,18 @@ function resize() {
 }
 addEventListener('resize', resize);
 
+var shadowPass = false;
+
 function drawMesh(mesh, mat, tint, dayMul) {
+  if (shadowPass) {
+    gl.uniformMatrix4fv(SH.uModel, false, mat);
+    gl.bindBuffer(gl.ARRAY_BUFFER, mesh.vbo);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.ibo);
+    gl.vertexAttribPointer(SHA.pos, 3, gl.FLOAT, false, VSTRIDE, 0);
+    gl.vertexAttribPointer(SHA.sway, 1, gl.FLOAT, false, VSTRIDE, 40);
+    gl.drawElements(gl.TRIANGLES, mesh.count, mesh.type, 0);
+    return;
+  }
   gl.uniformMatrix4fv(U.uModel, false, mat);
   gl.uniformMatrix3fv(U.uNrmMat, false, normalFromM4(mat, nrmMat));
   gl.uniform3fv(U.uColMul, tint);
@@ -1379,58 +1623,133 @@ function frame(now) {
   /* --- light/atmosphere blend between gallery and lawn --- */
   var outness = clamp((ant.z + 12) / 30, 0, 1);
   exposure = damp(exposure, lerp(2.35, 0.85, outness), 1.6, dt);
-  var fogCol = mixc(FOG_IN, FOG_OUT, outness);
   var rimCol = mixc(RIM_IN, RIM_OUT, outness);
   var fogDensity = lerp(0.0125, 0.0028, outness);
 
   /* --- draw --- */
   resize();
+  var wind = 2.0 + Math.sin(t * 0.23) * 0.9;     // one value, shared by both passes,
+                                                 // or shadows drift off their blades
+
+  /* Pass 1 — depth as the sun sees it. */
+  var shadowOn = shadowRT.ok ? 1 : 0;
+  if (shadowOn) {
+    var lookAtP = [ant.x, groundY(ant.x, ant.z) + 4, ant.z];
+    m4LookAt(add3(lookAtP, scl3(SUN_DIR, 260)), lookAtP, [0, 1, 0], lightView);
+    m4Ortho(-72, 72, -72, 72, 20, 460, lightProj);
+    m4Mul(lightProj, lightView, lightVP);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shadowRT.fb);
+    gl.viewport(0, 0, shadowRT.w, shadowRT.h);
+    gl.clearColor(1, 1, 1, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.CULL_FACE);
+    gl.useProgram(shadowProg);
+    useAttribs([SHA.pos, SHA.sway]);
+    gl.uniformMatrix4fv(SH.uLightVP, false, lightVP);
+    gl.uniform1f(SH.uTime, t);
+    gl.uniform1f(SH.uWind, wind);
+    shadowPass = true;
+    drawMesh(worldMesh, identM, null, 1);
+    drawAnt(t);
+    shadowPass = false;
+  }
+
+  /* Pass 2 — the scene itself, offscreen so the shafts have something to sample. */
+  if (!sceneRT || sceneRT.w !== canvas.width || sceneRT.h !== canvas.height) {
+    sceneRT = makeTarget(canvas.width, canvas.height, gl.LINEAR);
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneRT.ok ? sceneRT.fb : null);
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.clearColor(0, 0, 0, 1);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-  // sky first, with depth off
-  gl.disable(gl.DEPTH_TEST);
-  gl.depthMask(false);
+  gl.disable(gl.DEPTH_TEST); gl.depthMask(false);
   gl.useProgram(skyProg);
+  useAttribs([SA]);
   gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
-  gl.enableVertexAttribArray(SA);
   gl.vertexAttribPointer(SA, 2, gl.FLOAT, false, 0, 0);
   gl.uniform3fv(SU.top, SKY_TOP);
   gl.uniform3fv(SU.hor, SKY_HOR);
   gl.uniform1f(SU.haze, 0.55);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
-  gl.disableVertexAttribArray(SA);
 
-  gl.enable(gl.DEPTH_TEST);
-  gl.depthMask(true);
-  gl.disable(gl.CULL_FACE);          // everything is lit two-sided
-
-  gl.useProgram(prog);
-  gl.enableVertexAttribArray(A.pos);
-  gl.enableVertexAttribArray(A.nrm);
-  gl.enableVertexAttribArray(A.col);
-  gl.enableVertexAttribArray(A.day);
+  gl.enable(gl.DEPTH_TEST); gl.depthMask(true); gl.disable(gl.CULL_FACE);
 
   m4Persp(curFov, canvas.width / canvas.height, 0.6, 1400, proj);
   m4LookAt(camEye, camAim, [0, 1, 0], view);
+
+  gl.useProgram(prog);
+  useAttribs([A.pos, A.nrm, A.col, A.day, A.sway]);
   gl.uniformMatrix4fv(U.uProj, false, proj);
   gl.uniformMatrix4fv(U.uView, false, view);
+  gl.uniformMatrix4fv(U.uLightVP, false, lightVP);
   gl.uniform3fv(U.uSunDir, SUN_DIR);
   gl.uniform3fv(U.uSunCol, SUN_COL);
   gl.uniform3fv(U.uSkyCol, SKY_AMB);
   gl.uniform3fv(U.uBounceCol, BOUNCE);
-  gl.uniform3fv(U.uFogCol, fogCol);
+  gl.uniform3fv(U.uFogIn, FOG_IN);
+  gl.uniform3fv(U.uFogOut, FOG_OUT);
   gl.uniform3fv(U.uRimCol, rimCol);
   gl.uniform3fv(U.uCamPos, camEye);
   gl.uniform3fv(U.uLightPos, lightPos);
   gl.uniform3fv(U.uLightCol, lightCol);
   gl.uniform1f(U.uExposure, exposure);
   gl.uniform1f(U.uFogDensity, fogDensity);
+  gl.uniform1f(U.uShadowOn, shadowOn);
+  gl.uniform1f(U.uTime, t);
+  gl.uniform1f(U.uWind, wind);
+  gl.uniform2f(U.uShadowTexel, 1 / shadowRT.w, 1 / shadowRT.h);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, shadowRT.tex);
+  gl.uniform1i(U.uShadow, 0);
 
-  var ident = m4();
-  drawMesh(worldMesh, ident, [1, 1, 1], 1);
+  gl.uniform1f(U.uSpec, 0);
+  drawMesh(worldMesh, identM, [1, 1, 1], 1);
+  gl.uniform1f(U.uSpec, 0.8);            // only the ant is glossy
   drawAnt(t);
+  gl.uniform1f(U.uSpec, 0);
+
+  gl.useProgram(moteProg);
+  useAttribs([MA]);
+  gl.bindBuffer(gl.ARRAY_BUFFER, moteBuf);
+  gl.vertexAttribPointer(MA, 3, gl.FLOAT, false, 0, 0);
+  gl.uniformMatrix4fv(MU.uProj, false, proj);
+  gl.uniformMatrix4fv(MU.uView, false, view);
+  gl.uniform1f(MU.uTime, t);
+  gl.uniform3f(MU.uCenter, ant.x, groundY(ant.x, ant.z) + 9, ant.z);
+  gl.uniform3fv(MU.uTint, mixc(MOTE_SPORE, MOTE_WARM, outness));
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  gl.depthMask(false);
+  gl.drawArrays(gl.POINTS, 0, MOTE_N);
+  gl.depthMask(true);
+  gl.disable(gl.BLEND);
+
+  /* Pass 3 — light shafts, composited to the screen. */
+  if (sceneRT.ok) {
+    var suv = projectToScreen(add3(camEye, scl3(SUN_DIR, 900)), m4Mul(proj, view, pvM));
+    var rays = 0;
+    if (suv) {
+      var off = Math.max(Math.abs(suv[0] - 0.5), Math.abs(suv[1] - 0.5));
+      rays = clamp(1.7 - off * 1.6, 0, 1) * lerp(1.7, 0.8, outness);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.disable(gl.DEPTH_TEST); gl.depthMask(false);
+    gl.useProgram(postProg);
+    useAttribs([PA]);
+    gl.bindBuffer(gl.ARRAY_BUFFER, skyBuf);
+    gl.vertexAttribPointer(PA, 2, gl.FLOAT, false, 0, 0);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sceneRT.tex);
+    gl.uniform1i(PU.uScene, 0);
+    gl.uniform2f(PU.uSunUV, suv ? suv[0] : 0.5, suv ? suv[1] : 0.5);
+    gl.uniform1f(PU.uRays, rays);
+    gl.uniform3fv(PU.uRayTint, RAY_TINT);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.enable(gl.DEPTH_TEST); gl.depthMask(true);
+  }
 
   /* --- HUD chrome --- */
   fpsAcc += dt; fpsN++;
