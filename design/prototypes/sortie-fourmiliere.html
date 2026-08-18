@@ -146,6 +146,26 @@
   }
   #keys b { color: var(--ink); font-weight: 600; }
 
+  /* --- contextual interact prompt, bottom-centre --- */
+  #prompt {
+    bottom: 1.3rem; left: 50%; transform: translateX(-50%);
+    background: var(--panel);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0.45rem 0.85rem;
+    font-size: 0.78rem;
+    color: var(--ink);
+    display: none;
+    align-items: center; gap: 0.45rem;
+  }
+  #prompt.on { display: flex; }
+  #prompt .k {
+    font-size: 0.58rem; letter-spacing: 0.1em; color: var(--amber);
+    border: 1px solid var(--line); border-radius: 4px; padding: 0.05rem 0.3rem;
+  }
+  #harvesttxt { font-size: 0.72rem; color: var(--ink-soft); margin-top: 0.3rem; display: none; }
+
   /* --- title card --- */
   #titlecard {
     position: absolute; inset: 0;
@@ -203,7 +223,10 @@
   <div class="hud" id="objective">
     <div class="lbl">Objectif</div>
     <div class="txt" id="objtxt">Quitter la chambre de la reine</div>
+    <div class="txt" id="harvesttxt"></div>
   </div>
+
+  <div class="hud" id="prompt"><span class="k">E</span><span id="prompttxt"></span></div>
 
   <div class="hud" id="tag">
     <div><b>Myrmidia</b> — prototype de gameplay</div>
@@ -238,7 +261,7 @@
     <div id="keys">
       <b>ZQSD / WASD / flèches</b> — se déplacer<br>
       <b>Glisser</b> — orienter la caméra · <b>Molette</b> — zoom<br>
-      <b>Maj</b> — accélérer
+      <b>Maj</b> — accélérer · <b>E</b> — interagir
     </div>
   </div>
 
@@ -454,16 +477,76 @@ var LIGHT_SLOTS = 8;
    At ant scale the grass is the main thing between you and your character. */
 var GRASS = [];
 
+/* Rock and mushroom-cap footprints, kept for decor collision only (see
+   resolveDecorCollision() near the frame loop) — GRASS above doubles for
+   this purpose already, these two just cover the other two obstacle kinds. */
+var ROCKS = [];
+var MUSHROOMS = [];
+
+/* Side rooms (granary/brood/midden) punch a hole in the gallery wall
+   (WALL_HOLES, tested in the ring-building loop below) and register a
+   containment region (ROOM_BRANCHES) so the ant can actually walk in — see
+   buildBranch() in buildWorld() and containUnderground() near the frame loop. */
+var WALL_HOLES = [];
+var ROOM_BRANCHES = [];
+function wallHoleAt(th, z) {
+  for (var i = 0; i < WALL_HOLES.length; i++) {
+    var h = WALL_HOLES[i];
+    var dth = Math.atan2(Math.sin(th - h.th), Math.cos(th - h.th));
+    var ex = dth / h.rTh, ez = (z - h.z) / h.rZ;
+    if (ex * ex + ez * ez < 1) return true;
+  }
+  return false;
+}
+
+/* Underground containment in two parts, so the doorway between the main tube
+   and a side room is an actual continuous opening rather than two disjoint
+   boxes: first, is the point already inside a branch's own footprint (its lx
+   is small relative to its own radius — this is naturally z-aware, since
+   side[] runs roughly along world Z, so it's ~0 near the branch and grows
+   fast away from it)? If so, clamp radially within that branch. Otherwise
+   fall back to the main tube's per-z box clamp, its width locally widened
+   near each branch's mouth so walking straight at the (wall-punched) opening
+   doesn't just push the ant against an invisible wall. */
+function containUnderground(x, z) {
+  for (var i = 0; i < ROOM_BRANCHES.length; i++) {
+    var br = ROOM_BRANCHES[i];
+    var relX = x - br.origin[0], relZ = z - br.origin[2];
+    var u = relX * br.dir[0] + relZ * br.dir[2];
+    if (u <= -0.5 || u >= br.uMax + 1) continue;
+    var lx = relX * br.side[0] + relZ * br.side[2];
+    var rr = Math.max(br.profR(clamp(u, 0, br.uMax)) * 0.82 - 1.2, 2.2);
+    if (Math.abs(lx) >= rr + 3) continue;
+    // the -0.5 floor matches the guard above, so the handoff from the widened
+    // main-tube clamp (below) to this local one lands on the same point
+    var uc = clamp(u, -0.5, br.uMax - 1.2);
+    var lxc = clamp(lx, -rr, rr);
+    return [br.origin[0] + br.dir[0] * uc + br.side[0] * lxc,
+            br.origin[2] + br.dir[2] * uc + br.side[2] * lxc];
+  }
+  var lim = Math.max(profileR(z) * 0.82 - 1.6, 3);
+  var limPos = lim, limNeg = lim;
+  for (var j = 0; j < ROOM_BRANCHES.length; j++) {
+    var b2 = ROOM_BRANCHES[j];
+    var fall = clamp(1 - Math.abs(z - b2.origin[2]) / b2.doorFalloff, 0, 1);
+    if (fall <= 0) continue;
+    var reach = lerp(lim, Math.abs(b2.origin[0]) + 1.5, fall);
+    if (b2.dir[0] > 0) { if (reach > limPos) limPos = reach; }
+    else { if (reach > limNeg) limNeg = reach; }
+  }
+  return [clamp(x, -limNeg, limPos), Math.max(z, TUNNEL_BACK + 5)];
+}
+
 /* ==========================================================================
    2. Mesh building — one interleaved layout used by every draw call:
       position(3) normal(3) colour(3) daylight(1) = 10 floats.
    ========================================================================== */
 
-function newMesh() { return { p: [], n: [], c: [], a: [], s: [], i: [] }; }
+function newMesh() { return { p: [], n: [], c: [], a: [], s: [], sp: [], i: [] }; }
 
-function vtx(M, x, y, z, c, a, sway) {
+function vtx(M, x, y, z, c, a, sway, spec) {
   M.p.push(x, y, z); M.n.push(0, 0, 0); M.c.push(c[0], c[1], c[2]);
-  M.a.push(a); M.s.push(sway || 0);
+  M.a.push(a); M.s.push(sway || 0); M.sp.push(spec || 0);
   return (M.p.length / 3) - 1;
 }
 function tri(M, a, b, c) { M.i.push(a, b, c); }
@@ -551,6 +634,7 @@ function bake(M, geo, mat, colorFn) {
     M.c.push(c[0], c[1], c[2]);
     M.a.push(c[3] !== undefined ? c[3] : daylight(wx, wy, wz));
     M.s.push(0);
+    M.sp.push(c[4] !== undefined ? c[4] : 0);   // 5th channel: specular multiplier (resin, puddles)
   }
   for (var k = 0; k < geo.i.length; k++) M.i.push(off + geo.i[k]);
 }
@@ -571,6 +655,16 @@ var C_SPORE  = col('#c497d9');
 var C_LEAF_A = col('#5d7a37'), C_LEAF_B = col('#93b25c');
 var C_TWIG   = col('#4a3a24');
 var C_DEW    = col('#9db0d8');
+
+/* Side-room palette (see the DA spec in .claude/agents/atta-render.md): the
+   granary stays cold/utilitarian like the gallery, the brood chambers extend
+   the queen's warm chitine, the midden gets the game's one green — mould,
+   never used anywhere else, so "green = decay" reads unambiguously. */
+var C_CHITIN = col('#e0a752');
+var C_RESIN  = mixc(col('#e07356'), col('#e6b558'), 0.5);
+var C_SILK   = C_DEW;                                          // #9db0d8, the reference "soie" hex
+var C_MOLD   = scl3(mixc(C_MOSS_A, C_WALL_B, 0.62), 0.58);
+var C_CARCASS= scl3(C_WALL_B, 0.7);
 
 function buildWorld() {
   var M = newMesh();
@@ -600,6 +694,95 @@ function buildWorld() {
     var fl = undergroundFloor(px, z);
     return [px, Math.max(py, fl), z, wob];
   }
+
+  /* A side room: the same swept-tube technique as the gallery/chamber above
+     (3-octave wobble, per-vertex crevice shading), but branching sideways
+     from a wall point instead of following the world Z axis. Registers a
+     hole in the gallery wall (WALL_HOLES) and a containment region
+     (ROOM_BRANCHES, read by containUnderground() near the frame loop) so the
+     room is both visible and walkable. th0 is 0 or PI, i.e. a clean +-X
+     branch, which keeps the corridor math a straight line. */
+  function buildBranch(th0, z0, corridorR, corridorLen, roomR, roomLen, angSegs, seed, cavityMul, wallColorFn) {
+    var mouth = wallPoint(th0, z0, 0);
+    var origin = [mouth[0], mouth[1], mouth[2]];
+    var dir = nrm3([Math.cos(th0), 0, 0.0001]);
+    var side = nrm3(cross3([0, 1, 0], dir));
+    var uEnd = corridorLen + roomLen, uMax = corridorLen + roomLen * 2;
+
+    function profR(u) {
+      var t = (u - uEnd) / roomLen;
+      if (t > -1 && t < 1) return corridorR + (roomR - corridorR) * Math.pow(Math.sqrt(1 - t * t), 0.72);
+      return corridorR;
+    }
+    function vsq(r) { return 0.86 * Math.pow(corridorR / r, 0.35); }
+    function rise(u) { var r = profR(u); return 1.1 + r * vsq(r) * 0.6; }
+    function noise(th, u, k, sz) {
+      return vnoise(Math.cos(th) * k + u * sz + seed + 37, Math.sin(th) * k + u * sz * 0.7 + seed + 91);
+    }
+    function pointAt(th, u, inset) {
+      var baseR = profR(u), vs = vsq(baseR);
+      var wob = 0.84 + 0.20 * noise(th, u, 1.6, 0.10) + 0.10 * noise(th, u, 4.1, 0.29) + 0.05 * noise(th, u, 9.3, 0.62);
+      var rr = baseR * wob * (1 - (inset || 0));
+      var lx = Math.cos(th) * rr, ly = Math.sin(th) * rr * vs + rise(u);
+      var wx = origin[0] + dir[0] * u + side[0] * lx;
+      var wz = origin[2] + dir[2] * u + side[2] * lx;
+      var wy = origin[1] + ly;
+      var fl = undergroundFloor(wx, wz);
+      return [wx, Math.max(wy, fl), wz, wob];
+    }
+
+    WALL_HOLES.push({ th: th0, z: z0, rTh: Math.max(0.16, corridorR * 1.8 / profileR(z0)), rZ: corridorR * 1.7 });
+
+    var SLu = 1.5, rows = [];
+    for (var u = 0; u <= uMax + 0.0001; u += SLu) {
+      var ring = [];
+      for (var a = 0; a < angSegs; a++) {
+        var th = 2 * Math.PI * a / angSegs;
+        var p = pointAt(th, u, 0);
+        var proud = clamp((p[3] - 0.84) / 0.34 + 0.45, 0, 1);
+        var cav = (0.42 + 0.58 * proud) * cavityMul;
+        ring.push(vtx(M, p[0], p[1], p[2], wallColorFn(proud, p[0], p[1], p[2]), daylight(p[0], p[1], p[2]) * cav));
+      }
+      rows.push(ring);
+    }
+    for (var r1 = 0; r1 < rows.length - 1; r1++) {
+      for (var a1 = 0; a1 < angSegs; a1++) {
+        var a2 = (a1 + 1) % angSegs;
+        quad(M, rows[r1][a1], rows[r1][a2], rows[r1 + 1][a2], rows[r1 + 1][a1]);
+      }
+    }
+    var capX = origin[0] + dir[0] * uMax, capZ = origin[2] + dir[2] * uMax, capWY = origin[1] + rise(uMax) * 0.6;
+    var capC = vtx(M, capX, capWY, capZ, wallColorFn(0.2, capX, capWY, capZ), daylight(capX, capWY, capZ) * 0.3 * cavityMul);
+    var lastRow = rows[rows.length - 1];
+    for (var a4 = 0; a4 < angSegs; a4++) tri(M, capC, lastRow[a4], lastRow[(a4 + 1) % angSegs]);
+
+    ROOM_BRANCHES.push({ origin: origin, dir: dir, side: side, uMax: uMax, profR: profR, doorFalloff: corridorR * 2.2 });
+    var roomWX = origin[0] + dir[0] * uEnd, roomWZ = origin[2] + dir[2] * uEnd;
+    return {
+      origin: origin, dir: dir, side: side, uEnd: uEnd, uMax: uMax, profR: profR, pointAt: pointAt,
+      center: [roomWX, undergroundFloor(roomWX, roomWZ), roomWZ]
+    };
+  }
+
+  // granary: cold/utilitarian, same wall palette as the gallery — plain gallery segment, left side
+  var granaryB = buildBranch(Math.PI, -70, 3.3, 9, 13, 10, 30, 4001, 1.0, function (proud, wx, wy, wz) {
+    var c = mixc(C_WALL_B, C_WALL_A, proud * 0.8 + 0.12);
+    return mixc(c, C_SOIL_A, 0.28 + proud * 0.18);
+  });
+  // brood chambers: warm extension of the queen's chamber — right side, deep by the chamber
+  var broodB = buildBranch(0, -120, 4.2, 8, 17, 13, 34, 5117, 1.0, function (proud, wx, wy, wz) {
+    var c = mixc(C_WALL_B, C_WALL_A, proud * 0.75 + 0.15);
+    return mixc(c, C_SOIL_A, 0.55);
+  });
+  // midden: cramped, third register — right side, nearer the mouth, dimmed via cavityMul.
+  // cavityMul pushed darker (0.62 -> 0.46, Cephalotes) so the midden reads as the sharpest
+  // "sombre et inquiétant" anchor point on the site, ahead of a future prologue scene that
+  // will go further still (see DA notes) -- cavityMul multiplies straight into the vertex
+  // "day" scalar, which also darkens this room's fog-mix and rim term for free.
+  var middenB = buildBranch(0, -40, 2.9, 7, 10, 8, 26, 6229, 0.46, function (proud, wx, wy, wz) {
+    var c = mixc(C_WALL_B, C_WALL_A, proud * 0.6 + 0.08);
+    return mixc(c, C_MOLD, 0.3 + proud * 0.3);
+  });
 
   var ANG = 44, SL = 1.7;
   var slices = [];
@@ -632,6 +815,7 @@ function buildWorld() {
   for (var s2 = 0; s2 < slices.length - 1; s2++) {
     for (var a3 = 0; a3 < ANG; a3++) {
       var n3 = (a3 + 1) % ANG;
+      if (wallHoleAt(2 * Math.PI * a3 / ANG, slices[s2][a3][2])) continue;   // side-room mouths
       quad(M, slices[s2].idx[a3], slices[s2].idx[n3],
               slices[s2+1].idx[n3], slices[s2+1].idx[a3]);
     }
@@ -755,11 +939,15 @@ function buildWorld() {
       bake(M, cyl, tmp, function () { return [tint[0]*0.3, tint[1]*0.28, tint[2]*0.4, 0.85]; });
       m4Basis([1.15*sc,0,0], [0,0.8*sc,0], [0,0,1.15*sc], top, tmp);
       bake(M, sphere, tmp, function () { return [tint[0]*1.5, tint[1]*1.0, tint[2]*1.9, 1]; });
+      MUSHROOMS.push({ x: fx, z: fz, r: 1.15 * sc + 0.5 });
     }
     ALL_LIGHTS.push({ p: [cx, undergroundFloor(cx, cz) + 2.4, cz], c: lightCol });
   }
   var SPORE_TINT = C_SPORE, SPORE_LIGHT = [1.15, 0.50, 1.45];
-  var GLOW_LIGHT = [1.75, 1.10, 0.48];
+  // brightened slightly (Cephalotes) -- the queen's chamber is the site's "féerique et
+  // époustouflant" anchor, so its one fantastical note should read unmistakably brighter
+  // than every warm-but-mundane lamp elsewhere (brood piles, granary lanterns)
+  var GLOW_LIGHT = [1.95, 1.20, 0.52];
   for (var fg = 0; fg < 9; fg++) {
     var fgz = -14 - fg * 10.5;
     fungusCluster((fg % 2 ? 1 : -1) * (3.5 + R() * 1.8), fgz, 4 + Math.floor(R() * 4),
@@ -785,7 +973,7 @@ function buildWorld() {
     bake(M, cyl, tmp, function () { return [C_ROOTLET[0]*0.6, C_ROOTLET[1]*0.6, C_ROOTLET[2]*0.6, 0.6]; });
     var br = 0.55 + R() * 0.75;
     m4Basis([br,0,0], [0,br*1.25,0], [0,0,br], bp, tmp);
-    bake(M, sphere, tmp, function () { return [C_GLOW[0]*2.6, C_GLOW[1]*1.9, C_GLOW[2]*0.9, 1]; });
+    bake(M, sphere, tmp, function () { return [C_GLOW[0]*2.9, C_GLOW[1]*2.1, C_GLOW[2]*1.0, 1]; });
     if (gb % 3 === 0) ALL_LIGHTS.push({ p: bp, c: GLOW_LIGHT });
   }
   // brood piles at the queen's flanks
@@ -802,6 +990,152 @@ function buildWorld() {
   }
   ALL_LIGHTS.push({ p: [QUEEN[0], undergroundFloor(QUEEN[0], QUEEN[2]) + 9, QUEEN[2]], c: [1.5, 1.05, 0.5] });
   ALL_LIGHTS.push({ p: [0, 5, 3], c: [1.30, 0.90, 0.40] });          // daylight at the mouth
+
+  /* ---- the granary: seed and resin mounds against the walls, a passage
+     lit only near its mouth (see spec §Grenier in atta-render.md) ---- */
+  (function () {
+    var B = granaryB;
+    for (var mnd = 0; mnd < 5; mnd++) {
+      var mth = (R() - 0.5) * Math.PI * 1.6;
+      var mu = clamp(B.uEnd + (R() - 0.5) * B.uMax * 0.5, B.uMax * 0.42, B.uMax * 0.96);
+      var mp = B.pointAt(mth, mu, 0.12);
+      for (var gi = 0; gi < 26; gi++) {
+        var gx = mp[0] + (R() - 0.5) * 4.5, gz = mp[2] + (R() - 0.5) * 4.5;
+        var gs = 0.5 + R() * 1.3;
+        var gfl = undergroundFloor(gx, gz);
+        m4Basis([gs, 0, 0], [0, gs * 0.85, 0], [0, 0, gs], [gx, gfl + gs * 0.4, gz], tmp);
+        var depth = clamp(1 - Math.hypot(gx - mp[0], gz - mp[2]) / 4.5, 0, 1);
+        var seedCol = mixc(mixc(C_CHITIN, C_RESIN, R() * 0.4), C_WALL_B, depth * 0.5);
+        bake(M, grainGeo, tmp, function (x, y, zz) {
+          return [seedCol[0], seedCol[1], seedCol[2], daylight(x, y, zz) * (0.55 + 0.35 * (1 - depth))];
+        });
+      }
+    }
+    // resin drops: the only glossy surface in the room, so it reads at a glance
+    for (var rd = 0; rd < 10; rd++) {
+      var rth = (R() - 0.5) * Math.PI * 1.5;
+      var ru = clamp(B.uEnd + (R() - 0.5) * B.uMax * 0.55, 4, B.uMax - 2);
+      var hang = R() < 0.5;
+      var rp = B.pointAt(rth, ru, hang ? 0.85 : 0.06);
+      var rs = 0.5 + R() * 0.7;
+      var by = hang ? rp[1] - rs * (0.6 + R() * 1.6) : undergroundFloor(rp[0], rp[2]) + rs * 0.55;
+      m4Basis([rs * 0.8, 0, 0], [0, rs * 1.3, 0], [0, 0, rs * 0.8], [rp[0], by, rp[2]], tmp);
+      bake(M, sphere, tmp, function (x, y, zz) {
+        return [C_RESIN[0] * 1.1, C_RESIN[1] * 0.95, C_RESIN[2] * 0.6, daylight(x, y, zz) * 0.85, 0.85];
+      });
+    }
+    // one or two amber lamps near the mouth only — a passage, not a hall
+    for (var lp = 0; lp < 2; lp++) {
+      var lpt = B.pointAt(0, 2 + R() * 4, 0.3);
+      ALL_LIGHTS.push({ p: [lpt[0], undergroundFloor(lpt[0], lpt[2]) + 2.2, lpt[2]], c: [0.42, 0.30, 0.14] });
+    }
+  })();
+
+  /* ---- the brood chambers: an extension of the queen's chamber, dense with
+     egg/larva/nymph piles that each carry their own warm lamp ---- */
+  (function () {
+    var B = broodB;
+    var stageR = [0.34, 0.5, 0.68], stageStretch = [1.0, 1.55, 1.15];
+    for (var pile = 0; pile < 7; pile++) {
+      var pth = (R() - 0.5) * Math.PI * 1.7;
+      var pu = clamp(B.uEnd + (R() - 0.5) * B.uMax * 0.6, B.uMax * 0.32, B.uMax * 0.97);
+      var pp = B.pointAt(pth, pu, 0.1);
+      var pfl = undergroundFloor(pp[0], pp[2]);
+      var n = 14 + Math.floor(R() * 14);
+      for (var eg = 0; eg < n; eg++) {
+        var stage = Math.floor(R() * 3);
+        var es = stageR[stage] + R() * 0.22;
+        var ex = pp[0] + (R() - 0.5) * 4.6, ez = pp[2] + (R() - 0.5) * 4.6;
+        var ey = undergroundFloor(ex, ez) + es * 0.6;
+        m4Basis([es * 0.75, 0, 0], [0, es * 0.75, 0], [0, 0, es * 1.5 * stageStretch[stage]], [ex, ey, ez], tmp);
+        var shade = 0.85 + R() * 0.25;
+        bake(M, sphere, tmp, function (x, y, zz) {
+          return [C_BROOD[0] * shade, C_BROOD[1] * shade * 0.94, C_BROOD[2] * shade * 0.8, daylight(x, y, zz) * 0.85];
+        });
+      }
+      // silk cocoon threads binding some piles: the room's one cold accent
+      if (pile % 2 === 0) {
+        var wraps = 5 + Math.floor(R() * 4);
+        for (var w = 0; w < wraps; w++) {
+          var a0 = R() * Math.PI * 2, a1 = a0 + 1.6 + R() * 1.4, r0 = 2.6 + R() * 1.6;
+          var p0 = [pp[0] + Math.cos(a0) * r0, pfl + 1.0 + R() * 2.2, pp[2] + Math.sin(a0) * r0];
+          var p1 = [pp[0] + Math.cos(a1) * r0, pfl + 1.0 + R() * 2.2, pp[2] + Math.sin(a1) * r0];
+          segMat(p0, p1, 0.045, tmp);
+          bake(M, cyl, tmp, function (x, y, zz) {
+            return [C_SILK[0] * 1.2, C_SILK[1] * 1.15, C_SILK[2] * 1.3, daylight(x, y, zz) * 0.75];
+          });
+        }
+      }
+      // every brood mass is its own soft warm lamp — the dominant light of the room
+      ALL_LIGHTS.push({ p: [pp[0], pfl + 1.6, pp[2]], c: [0.62, 0.46, 0.24] });
+    }
+    // a sparing feeder-mushroom cluster or two, not a garden
+    for (var fc = 0; fc < 2; fc++) {
+      var fth = (R() - 0.5) * Math.PI * 1.4;
+      var fu = clamp(B.uEnd + (R() - 0.5) * B.uMax * 0.4, 4, B.uMax - 2);
+      var fp = B.pointAt(fth, fu, 0.1);
+      fungusCluster(fp[0], fp[2], 2 + Math.floor(R() * 2), 1.1, SPORE_TINT, SPORE_LIGHT);
+    }
+  })();
+
+  /* ---- the midden: decomposer fungus (fungusCluster retinted sickly green),
+     refuse heaps, husks and shallow puddles — the third, "avoid me" register ---- */
+  (function () {
+    var B = middenB;
+    // tint pushed further toward C_WALL_B and the light dimmed (Cephalotes) -- a drained,
+    // guttering sick-green rather than a vividly alive one, to read as "avoid me" over
+    // "curious mushroom" at a glance
+    var MOLD_CAP_TINT = mixc(C_MOSS_A, C_WALL_B, 0.5), MOLD_LIGHT = [0.24, 0.36, 0.24];
+    for (var fc2 = 0; fc2 < 3; fc2++) {
+      var fth2 = (R() - 0.5) * Math.PI * 1.6;
+      var fu2 = clamp(B.uEnd + (R() - 0.5) * B.uMax * 0.5, 4, B.uMax - 2);
+      var fp2 = B.pointAt(fth2, fu2, 0.08);
+      fungusCluster(fp2[0], fp2[2], 3 + Math.floor(R() * 3), 1.0, MOLD_CAP_TINT, MOLD_LIGHT);
+    }
+    // refuse heaps: the existing pebble/grain generator, coarser and darker
+    for (var hp = 0; hp < 4; hp++) {
+      var hth = (R() - 0.5) * Math.PI * 1.7;
+      var hu = clamp(B.uEnd + (R() - 0.5) * B.uMax * 0.55, 3, B.uMax - 1.5);
+      var hpt = B.pointAt(hth, hu, 0.1);
+      for (var dc = 0; dc < 20; dc++) {
+        var dx3 = hpt[0] + (R() - 0.5) * 5, dz3 = hpt[2] + (R() - 0.5) * 5;
+        var ds = 0.4 + R() * 1.1;
+        var dfl = undergroundFloor(dx3, dz3);
+        m4Basis([ds * 1.2, 0, 0], [0, ds * 0.7, 0], [0, 0, ds], [dx3, dfl + ds * 0.3, dz3], tmp);
+        var dsd = 0.3 + R() * 0.35;
+        var dbase = R() < 0.5 ? C_STONE : C_GRAIN;
+        bake(M, grainGeo, tmp, function (x, y, zz) {
+          return [dbase[0] * dsd, dbase[1] * dsd, dbase[2] * dsd, daylight(x, y, zz) * 0.55];
+        });
+      }
+    }
+    // husks: simplified carcasses, half-buried
+    for (var cs = 0; cs < 5; cs++) {
+      var cth = (R() - 0.5) * Math.PI * 1.6;
+      var cu = clamp(B.uEnd + (R() - 0.5) * B.uMax * 0.5, 3, B.uMax - 1.5);
+      var cp = B.pointAt(cth, cu, 0.12);
+      var cfl = undergroundFloor(cp[0], cp[2]);
+      var clen = 2.2 + R() * 2.2, cang = R() * Math.PI * 2;
+      var ca = [cp[0], cfl + 0.35, cp[2]];
+      var cb = [cp[0] + Math.cos(cang) * clen, cfl + 0.3, cp[2] + Math.sin(cang) * clen];
+      segMat(ca, cb, 0.55 + R() * 0.35, tmp);
+      bake(M, cyl, tmp, function (x, y, zz) {
+        return [C_CARCASS[0], C_CARCASS[1], C_CARCASS[2], daylight(x, y, zz) * 0.5];
+      });
+    }
+    // shallow puddles: flat, faintly glossy, well below the granary's resin
+    for (var pd = 0; pd < 6; pd++) {
+      var pth2 = (R() - 0.5) * Math.PI * 1.6;
+      var pu2 = clamp(B.uEnd + (R() - 0.5) * B.uMax * 0.55, 3, B.uMax - 1.5);
+      var ppt = B.pointAt(pth2, pu2, 0.05);
+      var pfl2 = undergroundFloor(ppt[0], ppt[2]);
+      var prad = 1.0 + R() * 1.6;
+      m4Basis([prad, 0, 0], [0, 0.12, 0], [0, 0, prad], [ppt[0], pfl2 + 0.03, ppt[2]], tmp);
+      bake(M, sphere, tmp, function (x, y, zz) {
+        return [C_MOLD[0] * 0.5, C_MOLD[1] * 0.6, C_MOLD[2] * 0.5, daylight(x, y, zz) * 0.6, 0.35];
+      });
+    }
+  })();
 
   /* ---- the mound face: a wall of earth with the mouth punched through ---- */
   var WX0 = -210, WX1 = 210, WSTEP = 6, WROWS = 22;
@@ -889,8 +1223,11 @@ function buildWorld() {
     if (near && R() < 0.82) continue;                 // keep the exit sightline open
     var h = 26 + R() * 74 * (0.5 + 0.5 * vnoise(bx*0.01, bz*0.01));
     var tip = mixc(C_MOSS_B, C_MOSS_TIP, R());
-    blade(bx, bz, h, R() * Math.PI * 2, taper, C_MOSS_A, tip);
-    GRASS.push({ x: bx, z: bz, h: h, baseY: groundY(bx, bz), w: 0.55 + h * 0.011 });
+    var bladeAng = R() * Math.PI * 2;
+    blade(bx, bz, h, bladeAng, taper, C_MOSS_A, tip);
+    // ang kept alongside the footprint so the climb mechanic can walk the same
+    // curve the mesh was built from (see bladeCurvePoint), without re-deriving it
+    GRASS.push({ x: bx, z: bz, h: h, baseY: groundY(bx, bz), w: 0.55 + h * 0.011, ang: bladeAng });
   }
 
   /* ---- a fallen leaf, leaning as a ramp: the traversal pillar, staged ---- */
@@ -919,6 +1256,7 @@ function buildWorld() {
     bake(M, sphere, tmp, function (x, y, z) {
       return [C_STONE[0]*shade, C_STONE[1]*shade, C_STONE[2]*shade];
     });
+    ROCKS.push({ x: px2, z: pz2, r: (sxx + szz) * 0.5 + 1.0 });
   }
 
   /* ---- twigs ---- */
@@ -955,6 +1293,136 @@ function segMat(a, b, radius, o) {
 }
 
 /* ==========================================================================
+   3b. A first tree — a landmark on the lawn, at grass-blade scale rather than
+   a minimised one: at 26-100 units for a grass blade and ~7 for the ant, a
+   real tree towers over both. Built at two levels of detail (see buildTree
+   below and the render loop's LOD pick) because gallery-wall fidelity
+   (3-octave bark noise, dense rings) is fine for something built once and
+   drawn once, but not for something this tall seen from across the lawn.
+   ========================================================================== */
+
+/* A tree's climbable trunk is nothing but an oversized grass blade: same
+   bend formula, same field names (x, z, h, baseY, ang) as a GRASS entry —
+   bladeCurvePoint/bladeClimbBasis already know how to walk it as-is. Wiring
+   an ant onto it (grab range, dismount, standing on branches) is a separate
+   ticket for Cataglyphis; TREES is kept apart from GRASS on purpose so nothing
+   here silently changes GRASS-based systems (climb, camera occlusion). */
+var TREE = { x: -85, z: 95, h: 210, ang: Math.PI / 2, w: 7.5 };
+TREE.baseY = groundY(TREE.x, TREE.z);
+var TREES = [TREE];
+
+var C_BARK_A = mixc(C_WALL_A, C_ROOT, 0.3), C_BARK_B = mixc(C_WALL_B, C_ROOT, 0.55);
+var TREE_TRUNK_T = 0.8;   // where the bare trunk hands off to branches/canopy
+
+/* Two LOD levels of the same tree, both pre-baked once at load like
+   worldMesh: rings, angular segments and bark-noise octaves all drop for the
+   far version, and the fanned branch-and-blob crown collapses to two flat-
+   tinted blobs covering roughly the same silhouette. The render loop just
+   picks which static buffer to bind each frame — no per-frame rebuild, no
+   morphing, just a distance check (with hysteresis) choosing a draw call. */
+function buildTree(near) {
+  var M = newMesh();
+  var R = rng(near ? 481001 : 481002);
+  var tmpM = m4();
+  var rings = near ? 20 : 4, angSegs = near ? 10 : 6;
+  var baseR = TREE.w, tipR = near ? 1.6 : 2.3;
+
+  function centerAt(t) { return bladeCurvePoint(TREE, t); }
+  function ringFrame(t) {
+    var p0 = centerAt(t), p1 = centerAt(Math.min(t + 0.01, 1));
+    var tangent = nrm3(sub3(p1, p0));
+    var ref = Math.abs(tangent[1]) < 0.97 ? [0, 1, 0] : [1, 0, 0];
+    var xA = nrm3(cross3(ref, tangent));
+    return { p: p0, x: xA, z: cross3(xA, tangent) };
+  }
+
+  var rows = [];
+  for (var ri = 0; ri <= rings; ri++) {
+    var t = (ri / rings) * TREE_TRUNK_T;
+    var fr = ringFrame(t);
+    var radius = lerp(baseR, tipR, Math.pow(t / TREE_TRUNK_T, 0.7));
+    var ring = [];
+    for (var a = 0; a < angSegs; a++) {
+      var th = 2 * Math.PI * a / angSegs;
+      // near: two noise octaves for bark relief; far: none, just the taper
+      var wob = near
+        ? 0.86 + 0.10 * vnoise(Math.cos(th) * 2.2 + t * 13, Math.sin(th) * 2.2 + t * 13 + 30)
+               + 0.06 * vnoise(Math.cos(th) * 6.4 + t * 29 + 8, Math.sin(th) * 6.4 + t * 29 + 51)
+        : 1;
+      var rr = radius * wob;
+      var wp = add3(fr.p, add3(scl3(fr.x, Math.cos(th) * rr), scl3(fr.z, Math.sin(th) * rr)));
+      var proud = clamp((wob - 0.86) / 0.2 + 0.4, 0, 1);
+      var bark = mixc(C_BARK_B, C_BARK_A, proud);
+      var ao = daylight(wp[0], wp[1], wp[2]) * (near ? (0.5 + 0.5 * proud) : 0.82);
+      ring.push(vtx(M, wp[0], wp[1], wp[2], bark, ao));
+    }
+    rows.push(ring);
+  }
+  for (var r1 = 0; r1 < rows.length - 1; r1++) {
+    for (var a1 = 0; a1 < angSegs; a1++) {
+      var a2 = (a1 + 1) % angSegs;
+      quad(M, rows[r1][a1], rows[r1][a2], rows[r1 + 1][a2], rows[r1 + 1][a1]);
+    }
+  }
+
+  var cylPrim = unitCylinder(near ? 7 : 5);
+  var spherePrim = unitSphere(near ? 8 : 6, near ? 5 : 4);
+  var leafFlat = mixc(C_LEAF_A, C_LEAF_B, 0.42);
+
+  function foliageBlob(center, radius, tintT) {
+    m4Basis([radius * (0.9 + R() * 0.3), 0, 0], [0, radius * (0.75 + R() * 0.25), 0],
+            [0, 0, radius * (0.9 + R() * 0.3)], center, tmpM);
+    bake(M, spherePrim, tmpM, function (x, y, z) {
+      var c = near ? mixc(C_LEAF_A, C_LEAF_B, tintT) : leafFlat;
+      return [c[0], c[1], c[2], daylight(x, y, z) * (near ? 0.85 : 0.78)];
+    });
+  }
+
+  if (near) {
+    // root buttresses: same segMat+bake idiom as the lawn's twigs/husks
+    var baseP = centerAt(0);
+    for (var rb = 0; rb < 4; rb++) {
+      var rang = (rb / 4) * Math.PI * 2 + R() * 0.5;
+      var len = baseR * 1.6 + R() * 3;
+      var topR = [baseP[0], baseP[1] + baseR * 0.7, baseP[2]];
+      var endR = [baseP[0] + Math.cos(rang) * len, baseP[1] - 1.6, baseP[2] + Math.sin(rang) * len];
+      segMat(topR, endR, baseR * 0.5, tmpM);
+      bake(M, cylPrim, tmpM, function (x, y, z) {
+        return [C_BARK_B[0], C_BARK_B[1], C_BARK_B[2], daylight(x, y, z) * 0.6];
+      });
+    }
+
+    // branches: fan out from high on the bare trunk, each ending in foliage
+    var branchCount = 5;
+    for (var bI = 0; bI < branchCount; bI++) {
+      var bt = TREE_TRUNK_T * (0.6 + (bI / branchCount) * 0.35 + R() * 0.03);
+      var fr2 = ringFrame(bt);
+      var outAng = (bI / branchCount) * Math.PI * 2 + R() * 0.7;
+      var side2 = nrm3(add3(scl3(fr2.x, Math.cos(outAng)), scl3(fr2.z, Math.sin(outAng))));
+      var dir2 = nrm3(add3(scl3(side2, 0.7), [0, 0.7, 0]));
+      var start2 = add3(fr2.p, scl3(side2, lerp(baseR, tipR, bt / TREE_TRUNK_T) * 0.7));
+      var branchLen = 30 + R() * 22;
+      var end2 = add3(start2, scl3(dir2, branchLen));
+      segMat(start2, end2, 1.7 + R() * 0.8, tmpM);
+      bake(M, cylPrim, tmpM, function (x, y, z) {
+        return [C_BARK_A[0] * 0.9, C_BARK_A[1] * 0.9, C_BARK_A[2] * 0.9, daylight(x, y, z) * 0.72];
+      });
+      foliageBlob(end2, 24 + R() * 12, R());
+      foliageBlob(add3(start2, scl3(sub3(end2, start2), 0.55)), 18 + R() * 8, R());
+    }
+    foliageBlob(add3(centerAt(TREE_TRUNK_T), [0, 12, 0]), 28, 0.5);
+  } else {
+    // far: the fanned crown collapses to two flat-tinted blobs covering
+    // roughly the same envelope as the near version, at a fraction of the cost
+    foliageBlob(add3(centerAt(TREE_TRUNK_T), [-14, 14, 6]), 46, 0.5);
+    foliageBlob(add3(centerAt(TREE_TRUNK_T), [18, 22, -8]), 40, 0.5);
+  }
+
+  computeNormals(M);
+  return M;
+}
+
+/* ==========================================================================
    4. GL setup
    ========================================================================== */
 
@@ -982,17 +1450,17 @@ var WIND = [
 
 var VS = [
   'attribute vec3 aPos; attribute vec3 aNrm; attribute vec3 aCol;',
-  'attribute float aDay; attribute float aSway;',
+  'attribute float aDay; attribute float aSway; attribute float aSpecMul;',
   'uniform mat4 uProj, uView, uModel, uLightVP; uniform mat3 uNrmMat;',
   'uniform float uTime, uWind;',
   'varying vec3 vNrm; varying vec3 vCol; varying float vDay; varying vec3 vWorld;',
-  'varying float vSway; varying vec4 vLightPos;',
+  'varying float vSway; varying float vSpecMul; varying vec4 vLightPos;',
   'void main(){',
   '  vec4 wp = uModel * vec4(aPos, 1.0);',
   WIND,
   '  vWorld = wp.xyz;',
   '  vNrm = uNrmMat * aNrm;',
-  '  vCol = aCol; vDay = aDay; vSway = aSway;',
+  '  vCol = aCol; vDay = aDay; vSway = aSway; vSpecMul = aSpecMul;',
   '  vLightPos = uLightVP * wp;',
   '  gl_Position = uProj * uView * wp;',
   '}'
@@ -1001,7 +1469,7 @@ var VS = [
 var FS = [
   'precision mediump float;',
   'varying vec3 vNrm; varying vec3 vCol; varying float vDay; varying vec3 vWorld;',
-  'varying float vSway; varying vec4 vLightPos;',
+  'varying float vSway; varying float vSpecMul; varying vec4 vLightPos;',
   'uniform vec3 uSunDir, uSunCol, uSkyCol, uBounceCol, uCamPos, uRimCol, uColMul;',
   'uniform vec3 uFogIn, uFogOut;',
   'uniform vec3 uLightPos[8]; uniform vec3 uLightCol[8];',
@@ -1056,10 +1524,12 @@ var FS = [
   '    float trans = pow(max(dot(-V, uSunDir), 0.0), 2.5);',
   '    c += base * uSunCol * trans * vSway * 1.9 * day * sh;',
   '  }',
-  // chitin is hard and glossy, unlike everything else in the scene
-  '  if (uSpec > 0.0) {',
+  // chitin is hard and glossy, unlike everything else in the scene; vSpecMul
+  // gates it per-vertex (resin, puddles) so a single worldMesh draw call can
+  // carry both glossy and matte surfaces — uSpec stays a per-draw-call dial
+  '  if (uSpec > 0.0 && vSpecMul > 0.0) {',
   '    vec3 H = normalize(uSunDir + V);',
-  '    c += uSunCol * pow(max(dot(N, H), 0.0), 46.0) * uSpec * day * sh;',
+  '    c += uSunCol * pow(max(dot(N, H), 0.0), 46.0) * uSpec * vSpecMul * day * sh;',
   '  }',
 
   '  for (int i = 0; i < 8; i++) {',
@@ -1221,7 +1691,8 @@ var A = {
   nrm: gl.getAttribLocation(prog, 'aNrm'),
   col: gl.getAttribLocation(prog, 'aCol'),
   day: gl.getAttribLocation(prog, 'aDay'),
-  sway: gl.getAttribLocation(prog, 'aSway')
+  sway: gl.getAttribLocation(prog, 'aSway'),
+  spec: gl.getAttribLocation(prog, 'aSpecMul')
 };
 
 var SU = {
@@ -1255,7 +1726,7 @@ var MA = gl.getAttribLocation(moteProg, 'aSeed');
 /* Attribute slots can collide between programs, so clear them all, then turn on
    exactly what this program reads. */
 function useAttribs(locs) {
-  var all = [A.pos, A.nrm, A.col, A.day, A.sway, SHA.pos, SHA.sway, SA, MA, PA];
+  var all = [A.pos, A.nrm, A.col, A.day, A.sway, A.spec, SHA.pos, SHA.sway, SA, MA, PA];
   for (var i = 0; i < all.length; i++) if (all[i] >= 0) gl.disableVertexAttribArray(all[i]);
   for (var j = 0; j < locs.length; j++) if (locs[j] >= 0) gl.enableVertexAttribArray(locs[j]);
 }
@@ -1306,13 +1777,13 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_
 /* Pack a mesh into an interleaved GPU buffer. */
 function upload(M) {
   var n = M.p.length / 3;
-  var data = new Float32Array(n * 11);
+  var data = new Float32Array(n * 12);
   for (var i = 0; i < n; i++) {
-    var o = i * 11;
+    var o = i * 12;
     data[o]   = M.p[i*3];   data[o+1] = M.p[i*3+1]; data[o+2] = M.p[i*3+2];
     data[o+3] = M.n[i*3];   data[o+4] = M.n[i*3+1]; data[o+5] = M.n[i*3+2];
     data[o+6] = M.c[i*3];   data[o+7] = M.c[i*3+1]; data[o+8] = M.c[i*3+2];
-    data[o+9] = M.a[i];     data[o+10] = M.s[i];
+    data[o+9] = M.a[i];     data[o+10] = M.s[i];    data[o+11] = M.sp[i];
   }
   var vbo = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
@@ -1334,13 +1805,13 @@ function primToMesh(geo) {
     M.p.push(geo.p[v], geo.p[v+1], geo.p[v+2]);
     M.n.push(geo.n[v], geo.n[v+1], geo.n[v+2]);
     M.c.push(1, 1, 1);
-    M.a.push(1); M.s.push(0);
+    M.a.push(1); M.s.push(0); M.sp.push(1);   // ants/queen: full specular multiplier, dialled by uSpec per draw call
   }
   M.i = geo.i.slice();
   return M;
 }
 
-var VSTRIDE = 44;   // bytes per vertex; not the gait's STRIDE
+var VSTRIDE = 48;   // bytes per vertex; not the gait's STRIDE
 
 function bindMesh(m) {
   gl.bindBuffer(gl.ARRAY_BUFFER, m.vbo);
@@ -1350,15 +1821,18 @@ function bindMesh(m) {
   gl.vertexAttribPointer(A.col, 3, gl.FLOAT, false, VSTRIDE, 24);
   gl.vertexAttribPointer(A.day, 1, gl.FLOAT, false, VSTRIDE, 36);
   gl.vertexAttribPointer(A.sway, 1, gl.FLOAT, false, VSTRIDE, 40);
+  gl.vertexAttribPointer(A.spec, 1, gl.FLOAT, false, VSTRIDE, 44);
 }
 
 bootmsg.textContent = 'Construction de la galerie…';
 
-var worldMesh, sphereMesh, cylMesh;
+var worldMesh, sphereMesh, cylMesh, treeMeshNear, treeMeshFar;
 try {
   worldMesh = upload(buildWorld());
   sphereMesh = upload(primToMesh(unitSphere(12, 8)));
   cylMesh = upload(primToMesh(unitCylinder(8)));
+  treeMeshNear = upload(buildTree(true));
+  treeMeshFar = upload(buildTree(false));
 } catch (e) {
   bootmsg.textContent = 'Erreur pendant la construction du monde : ' + e.message;
   return;
@@ -1392,29 +1866,70 @@ var ant = {
   speed: 0,
   travel: 0,               // distance walked, drives the gait
   bob: 0,
-  emerged: false
+  emerged: false,
+  climb: null,              // null on the ground; { i: GRASS index, t: 0..1 } while climbing a blade
+  legsInit: false
 };
 
-// per-leg runtime state
-var legState = LEGS.map(function () {
-  return { planted: [0,0,0], from: [0,0,0], to: [0,0,0], swinging: false, prevP: 0 };
-});
-var legsInit = false;
+// per-leg runtime state. Every ant (player or NPC) gets its own via makeLegState(),
+// so the locomotion code below is written generically against an ant-record + its
+// leg state rather than the module-level singleton it used to be.
+function makeLegState() {
+  return LEGS.map(function () {
+    return { planted: [0,0,0], from: [0,0,0], to: [0,0,0], swinging: false, prevP: 0 };
+  });
+}
+var legState = makeLegState();
 
 var STRIDE = 7.0;          // world distance per full gait cycle
 
-function antBasis() {
-  var gn = groundNormal(ant.x, ant.z);
+/* --- climbing a grass blade: same curve the mesh was built from (see blade()
+   in buildWorld), sampled continuously so climbing isn't tied to mesh segment
+   count. ---------------------------------------------------------------- */
+var CLIMB_MIN_H  = 42;     // only sufficiently tall blades are worth climbing
+var CLIMB_RADIUS = 4.5;    // how close to a blade's base an ant must be to grab it
+var CLIMB_SPEED  = 20;     // arc-length units per second while climbing
+var CLIMB_MAX_T  = 0.93;   // stop short of the tip, where the blade gets too thin to stand on
+
+function bladeCurvePoint(g, t) {
+  var dx = Math.cos(g.ang), dz = Math.sin(g.ang);
+  var bend = t * t * g.h * 0.26;
+  return [g.x + dx * bend, g.baseY + g.h * t * (1 - t * 0.13), g.z + dz * bend];
+}
+
+/* The blade is a flat ribbon: tangent runs along its length, width runs across
+   its face, and normal is the face an ant would cling to. */
+function bladeClimbBasis(g, t) {
+  var p0 = bladeCurvePoint(g, t);
+  var p1 = bladeCurvePoint(g, Math.min(t + 0.01, 1));
+  var tangent = nrm3(sub3(p1, p0));
+  var width = [-Math.sin(g.ang), 0, Math.cos(g.ang)];
+  var normal = nrm3(cross3(tangent, width));
+  return { pos: p0, tangent: tangent, width: width, normal: normal };
+}
+
+function antBasis(a) {
+  if (a.climb) {
+    var cb = bladeClimbBasis(GRASS[a.climb.i], a.climb.t);
+    // local Y (up) -> away from the blade face, local Z (fwd) -> up the blade,
+    // local X (side) -> across the blade's width — legs land on the flat face.
+    return { side: cb.width, up: cb.normal, fwd: cb.tangent };
+  }
+  var gn = groundNormal(a.x, a.z);
   var up = nrm3([gn[0] * 0.7, 1, gn[2] * 0.7]);
-  var fRaw = [Math.sin(ant.yaw), 0, Math.cos(ant.yaw)];
+  var fRaw = [Math.sin(a.yaw), 0, Math.cos(a.yaw)];
   var side = nrm3(cross3(up, fRaw));
   var fwd = cross3(side, up);
   return { side: side, up: up, fwd: fwd };
 }
 
-function antMatrix(o, extraLift) {
-  var b = antBasis();
-  var p = [ant.x, groundY(ant.x, ant.z) + 1.05 + ant.bob + (extraLift || 0), ant.z];
+function antMatrix(a, o, extraLift) {
+  var b = antBasis(a);
+  if (a.climb) {
+    var p = add3([a.x, a.y, a.z], scl3(b.up, 1.05 + a.bob + (extraLift || 0)));
+    return m4Basis(b.side, b.up, b.fwd, p, o);
+  }
+  var p = [a.x, groundY(a.x, a.z) + 1.05 + a.bob + (extraLift || 0), a.z];
   return m4Basis(b.side, b.up, b.fwd, p, o);
 }
 
@@ -1439,17 +1954,18 @@ function solveKnee(hip, foot, l1, l2, poleDir) {
   return add3(add3(hip, scl3(dn, a)), scl3(perp, h));
 }
 
-function updateLegs(dt) {
-  var mat = antMatrix(m4(), 0);
-  var b = antBasis();
-  var gaitPhase = ant.travel / STRIDE;
+function updateLegs(a, legState, dt) {
+  var mat = antMatrix(a, m4(), 0);
+  var b = antBasis(a);
+  var gaitPhase = a.travel / STRIDE;
+  var climbing = !!a.climb;   // on a blade, feet stay on the flat face instead of a height field
 
   for (var i = 0; i < LEGS.length; i++) {
     var L = LEGS[i], S = legState[i];
     var restW = localToWorld(mat, L.rest);
-    restW[1] = groundY(restW[0], restW[2]);
+    if (!climbing) restW[1] = groundY(restW[0], restW[2]);
 
-    if (!legsInit) { S.planted = restW.slice(); S.from = restW.slice(); S.to = restW.slice(); }
+    if (!a.legsInit) { S.planted = restW.slice(); S.from = restW.slice(); S.to = restW.slice(); }
 
     var p = (gaitPhase + L.phase) % 1;
     if (p < 0) p += 1;
@@ -1458,8 +1974,8 @@ function updateLegs(dt) {
     if (p >= 0.5 && S.prevP < 0.5) {
       S.swinging = true;
       S.from = S.planted.slice();
-      var ahead = add3(restW, scl3(b.fwd, STRIDE * 0.38 * clamp(ant.speed / 16, 0, 1.4)));
-      ahead[1] = groundY(ahead[0], ahead[2]);
+      var ahead = add3(restW, scl3(b.fwd, STRIDE * 0.38 * clamp(a.speed / 16, 0, 1.4)));
+      if (!climbing) ahead[1] = groundY(ahead[0], ahead[2]);
       S.to = ahead;
     }
     if (p < 0.5 && S.prevP >= 0.5) {
@@ -1479,13 +1995,13 @@ function updateLegs(dt) {
     }
 
     // when standing still, feet drift gently back to their rest pose
-    if (ant.speed < 0.4 && !S.swinging) {
+    if (a.speed < 0.4 && !S.swinging) {
       S.planted[0] = damp(S.planted[0], restW[0], 4, dt);
       S.planted[1] = damp(S.planted[1], restW[1], 4, dt);
       S.planted[2] = damp(S.planted[2], restW[2], 4, dt);
     }
   }
-  legsInit = true;
+  a.legsInit = true;
 }
 
 /* ==========================================================================
@@ -1509,6 +2025,7 @@ var nubEl = stickEl.firstElementChild;
 addEventListener('keydown', function (e) {
   keys[e.code] = true;
   if (e.code === 'KeyC') toggleCam();
+  if (e.code === 'KeyE') tryInteract();
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].indexOf(e.code) >= 0) e.preventDefault();
 });
 addEventListener('keyup', function (e) { keys[e.code] = false; });
@@ -1570,6 +2087,13 @@ canvas.addEventListener('wheel', function (e) {
 var camMode = 'close';
 var camReady = false;
 var camEye = [-16, 12, -176], camAim = [-16, 4, -158];
+
+/* Tree LOD: near under TREE_LOD_ON, far past TREE_LOD_OFF, with a gap
+   between the two so crossing the boundary while walking doesn't flicker
+   between the two meshes every frame. */
+var TREE_LOD_ON = 130, TREE_LOD_OFF = 170;
+var treeLodNear = true;
+
 var camBtn = document.getElementById('camtoggle');
 
 function toggleCam() {
@@ -1579,7 +2103,9 @@ function toggleCam() {
 camBtn.addEventListener('click', toggleCam);
 
 function desiredCamera() {
-  var head = [ant.x, groundY(ant.x, ant.z) + 2.6, ant.z];
+  // while climbing, ant.y is the real height on the blade — groundY would look
+  // straight through the blade back down to the lawn
+  var head = ant.climb ? [ant.x, ant.y + 2.0, ant.z] : [ant.x, groundY(ant.x, ant.z) + 2.6, ant.z];
   if (camMode === 'close') {
     var yaw = camYaw;
     var pitch = wantPitch;
@@ -1643,6 +2169,222 @@ function unoccludedFraction(aim, eye) {
     if (tt < best) best = tt;
   }
   return clamp(best, 0.55, 1);
+}
+
+/* ==========================================================================
+   7b. Interaction: climbing grass blades, and a first pass at the harvest
+   loop from the README's "Boucle de jeu" — pick up a resource on the lawn,
+   carry it underground, watch the tally grow. Minimal by design: no risk,
+   no storage rooms yet, just the shape of the loop (see README §Boucle de jeu).
+   ========================================================================== */
+
+var promptEl = document.getElementById('prompt');
+var prompttxtEl = document.getElementById('prompttxt');
+var harvesttxtEl = document.getElementById('harvesttxt');
+
+function nearestClimbable(a) {
+  var best = -1, bestD = CLIMB_RADIUS * CLIMB_RADIUS;
+  for (var i = 0; i < GRASS.length; i++) {
+    var g = GRASS[i];
+    if (g.h < CLIMB_MIN_H) continue;
+    var dx = g.x - a.x, dz = g.z - a.z;
+    var d2 = dx*dx + dz*dz;
+    if (d2 < bestD) { bestD = d2; best = i; }
+  }
+  return best;
+}
+
+function enterClimb(a, i) {
+  a.climb = { i: i, t: 0.03 };
+  a.speed = 0;
+}
+
+function exitClimb(a) {
+  // no fall physics yet: dismounting drops the ant straight back to the ground
+  // below wherever it let go
+  var p = bladeCurvePoint(GRASS[a.climb.i], a.climb.t);
+  a.climb = null;
+  a.x = p[0]; a.z = p[2]; a.y = groundY(p[0], p[2]);
+  a.speed = 0;
+}
+
+var HARVEST_RADIUS = 4.5;
+var SEED_TINT = col('#8a6a3c'), RESIN_TINT = col('#e0a752');
+// hand-placed for a first pass — a real harvest loop would scatter these
+// procedurally (and respawn them), see README §Boucle de jeu / La récolte
+var HARVESTABLES = [
+  { type: 'seed',  x: -34, z: 46,  taken: false },
+  { type: 'seed',  x: 58,  z: 92,  taken: false },
+  { type: 'resin', x: -22, z: 132, taken: false },
+  { type: 'resin', x: 72,  z: 58,  taken: false }
+];
+
+function nearestHarvestable(a) {
+  var best = -1, bestD = HARVEST_RADIUS * HARVEST_RADIUS;
+  for (var i = 0; i < HARVESTABLES.length; i++) {
+    var r = HARVESTABLES[i];
+    if (r.taken) continue;
+    var dx = r.x - a.x, dz = r.z - a.z;
+    var d2 = dx*dx + dz*dz;
+    if (d2 < bestD) { bestD = d2; best = i; }
+  }
+  return best;
+}
+
+/* Nest-progression loop, first pass: hold at most one resource at a time,
+   carry it back underground, tally what's been delivered against #objective. */
+var quest = { active: false, holding: null, delivered: { seed: 0, resin: 0 } };
+
+function questLabel(type) { return type === 'seed' ? 'la graine' : 'la résine'; }
+
+function updateObjective() {
+  objtxt.textContent = quest.holding
+    ? 'Rapporter ' + questLabel(quest.holding) + ' à la fourmilière'
+    : 'Récolter une graine ou de la résine sur la pelouse';
+  harvesttxtEl.textContent = 'Rapporté — graines : ' + quest.delivered.seed + ' · résine : ' + quest.delivered.resin;
+  harvesttxtEl.style.display = 'block';
+}
+
+function harvest(i) {
+  if (quest.holding) return;          // one at a time, for now
+  HARVESTABLES[i].taken = true;
+  quest.holding = HARVESTABLES[i].type;
+  updateObjective();
+}
+
+function deliverIfHome() {
+  if (!quest.holding) return;
+  if (ant.z < TUNNEL_MOUTH - 10) {    // well inside the gallery counts as "home"
+    quest.delivered[quest.holding]++;
+    quest.holding = null;
+    updateObjective();
+  }
+}
+
+// refreshed once a frame by updatePrompt(), read back by tryInteract() — avoids
+// re-scanning GRASS/HARVESTABLES twice for what's effectively the same query
+var curClimbTarget = -1, curHarvestTarget = -1;
+
+function updatePrompt() {
+  if (ant.climb) {
+    prompttxtEl.textContent = 'redescendre du brin';
+    promptEl.classList.add('on');
+    return;
+  }
+  curClimbTarget = nearestClimbable(ant);
+  if (curClimbTarget >= 0) {
+    prompttxtEl.textContent = 'grimper au brin d’herbe';
+    promptEl.classList.add('on');
+    return;
+  }
+  curHarvestTarget = quest.holding ? -1 : nearestHarvestable(ant);
+  if (curHarvestTarget >= 0) {
+    prompttxtEl.textContent = 'ramasser ' + questLabel(HARVESTABLES[curHarvestTarget].type);
+    promptEl.classList.add('on');
+    return;
+  }
+  promptEl.classList.remove('on');
+}
+
+function tryInteract() {
+  if (ant.climb) { exitClimb(ant); return; }
+  if (curClimbTarget >= 0) { enterClimb(ant, curClimbTarget); return; }
+  if (curHarvestTarget >= 0) { harvest(curHarvestTarget); return; }
+}
+
+/* Resources are drawn per-frame (not baked into worldMesh) so they can be
+   picked up and disappear at runtime. */
+function drawHarvestables(t) {
+  var m = m4();
+  for (var i = 0; i < HARVESTABLES.length; i++) {
+    var r = HARVESTABLES[i];
+    if (r.taken) continue;
+    var y = groundY(r.x, r.z) + 0.55 + Math.sin(t * 1.6 + i) * 0.08;
+    var tint = r.type === 'seed' ? SEED_TINT : RESIN_TINT;
+    var s = r.type === 'seed' ? [0.9, 1.1, 0.9] : [0.85, 1.25, 0.85];
+    m4Basis([s[0],0,0], [0,s[1],0], [0,0,s[2]], [r.x, y, r.z], m);
+    drawMesh(sphereMesh, m, tint, daylight(r.x, y, r.z));
+  }
+}
+
+/* ==========================================================================
+   7c. NPC ouvrières: a few workers pacing fixed patrol legs, reusing the same
+   hexapod IK and gait code as the player (updateLegs/antMatrix/drawAnt all
+   take an ant-record + its own leg state now, instead of a singleton).
+   Waypoints are hand-picked to stay clear of the walls and the queen's dais —
+   no pathfinding or collision, deliberately, for a first pass.
+   ========================================================================== */
+
+function makeWorker(ax, az, bx, bz) {
+  return {
+    x: ax, y: 0, z: az, yaw: 0, speed: 0, travel: Math.random() * STRIDE, bob: 0,
+    climb: null, legsInit: false, legState: makeLegState(),
+    a: [ax, 0, az], b: [bx, 0, bz], toB: true
+  };
+}
+
+var NPC_SPEED = 8;
+var NPCS = [
+  makeWorker(0, -85, 2, -25),        // gallery, mid-run
+  makeWorker(-1, -55, 1, -8),        // gallery, closer to the surface
+  makeWorker(-10, -140, -5, -115)    // queen's chamber, skirting the dais
+];
+
+function updateNPC(npc, dt) {
+  var tgt = npc.toB ? npc.b : npc.a;
+  var dx = tgt[0] - npc.x, dz = tgt[2] - npc.z;
+  var d = Math.hypot(dx, dz);
+  if (d < 1.2) {
+    npc.toB = !npc.toB;
+    npc.speed = damp(npc.speed, 0, 5, dt);
+  } else {
+    npc.yaw = dampAngle(npc.yaw, Math.atan2(dx, dz), 5, dt);
+    npc.speed = damp(npc.speed, NPC_SPEED, 4, dt);
+  }
+  var step = npc.speed * dt;
+  npc.x += Math.sin(npc.yaw) * step;
+  npc.z += Math.cos(npc.yaw) * step;
+  npc.travel += step;
+  npc.bob = Math.sin(npc.travel * (Math.PI * 2 / STRIDE) * 2) * 0.13 * clamp(npc.speed / 8, 0, 1);
+  updateLegs(npc, npc.legState, dt);
+}
+
+/* ==========================================================================
+   7d. Decor collision: push the ant out of rocks, grass bases and mushroom
+   caps, then bleed the blocked motion sideways along the obstacle's edge —
+   the same push-out-then-slide idiom the queen's dais already uses below.
+   Radii are generous on purpose: mobility over rigor means a wide miss that
+   reads as "drifted a hair around that pebble" beats a snug one that reads
+   as "stuck on a pebble". Grass radii stay well under CLIMB_RADIUS so this
+   never fights the climb interaction. Wired to the player only for now —
+   the NPCs' waypoints are hand-picked to already clear the decor.
+   ========================================================================== */
+
+function grassCollideR(g) { return g.w * 1.4 + 0.6; }
+
+function pushAndSlide(ant, cx, cz, r, step) {
+  var dx = ant.x - cx, dz = ant.z - cz;
+  var d = Math.hypot(dx, dz);
+  if (d >= r || d < 0.001) return;
+  var nx = dx / d, nz = dz / d;
+  ant.x = cx + nx * r; ant.z = cz + nz * r;
+  var tx = -nz, tz = nx;
+  var along = Math.sin(ant.yaw) * tx + Math.cos(ant.yaw) * tz;
+  var slide = step * 0.6 * (along >= 0 ? 1 : -1);
+  ant.x += tx * slide; ant.z += tz * slide;
+}
+
+function resolveDecorCollision(ant, step) {
+  for (var i = 0; i < ROCKS.length; i++) {
+    pushAndSlide(ant, ROCKS[i].x, ROCKS[i].z, ROCKS[i].r, step);
+  }
+  for (var j = 0; j < GRASS.length; j++) {
+    var g = GRASS[j];
+    pushAndSlide(ant, g.x, g.z, grassCollideR(g), step);
+  }
+  for (var k = 0; k < MUSHROOMS.length; k++) {
+    pushAndSlide(ant, MUSHROOMS[k].x, MUSHROOMS[k].z, MUSHROOMS[k].r, step);
+  }
 }
 
 /* ==========================================================================
@@ -1720,10 +2462,10 @@ function drawMesh(mesh, mat, tint, dayMul) {
   gl.drawElements(gl.TRIANGLES, mesh.count, mesh.type, 0);
 }
 
-function drawAnt(t) {
-  var mat = antMatrix(m4(), 0);
-  var dayMul = daylight(ant.x, 1, ant.z);
-  var b = antBasis();
+function drawAnt(a, legState, t) {
+  var mat = antMatrix(a, m4(), 0);
+  var dayMul = daylight(a.x, 1, a.z);
+  var b = antBasis(a);
   var m = m4();
 
   function ellipsoid(local, rx, ry, rz, tint) {
@@ -1731,8 +2473,8 @@ function drawAnt(t) {
     m4Basis(scl3(b.side, rx), scl3(b.up, ry), scl3(b.fwd, rz), w, m);
     drawMesh(sphereMesh, m, tint, dayMul);
   }
-  function bone(a, c, r, tint) {
-    segMat(a, c, r, m);
+  function bone(a2, c, r, tint) {
+    segMat(a2, c, r, m);
     drawMesh(cylMesh, m, tint, dayMul);
   }
 
@@ -1744,7 +2486,7 @@ function drawAnt(t) {
   ellipsoid([-0.72, 2.05, 2.95], 0.30, 0.26, 0.30, C_EYE);
 
   // mandibles, opening and closing very slightly as it walks
-  var mand = 0.22 + Math.sin(t * 3.1) * 0.06 + clamp(ant.speed, 0, 14) * 0.012;
+  var mand = 0.22 + Math.sin(t * 3.1) * 0.06 + clamp(a.speed, 0, 14) * 0.012;
   for (var sM = -1; sM <= 1; sM += 2) {
     var base = localToWorld(mat, [sM * 0.52, 1.42, 3.35]);
     var tip = localToWorld(mat, [sM * (0.30 + mand), 1.22, 4.55]);
@@ -1860,46 +2602,66 @@ function frame(now) {
   var sprint = keys['ShiftLeft'] || keys['ShiftRight'] ? 1.75 : 1;
   var maxSpeed = 15 * sprint;
 
-  if (mag > 0.02) {
-    ant.yaw = dampAngle(ant.yaw, Math.atan2(wishX, wishZ), 9, dt);
-    ant.speed = damp(ant.speed, maxSpeed * mag, 7, dt);
-    // the camera drifts back behind the ant while it walks, so the pair
-    // converges instead of chasing each other
-    if (camMode === 'close' && !dragging) camYaw = dampAngle(camYaw, ant.yaw, 2.2, dt);
+  if (ant.climb) {
+    // climbing: forward/back walks the ant along the blade's own curve;
+    // left/right is unused for now (see README "Suite" \u2014 grimpe des tiges)
+    var g = GRASS[ant.climb.i];
+    var climbDir = clamp(iy, -1, 1);
+    ant.climb.t = clamp(ant.climb.t + climbDir * (CLIMB_SPEED / g.h) * dt, 0, CLIMB_MAX_T);
+    ant.speed = damp(ant.speed, Math.abs(climbDir) * CLIMB_SPEED, 7, dt);
+    ant.travel += Math.abs(climbDir) * CLIMB_SPEED * dt;
+    var cp = bladeCurvePoint(g, ant.climb.t);
+    ant.x = cp[0]; ant.y = cp[1]; ant.z = cp[2];
+    if (ant.climb.t <= 0.0005 && climbDir < 0) exitClimb(ant);   // climbed back down to the ground
   } else {
-    ant.speed = damp(ant.speed, 0, 9, dt);
-  }
-
-  var step = ant.speed * dt;
-  ant.x += Math.sin(ant.yaw) * step;
-  ant.z += Math.cos(ant.yaw) * step;
-  ant.travel += step;
-
-  /* --- keep the ant inside the playable volume --- */
-  if (ant.z < TUNNEL_MOUTH) {
-    var lim = Math.max(profileR(ant.z) * 0.82 - 1.6, 3);
-    ant.x = clamp(ant.x, -lim, lim);
-    ant.z = Math.max(ant.z, TUNNEL_BACK + 5);
-    var qdx = ant.x - QUEEN[0], qdz = ant.z - QUEEN[2];
-    var qd = Math.hypot(qdx, qdz);
-    if (qd < 11 && qd > 0.001) {                   // you walk around the queen, not through her
-      var nx = qdx / qd, nz = qdz / qd;
-      ant.x = QUEEN[0] + nx * 11;
-      ant.z = QUEEN[2] + nz * 11;
-      // and slide along her, so walking straight at her never pins you
-      var tx = -nz, tz = nx;
-      var along = Math.sin(ant.yaw) * tx + Math.cos(ant.yaw) * tz;
-      var slide = step * 0.75 * (along >= 0 ? 1 : -1);
-      ant.x += tx * slide; ant.z += tz * slide;
+    if (mag > 0.02) {
+      ant.yaw = dampAngle(ant.yaw, Math.atan2(wishX, wishZ), 9, dt);
+      ant.speed = damp(ant.speed, maxSpeed * mag, 7, dt);
+      // the camera drifts back behind the ant while it walks, so the pair
+      // converges instead of chasing each other
+      if (camMode === 'close' && !dragging) camYaw = dampAngle(camYaw, ant.yaw, 2.2, dt);
+    } else {
+      ant.speed = damp(ant.speed, 0, 9, dt);
     }
-  } else {
-    if (ant.z < 1.2 && Math.abs(ant.x) > 5.2) ant.z = 1.2;   // the mound face is solid
-    ant.x = clamp(ant.x, -175, 175);
-    ant.z = Math.min(ant.z, 238);
+
+    var step = ant.speed * dt;
+    ant.x += Math.sin(ant.yaw) * step;
+    ant.z += Math.cos(ant.yaw) * step;
+    ant.travel += step;
+    resolveDecorCollision(ant, step);
+
+    /* --- keep the ant inside the playable volume --- */
+    if (ant.z < TUNNEL_MOUTH) {
+      // side rooms (granary/brood/midden) widen this from a simple per-z box
+      // clamp to "nearest valid region among the tube and its branches" —
+      // see containUnderground(), section 1.
+      var contained = containUnderground(ant.x, ant.z);
+      ant.x = contained[0]; ant.z = contained[1];
+      var qdx = ant.x - QUEEN[0], qdz = ant.z - QUEEN[2];
+      var qd = Math.hypot(qdx, qdz);
+      if (qd < 11 && qd > 0.001) {                   // you walk around the queen, not through her
+        var nx = qdx / qd, nz = qdz / qd;
+        ant.x = QUEEN[0] + nx * 11;
+        ant.z = QUEEN[2] + nz * 11;
+        // and slide along her, so walking straight at her never pins you
+        var tx = -nz, tz = nx;
+        var along = Math.sin(ant.yaw) * tx + Math.cos(ant.yaw) * tz;
+        var slide = step * 0.75 * (along >= 0 ? 1 : -1);
+        ant.x += tx * slide; ant.z += tz * slide;
+      }
+    } else {
+      if (ant.z < 1.2 && Math.abs(ant.x) > 5.2) ant.z = 1.2;   // the mound face is solid
+      ant.x = clamp(ant.x, -175, 175);
+      ant.z = Math.min(ant.z, 238);
+    }
   }
 
   ant.bob = Math.sin(ant.travel * (Math.PI * 2 / STRIDE) * 2) * 0.13 * clamp(ant.speed / 8, 0, 1);
-  updateLegs(dt);
+  updateLegs(ant, legState, dt);
+  for (var ni = 0; ni < NPCS.length; ni++) updateNPC(NPCS[ni], dt);
+
+  updatePrompt();
+  deliverIfHome();
 
   /* --- the beats: leaving the chamber, then reaching the surface --- */
   if (!ant.leftChamber && ant.z > -96) {
@@ -1913,6 +2675,9 @@ function frame(now) {
     document.getElementById('tcsmall').textContent = 'Un brin d\u2019herbe fait seize fois votre taille';
     titlecard.classList.add('on');
     setTimeout(function () { titlecard.classList.remove('on'); }, 3800);
+    // hand the objective off to the harvest loop once the "you're outside" beat has had its moment
+    quest.active = true;
+    setTimeout(updateObjective, 3800);
   }
 
   /* --- camera --- */
@@ -1932,6 +2697,12 @@ function frame(now) {
     camAim[c] = damp(camAim[c], want.aim[c], rate * 1.4, dt);
   }
   curFov = damp(curFov, want.fov, 4, dt);   // so switching modes doesn't snap
+
+  /* --- tree LOD: pick the mesh, not just a shader toggle --- */
+  var treeDist = Math.hypot(camEye[0] - TREE.x, camEye[2] - TREE.z);
+  if (treeLodNear && treeDist > TREE_LOD_OFF) treeLodNear = false;
+  else if (!treeLodNear && treeDist < TREE_LOD_ON) treeLodNear = true;
+  var treeMesh = treeLodNear ? treeMeshNear : treeMeshFar;
 
   /* --- light/atmosphere blend between gallery and lawn --- */
   var outness = clamp((ant.z + 12) / 30, 0, 1);
@@ -1964,7 +2735,10 @@ function frame(now) {
     gl.uniform1f(SH.uWind, wind);
     shadowPass = true;
     drawMesh(worldMesh, identM, null, 1);
-    drawAnt(t);
+    drawMesh(treeMesh, identM, null, 1);
+    drawAnt(ant, legState, t);
+    for (var nsi = 0; nsi < NPCS.length; nsi++) drawAnt(NPCS[nsi], NPCS[nsi].legState, t);
+    drawHarvestables(t);
     shadowPass = false;
   }
 
@@ -2022,12 +2796,15 @@ function frame(now) {
   gl.bindTexture(gl.TEXTURE_2D, shadowRT.tex);
   gl.uniform1i(U.uShadow, 0);
 
-  gl.uniform1f(U.uSpec, 0);
+  gl.uniform1f(U.uSpec, 1.0);            // gated per-vertex by aSpecMul (resin, puddles); 0 everywhere else
   drawMesh(worldMesh, identM, [1, 1, 1], 1);
-  gl.uniform1f(U.uSpec, 0.8);            // only chitin is glossy
-  drawAnt(t);
+  drawMesh(treeMesh, identM, [1, 1, 1], 1);
+  gl.uniform1f(U.uSpec, 0.8);            // ants/queen carry aSpecMul=1, so this is their glossiness dial
+  drawAnt(ant, legState, t);
+  for (var ndi = 0; ndi < NPCS.length; ndi++) drawAnt(NPCS[ndi], NPCS[ndi].legState, t);
   if (ant.z < TUNNEL_MOUTH) drawQueen(t);
   gl.uniform1f(U.uSpec, 0);
+  drawHarvestables(t);
 
   gl.useProgram(moteProg);
   useAttribs([MA]);

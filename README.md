@@ -47,17 +47,19 @@ Le document complet de brainstorming (esquisses de classes, carte du monde, HUD,
 
 ## Boucle de jeu
 
-*Piste de travail, à approfondir.*
-
 L'objectif du joueur est de **faire grandir sa fourmilière** : creuser de nouvelles salles, en agrandir d'anciennes, et faire vivre une colonie de plus en plus nombreuse. Le nid est la mesure du progrès, pas un niveau de personnage.
 
-Ce qui alimente cette croissance :
+La partie commence avec le joueur seul, incarnant **la reine** : elle explore, récolte de quoi fonder un nid, creuse sa première salle, puis peut commencer à pondre — chaque ponte fait naître une caste, débloquée progressivement par l'XP de la reine (exploration, combat, découverte). Passé ce prologue, deux échelles de jeu cohabitent, permutables à volonté : le **mode micro** (incarner une fourmi, comme dans le prototype actuel) et le **mode macro** (piloter la fourmilière dans son ensemble — assigner les castes, agrandir le nid, suivre les ressources).
+
+Ce qui alimente la croissance de la colonie :
 
 - **La récolte.** Sortir en surface, rapporter graines, résine, miellat, matériaux. Chaque sortie est un risque : la surface est vaste, éclairée, et peuplée de prédateurs.
-- **Les quêtes.** Données par la colonie et par ses castes, elles orientent la récolte et ouvrent des territoires.
+- **Les quêtes et la chasse.** Données par la colonie et par ses castes, elles orientent la récolte, ouvrent des territoires, et opposent le joueur à des cibles mobiles plutôt qu'à de la ressource statique.
 - **La recherche et la trouvaille.** Certaines salles, techniques et espèces de champignons ne s'achètent pas : elles se découvrent — en explorant, en rapportant un spécimen inconnu, en observant une colonie rivale. C'est le versant curiosité de la progression, en regard du versant travail qu'est la récolte.
 
 La chambre de la reine est le cœur de ce système : c'est d'elle que dépend la population, et donc tout le reste.
+
+Détail complet — mécanisme de ponte, déblocage des castes, articulation micro/macro, première esquisse des sorts de combat par caste — dans [`design/boucle-de-jeu.md`](design/boucle-de-jeu.md).
 
 ## État du projet
 

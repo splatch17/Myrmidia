@@ -15,6 +15,7 @@ Le joueur commence dans la **chambre de la reine**, traverse la galerie, et déb
 | Molette | Zoom |
 | Maj | Accélérer |
 | C, ou le bouton | Basculer caméra rapprochée ↔ isométrique |
+| E | Interagir — grimper à un brin d'herbe, ramasser une ressource, ou redescendre en cours de grimpe |
 
 Sur mobile, glisser sur la moitié gauche fait apparaître un stick virtuel.
 
@@ -47,9 +48,25 @@ Détails qui portent l'image bien au-delà de leur coût :
 - **Brouillard choisi par fragment, pas par caméra.** Depuis la galerie, la pelouse doit *briller* par l'ouverture ; un brouillard indexé sur la caméra la noyait dans la pénombre de la galerie.
 - **Spéculaire de chitine** sur les seules fourmis, pour qu'elles lisent comme des carapaces dures dans un monde mat.
 
+### Grimpe des tiges
+
+Un brin d'herbe assez grand (au-delà d'une certaine hauteur) peut se grimper : approcher sa base et appuyer sur **E**. La caméra suit, et les six pattes visent la face plate du brin plutôt qu'un sol horizontal — l'échelle du contrôleur hexapode réutilise directement la géométrie déjà construite pour le brin (même courbe que le maillage), sans code de grimpe séparé. Pas de chute ni de vent qui déséquilibre : redescendre se fait aussi par **E**, et ramène instantanément au sol.
+
+### PNJ ouvrières
+
+Quelques ouvrières circulent en boucle dans la galerie et la chambre de la reine (aller-retour entre deux points fixes), avec la même locomotion IK que le joueur. Pas de pathfinding : les points de passage sont choisis à la main pour rester à l'écart des parois et de la reine.
+
+### Amorce de la boucle de jeu
+
+Une fois sur la pelouse, l'objectif affiché passe à la récolte : quelques graines et blocs de résine sont posés sur la pelouse (approcher, **E** pour ramasser), à rapporter dans la galerie. Un petit compteur sous l'objectif garde la trace de ce qui a été rapporté. C'est un premier jet délibérément minimal de la section « Boucle de jeu » du README racine — pas de risque, pas de salle de dépôt dédiée, pas de quêtes distinctes encore.
+
+### Salles supplémentaires
+
+Trois branches se détachent de la galerie principale, chacune une variation de la même technique de tube gonflé bruité que la chambre de la reine : le **grenier** (froid/utilitaire — graines et gouttes de résine), le **couvoir** (chaud/habité — extension directe de la chambre de la reine, densité de lampes-couvain la plus haute du jeu), et le **dépotoir** (froid/dangereux — premier registre lumineux vert-gris malade du jeu, distinct de l'ambre chaud et du violet spore).
+
 ### Ce que le prototype ne fait pas
 
-Pas de combat, pas de grimpe, pas de PNJ, pas de réseau, pas de son. Le HUD est décoratif (seule la jauge de phéromone bouge, pour donner l'idée).
+Pas de combat, pas de réseau, pas de son. Pas de chute ni de collision fine sur les brins d'herbe pendant la grimpe. Le HUD reste en grande partie décoratif (jauge de vie, castes, capacités) : seules la phéromone, l'objectif et le compteur de récolte bougent réellement.
 
 ### Aperçus
 
@@ -60,4 +77,4 @@ Pas de combat, pas de grimpe, pas de PNJ, pas de réseau, pas de son. Le HUD est
 
 ### Suite
 
-Salles supplémentaires (greniers, couvoirs, dépotoirs), grimpe des tiges, PNJ ouvrières en circulation, ambiance sonore. Une conception alternative sera aussi essayée en parallèle.
+Ambiance sonore, une vraie salle de dépôt pour la récolte (le grenier construit s'y prête), des quêtes de colonie distinctes de la récolte libre, chute et vent en grimpe, pathfinding pour les PNJ, et le versant « recherche et trouvaille » du README (champignons et techniques qui se découvrent — le dépotoir est un candidat naturel). Une conception alternative sera aussi essayée en parallèle.
