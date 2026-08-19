@@ -48,9 +48,11 @@ Détails qui portent l'image bien au-delà de leur coût :
 - **Brouillard choisi par fragment, pas par caméra.** Depuis la galerie, la pelouse doit *briller* par l'ouverture ; un brouillard indexé sur la caméra la noyait dans la pénombre de la galerie.
 - **Spéculaire de chitine** sur les seules fourmis, pour qu'elles lisent comme des carapaces dures dans un monde mat.
 
-### Grimpe des tiges
+### Grimpe des tiges — et de l'arbre
 
 Un brin d'herbe assez grand (au-delà d'une certaine hauteur) peut se grimper : approcher sa base et appuyer sur **E**. La caméra suit, et les six pattes visent la face plate du brin plutôt qu'un sol horizontal — l'échelle du contrôleur hexapode réutilise directement la géométrie déjà construite pour le brin (même courbe que le maillage), sans code de grimpe séparé. Pas de chute ni de vent qui déséquilibre : redescendre se fait aussi par **E**, et ramène instantanément au sol.
+
+Le premier arbre de la pelouse (tronc imposant, ~4 fois le diamètre d'une fourmi) se grimpe avec la même touche, et prolonge la montée sur une branche praticable qui débouche sur un point de vue dégagé sur la pelouse. Redescendre du tronc près du sol dismonte comme un brin d'herbe ; plus haut, ou depuis la branche, la seule sortie est de reculer et retracer la montée.
 
 ### PNJ ouvrières
 

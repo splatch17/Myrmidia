@@ -461,9 +461,17 @@ function groundNormal(x, z) {
 }
 
 /* How much daylight reaches a point. Baked per-vertex for the world, sampled
-   per-frame for the ant, so both darken through the gallery identically. */
+   per-frame for the ant, so both darken through the gallery identically.
+   Outdoors this used to be a flat 1 everywhere -- the lawn read as a brown
+   plate lit uniformly from nowhere. A single slow, broad noise instead gives
+   it the same "pools, not fog" depth cue the galleries get from their cavity
+   shading (Cephalotes, lawn DA pass): sun-through-canopy dapple and gentle
+   ground undulation. Kept shallow (never below ~0.8) and cheap (baked once
+   per vertex at load, zero per-frame cost) -- it's daylight, not a lamp-lit
+   room, and this must not compete with the real, dynamic tree shadow already
+   cast by the shadow map (sunShadow() in the fragment shader). */
 function daylight(x, y, z) {
-  if (z >= TUNNEL_MOUTH) return 1;
+  if (z >= TUNNEL_MOUTH) return 0.82 + 0.18 * vnoise(x * 0.015, z * 0.015);
   var t = clamp((z - TUNNEL_BACK) / (TUNNEL_MOUTH - TUNNEL_BACK), 0, 1);
   return 0.12 + 0.88 * Math.pow(t, 1.6);
 }
@@ -1175,11 +1183,16 @@ function buildWorld() {
     for (var b6 = 0; b6 < gRows; b6++) {
       var gx = GX0 + a6 * GS, gz = GZ0 + b6 * GS;
       var gy = groundY(gx, gz);
-      var mossAmt = clamp(vnoise(gx*0.018, gz*0.018) * 2.3 - 0.55, 0, 1)
+      // a broad, slow layer on top of the existing two -- soft macro-patches
+      // (~150-250 units across) so the lawn reads as a few different corners
+      // of the same meadow rather than one uniform texture repeated for 380
+      // units (Cephalotes, lawn DA pass: "variation de palette entre zones")
+      var zone = vnoise(gx*0.006, gz*0.006);
+      var mossAmt = clamp(vnoise(gx*0.018, gz*0.018) * 2.3 - 0.55 + (zone - 0.5) * 0.6, 0, 1)
                   * (0.55 + 0.45 * vnoise(gx*0.07, gz*0.07));
       var cc2 = mixc(mixc(C_SOIL_A, C_SOIL_B, vnoise(gx*0.09, gz*0.09)),
                      mixc(C_MOSS_A, C_MOSS_B, vnoise(gx*0.05, gz*0.05)), mossAmt);
-      vtx(M, gx, gy, gz, cc2, 1);
+      vtx(M, gx, gy, gz, cc2, daylight(gx, gy, gz));
     }
   }
   for (var a5 = 0; a5 < gCols - 1; a5++) {
@@ -1246,21 +1259,54 @@ function buildWorld() {
     }
   })();
 
-  /* ---- pebbles ---- */
+  /* ---- pebbles: moss creeping over the crown, same idiom as the midden's
+     husks (blend keyed to local height, softened by noise so the edge isn't
+     a hard band) -- ties the lawn's rocks to its grass/ground palette instead
+     of leaving them a flat, textureless grey blob (Cephalotes, lawn DA pass) */
   for (var pb = 0; pb < 26; pb++) {
     var px2 = (R() - 0.5) * 260, pz2 = 8 + R() * 200;
     var sxx = 2 + R() * 6, syy = 1.5 + R() * 4, szz = 2 + R() * 6;
     var yy = groundY(px2, pz2) + syy * 0.35;
     m4Basis([sxx,0,0], [0,syy,0], [0,0,szz], [px2, yy, pz2], tmp);
     var shade = 0.75 + R() * 0.5;
+    var mossSeed = R() * 40, mossCap = R() < 0.6 ? 0.5 + R() * 0.5 : 0;
     bake(M, sphere, tmp, function (x, y, z) {
-      return [C_STONE[0]*shade, C_STONE[1]*shade, C_STONE[2]*shade];
+      var stone = [C_STONE[0]*shade, C_STONE[1]*shade, C_STONE[2]*shade];
+      if (mossCap <= 0) return stone;
+      var up = clamp((y - yy) / syy + 0.15 * vnoise(x*0.3 + mossSeed, z*0.3 + mossSeed), 0, 1);
+      return mixc(stone, C_MOSS_A, up * up * mossCap);
     });
     ROCKS.push({ x: px2, z: pz2, r: (sxx + szz) * 0.5 + 1.0 });
   }
 
+  /* ---- lawn mushrooms: the garden-floor kind, plain daylight caps (no local
+     light, no spore tint -- those stay reserved for the underground/queen's
+     féerique pole and the future Marécage Fongique biome, see ticket #1) so
+     "champignon = fantastique" keeps reading unambiguously the way "vert =
+     pourriture" already does for the midden. Same stem+cap idiom as
+     fungusCluster() below ground, written standalone here because that one
+     is wired to undergroundFloor()/ALL_LIGHTS and this is daytime, unlit. */
+  var C_CAP_A = mixc(C_QUEEN_B, C_STONE, 0.4), C_CAP_B = mixc(C_CHITIN, C_MOSS_TIP, 0.3);
+  for (var mc = 0; mc < 12; mc++) {
+    var mcx = (R() - 0.5) * 300, mcz = 10 + R() * 210;
+    if (Math.abs(mcx) < 16 && mcz < 34) continue;      // same open sightline as the grass, above
+    var mcCount = 2 + Math.floor(R() * 3);
+    for (var mi = 0; mi < mcCount; mi++) {
+      var fx3 = mcx + (R() - 0.5) * 6, fz3 = mcz + (R() - 0.5) * 6;
+      var sc3 = 0.5 + R() * 0.7;
+      var fy3 = groundY(fx3, fz3);
+      var top3 = [fx3, fy3 + 1.6 * sc3, fz3];
+      segMat([fx3, fy3, fz3], top3, 0.16 * sc3, tmp);
+      bake(M, cyl, tmp, function () { return [C_CAP_A[0]*0.7, C_CAP_A[1]*0.65, C_CAP_A[2]*0.6]; });
+      m4Basis([1.05*sc3,0,0], [0,0.6*sc3,0], [0,0,1.05*sc3], top3, tmp);
+      var capT = R();
+      bake(M, sphere, tmp, function () { return mixc(C_CAP_A, C_CAP_B, capT); });
+      MUSHROOMS.push({ x: fx3, z: fz3, r: 1.05 * sc3 + 0.4 });
+    }
+  }
+
   /* ---- twigs ---- */
-  for (var tw = 0; tw < 7; tw++) {
+  for (var tw = 0; tw < 11; tw++) {
     var ax = (R() - 0.5) * 240, az = 20 + R() * 180;
     var ang2 = R() * Math.PI * 2, len = 30 + R() * 50, rad = 1.6 + R() * 1.6;
     var A2 = [ax, groundY(ax, az) + rad, az];
@@ -1269,12 +1315,15 @@ function buildWorld() {
     bake(M, cyl, tmp, function () { return C_TWIG; });
   }
 
-  /* ---- dew drops ---- */
-  for (var dw = 0; dw < 9; dw++) {
+  /* ---- dew drops: little jewels of light, the lawn's answer to the
+     galleries' small local lamps -- always lit at full (alpha 1, untouched
+     by the new dappling above) so they keep glinting even in a shaded patch */
+  for (var dw = 0; dw < 15; dw++) {
     var dx2 = (R() - 0.5) * 180, dz2 = 14 + R() * 160;
     var dr = 0.9 + R() * 1.5;
     m4Basis([dr,0,0], [0,dr*0.85,0], [0,0,dr], [dx2, groundY(dx2,dz2)+dr*0.8, dz2], tmp);
-    bake(M, sphere, tmp, function () { return [C_DEW[0]*1.05, C_DEW[1]*1.15, C_DEW[2]*1.45, 1]; });
+    var dewK = 0.85 + R() * 0.3;
+    bake(M, sphere, tmp, function () { return [C_DEW[0]*1.05*dewK, C_DEW[1]*1.15*dewK, C_DEW[2]*1.45*dewK, 1]; });
   }
 
   computeNormals(M);
@@ -1307,12 +1356,92 @@ function segMat(a, b, radius, o) {
    an ant onto it (grab range, dismount, standing on branches) is a separate
    ticket for Cataglyphis; TREES is kept apart from GRASS on purpose so nothing
    here silently changes GRASS-based systems (climb, camera occlusion). */
-var TREE = { x: -85, z: 95, h: 210, ang: Math.PI / 2, w: 7.5 };
+var TREE = { x: -85, z: 95, h: 210, ang: Math.PI / 2, w: 15 };
 TREE.baseY = groundY(TREE.x, TREE.z);
 var TREES = [TREE];
 
 var C_BARK_A = mixc(C_WALL_A, C_ROOT, 0.3), C_BARK_B = mixc(C_WALL_B, C_ROOT, 0.55);
 var TREE_TRUNK_T = 0.8;   // where the bare trunk hands off to branches/canopy
+var TREE_TIP_R = 4.2;     // trunk radius at TREE_TRUNK_T, shared by both LOD levels so
+                           // the taper (and anything measuring it, e.g. the walkable
+                           // branch below) doesn't depend on which mesh is bound
+
+function treeCenterAt(t) { return bladeCurvePoint(TREE, t); }
+function treeRingFrame(t) {
+  var p0 = treeCenterAt(t), p1 = treeCenterAt(Math.min(t + 0.01, 1));
+  var tangent = nrm3(sub3(p1, p0));
+  var ref = Math.abs(tangent[1]) < 0.97 ? [0, 1, 0] : [1, 0, 0];
+  var xA = nrm3(cross3(ref, tangent));
+  return { p: p0, x: xA, z: cross3(xA, tangent) };
+}
+/* Trunk taper, t in [0, TREE_TRUNK_T] — the same curve buildTree renders,
+   exposed so gameplay code can read how thick the trunk is at a given climb
+   height without re-deriving it (the tapered equivalent of GRASS's own w). */
+function treeTrunkRadius(t) {
+  return lerp(TREE.w, TREE_TIP_R, Math.pow(clamp(t, 0, TREE_TRUNK_T) / TREE_TRUNK_T, 0.7));
+}
+
+/* ---- the walkable branch --------------------------------------------------
+   One branch, distinct from the decorative fan in buildTree() below, built
+   wide and gently sloped so an ant can actually stand and walk on it instead
+   of just looking at it. It forks off low on the trunk (well under the
+   decorative branches' 0.6-0.95*TREE_TRUNK_T zone, so there's no risk of the
+   two crossing) and eases from a steep climb near the trunk to level ground
+   by the tip, so the far end reads as a flat viewing platform rather than
+   more climb.
+
+   Exposed as TREE.walkBranch for Cataglyphis (#5) to drive the actual climb:
+     - trunk portion, t in [0, TREE.walkBranch.splitT]: identical to climbing
+       the bare trunk — bladeClimbBasis(TREE, t) / bladeCurvePoint(TREE, t)
+       already work as-is (see the comment above TREE). treeTrunkRadius(t)
+       gives the trunk radius at that t, for stand-off distance/grab range.
+     - branch portion, u in [0, 1] (0 = the fork, 1 = the tip/viewpoint):
+         TREE.walkBranch.point(u)  -> world-space centerline position
+         TREE.walkBranch.radius(u) -> branch radius at u (stand-off distance)
+         TREE.walkBranch.basis(u)  -> { pos, fwd, side, up }, the same shape
+           antBasis() already returns for a.climb (side/up/fwd), so a walking
+           ant can be positioned straight off it. 'up' tracks world-up rather
+           than a fixed blade-face normal: a branch is a round tube walked
+           over the top of, not a flat face clung to like a grass blade.
+   Placement below uses no RNG (fixed constants only), so it's deterministic
+   and doesn't shift the decorative branches' RNG draws that follow it in
+   buildTree(). Aimed to arc back over the lawn toward lower z (the tunnel
+   mouth/hub) rather than deeper into the lawn, for the requested view. ---- */
+var TREE_WALK_SPLIT_T = TREE_TRUNK_T * 0.55;   // forks off partway up the bare trunk
+var TREE_WALK_ANG      = Math.PI * 1.511;      // around the trunk: aimed back toward -z
+var TREE_WALK_LEN       = 92;                  // horizontal reach of the branch
+var TREE_WALK_RISE      = 34;                  // vertical climb over that reach, eased near the tip
+var TREE_WALK_BASE_R    = 6.5;                 // where it leaves the trunk: wide enough for two ants abreast
+var TREE_WALK_TIP_R     = 3.4;                 // still a full platform at the far end
+
+var treeWalkFork = treeRingFrame(TREE_WALK_SPLIT_T);
+var treeWalkSide = nrm3(add3(scl3(treeWalkFork.x, Math.cos(TREE_WALK_ANG)), scl3(treeWalkFork.z, Math.sin(TREE_WALK_ANG))));
+var treeWalkStart = add3(treeWalkFork.p, scl3(treeWalkSide, treeTrunkRadius(TREE_WALK_SPLIT_T) * 0.7));
+
+function treeWalkPoint(u) {
+  var ease = 1 - (1 - u) * (1 - u);   // steep leaving the trunk, level by the tip
+  return add3(treeWalkStart, add3(scl3(treeWalkSide, u * TREE_WALK_LEN), [0, ease * TREE_WALK_RISE, 0]));
+}
+function treeWalkRadius(u) { return lerp(TREE_WALK_BASE_R, TREE_WALK_TIP_R, clamp(u, 0, 1)); }
+function treeWalkBasis(u) {
+  // clamped on both sides, unlike bladeClimbBasis's forward-only difference:
+  // that one is safe because climbing stops short of t=1 (CLIMB_MAX_T), but
+  // u=1 here *is* the destination (the viewpoint), so a forward difference
+  // would sample the same point twice there and collapse fwd/side/up to zero
+  var p0 = treeWalkPoint(clamp(u - 0.005, 0, 1)), p1 = treeWalkPoint(clamp(u + 0.005, 0, 1));
+  var fwd = nrm3(sub3(p1, p0));
+  var side = nrm3(cross3(fwd, [0, 1, 0]));
+  var up = nrm3(cross3(side, fwd));
+  return { pos: treeWalkPoint(u), fwd: fwd, side: side, up: up };
+}
+TREE.walkBranch = {
+  splitT: TREE_WALK_SPLIT_T,
+  point: treeWalkPoint,
+  radius: treeWalkRadius,
+  basis: treeWalkBasis,
+  tipPos: treeWalkPoint(1),
+  tipRadius: TREE_WALK_TIP_R
+};
 
 /* Two LOD levels of the same tree, both pre-baked once at load like
    worldMesh: rings, angular segments and bark-noise octaves all drop for the
@@ -1324,23 +1453,14 @@ function buildTree(near) {
   var M = newMesh();
   var R = rng(near ? 481001 : 481002);
   var tmpM = m4();
-  var rings = near ? 20 : 4, angSegs = near ? 10 : 6;
-  var baseR = TREE.w, tipR = near ? 1.6 : 2.3;
-
-  function centerAt(t) { return bladeCurvePoint(TREE, t); }
-  function ringFrame(t) {
-    var p0 = centerAt(t), p1 = centerAt(Math.min(t + 0.01, 1));
-    var tangent = nrm3(sub3(p1, p0));
-    var ref = Math.abs(tangent[1]) < 0.97 ? [0, 1, 0] : [1, 0, 0];
-    var xA = nrm3(cross3(ref, tangent));
-    return { p: p0, x: xA, z: cross3(xA, tangent) };
-  }
+  var rings = near ? 20 : 4, angSegs = near ? 12 : 6;
+  var baseR = TREE.w, tipR = TREE_TIP_R;
 
   var rows = [];
   for (var ri = 0; ri <= rings; ri++) {
     var t = (ri / rings) * TREE_TRUNK_T;
-    var fr = ringFrame(t);
-    var radius = lerp(baseR, tipR, Math.pow(t / TREE_TRUNK_T, 0.7));
+    var fr = treeRingFrame(t);
+    var radius = treeTrunkRadius(t);
     var ring = [];
     for (var a = 0; a < angSegs; a++) {
       var th = 2 * Math.PI * a / angSegs;
@@ -1378,9 +1498,41 @@ function buildTree(near) {
     });
   }
 
+  /* ---- the walkable branch itself: a tapered tube of rings, same idiom as
+     the trunk above, built from treeWalkPoint/treeWalkRadius/treeWalkBasis so
+     the mesh always matches the walkable centerline exactly. No noise on the
+     far LOD, fewer rings on both. No foliage anywhere near it on purpose —
+     it's the requested viewpoint, kept clear of anything that could block it. */
+  var wRings = near ? 10 : 3, wSegs = near ? 8 : 5;
+  var wRows = [];
+  for (var wi = 0; wi <= wRings; wi++) {
+    var wu = wi / wRings;
+    var wb = treeWalkBasis(wu);
+    var wr0 = treeWalkRadius(wu);
+    var wring = [];
+    for (var wa = 0; wa < wSegs; wa++) {
+      var wth = 2 * Math.PI * wa / wSegs;
+      var wwob = near
+        ? 0.9 + 0.10 * vnoise(Math.cos(wth) * 2.4 + wu * 11 + 100, Math.sin(wth) * 2.4 + wu * 11 + 44)
+        : 1;
+      var wrr = wr0 * wwob;
+      var wp2 = add3(wb.pos, add3(scl3(wb.side, Math.cos(wth) * wrr), scl3(wb.up, Math.sin(wth) * wrr)));
+      var wbark = mixc(C_BARK_B, C_BARK_A, clamp((wwob - 0.9) / 0.1, 0, 1));
+      var wao = daylight(wp2[0], wp2[1], wp2[2]) * (near ? 0.75 : 0.8);
+      wring.push(vtx(M, wp2[0], wp2[1], wp2[2], wbark, wao));
+    }
+    wRows.push(wring);
+  }
+  for (var wr1 = 0; wr1 < wRows.length - 1; wr1++) {
+    for (var wa1 = 0; wa1 < wSegs; wa1++) {
+      var wa2 = (wa1 + 1) % wSegs;
+      quad(M, wRows[wr1][wa1], wRows[wr1][wa2], wRows[wr1 + 1][wa2], wRows[wr1 + 1][wa1]);
+    }
+  }
+
   if (near) {
     // root buttresses: same segMat+bake idiom as the lawn's twigs/husks
-    var baseP = centerAt(0);
+    var baseP = treeCenterAt(0);
     for (var rb = 0; rb < 4; rb++) {
       var rang = (rb / 4) * Math.PI * 2 + R() * 0.5;
       var len = baseR * 1.6 + R() * 3;
@@ -1396,26 +1548,27 @@ function buildTree(near) {
     var branchCount = 5;
     for (var bI = 0; bI < branchCount; bI++) {
       var bt = TREE_TRUNK_T * (0.6 + (bI / branchCount) * 0.35 + R() * 0.03);
-      var fr2 = ringFrame(bt);
+      var fr2 = treeRingFrame(bt);
       var outAng = (bI / branchCount) * Math.PI * 2 + R() * 0.7;
       var side2 = nrm3(add3(scl3(fr2.x, Math.cos(outAng)), scl3(fr2.z, Math.sin(outAng))));
       var dir2 = nrm3(add3(scl3(side2, 0.7), [0, 0.7, 0]));
       var start2 = add3(fr2.p, scl3(side2, lerp(baseR, tipR, bt / TREE_TRUNK_T) * 0.7));
       var branchLen = 30 + R() * 22;
       var end2 = add3(start2, scl3(dir2, branchLen));
-      segMat(start2, end2, 1.7 + R() * 0.8, tmpM);
+      var branchR = 2.6 + R() * 1.1;   // scaled up from the old fixed 1.7-2.5 to match the thicker trunk
+      segMat(start2, end2, branchR, tmpM);
       bake(M, cylPrim, tmpM, function (x, y, z) {
         return [C_BARK_A[0] * 0.9, C_BARK_A[1] * 0.9, C_BARK_A[2] * 0.9, daylight(x, y, z) * 0.72];
       });
       foliageBlob(end2, 24 + R() * 12, R());
       foliageBlob(add3(start2, scl3(sub3(end2, start2), 0.55)), 18 + R() * 8, R());
     }
-    foliageBlob(add3(centerAt(TREE_TRUNK_T), [0, 12, 0]), 28, 0.5);
+    foliageBlob(add3(treeCenterAt(TREE_TRUNK_T), [0, 12, 0]), 28, 0.5);
   } else {
     // far: the fanned crown collapses to two flat-tinted blobs covering
     // roughly the same envelope as the near version, at a fraction of the cost
-    foliageBlob(add3(centerAt(TREE_TRUNK_T), [-14, 14, 6]), 46, 0.5);
-    foliageBlob(add3(centerAt(TREE_TRUNK_T), [18, 22, -8]), 40, 0.5);
+    foliageBlob(add3(treeCenterAt(TREE_TRUNK_T), [-14, 14, 6]), 46, 0.5);
+    foliageBlob(add3(treeCenterAt(TREE_TRUNK_T), [18, 22, -8]), 40, 0.5);
   }
 
   computeNormals(M);
@@ -1885,11 +2038,24 @@ var STRIDE = 7.0;          // world distance per full gait cycle
 
 /* --- climbing a grass blade: same curve the mesh was built from (see blade()
    in buildWorld), sampled continuously so climbing isn't tied to mesh segment
-   count. ---------------------------------------------------------------- */
+   count. Also drives the tree (#5): the trunk reuses this exact machinery
+   (TREE is shaped like an oversized GRASS entry, see buildTree()'s comment),
+   and the walkable branch is a second segment appended after it — see the
+   ant.climb.kind === 'tree' branch in frame() below and TREE.walkBranch,
+   exposed by Atta (#14) with point/radius/basis(u) in the tree section. ---- */
 var CLIMB_MIN_H  = 42;     // only sufficiently tall blades are worth climbing
 var CLIMB_RADIUS = 4.5;    // how close to a blade's base an ant must be to grab it
 var CLIMB_SPEED  = 20;     // arc-length units per second while climbing
 var CLIMB_MAX_T  = 0.93;   // stop short of the tip, where the blade gets too thin to stand on
+
+// measured from the bark, not the trunk's centre: the trunk is TREE.w (15)
+// units across at the base, so a centre-relative radius like CLIMB_RADIUS
+// above would have the ant brushing the bark long before it's "in range".
+var TREE_CLIMB_RADIUS = 6;
+// how close to the ground (as a fraction of the trunk's t) pressing E while
+// climbing the tree actually dismounts -- see tryInteract() for why higher
+// up (including the whole branch) the only way down is to walk backward.
+var TREE_DISMOUNT_T = 0.05;
 
 function bladeCurvePoint(g, t) {
   var dx = Math.cos(g.ang), dz = Math.sin(g.ang);
@@ -1910,6 +2076,16 @@ function bladeClimbBasis(g, t) {
 
 function antBasis(a) {
   if (a.climb) {
+    if (a.climb.kind === 'tree') {
+      if (a.climb.seg === 'trunk') {
+        var tcb = bladeClimbBasis(TREE, a.climb.t);
+        return { side: tcb.width, up: tcb.normal, fwd: tcb.tangent };
+      }
+      // the branch is a round tube walked over the top of, not a face clung
+      // to -- TREE.walkBranch.basis() already returns exactly this shape
+      var wb = TREE.walkBranch.basis(a.climb.u);
+      return { side: wb.side, up: wb.up, fwd: wb.fwd };
+    }
     var cb = bladeClimbBasis(GRASS[a.climb.i], a.climb.t);
     // local Y (up) -> away from the blade face, local Z (fwd) -> up the blade,
     // local X (side) -> across the blade's width — legs land on the flat face.
@@ -2183,26 +2359,40 @@ var prompttxtEl = document.getElementById('prompttxt');
 var harvesttxtEl = document.getElementById('harvesttxt');
 
 function nearestClimbable(a) {
-  var best = -1, bestD = CLIMB_RADIUS * CLIMB_RADIUS;
+  var best = null, bestD = CLIMB_RADIUS;   // plain distance (not squared) so it
+                                            // compares fairly against the tree's
+                                            // surface distance below
   for (var i = 0; i < GRASS.length; i++) {
     var g = GRASS[i];
     if (g.h < CLIMB_MIN_H) continue;
-    var dx = g.x - a.x, dz = g.z - a.z;
-    var d2 = dx*dx + dz*dz;
-    if (d2 < bestD) { bestD = d2; best = i; }
+    var d = Math.hypot(g.x - a.x, g.z - a.z);
+    if (d < bestD) { bestD = d; best = { kind: 'grass', i: i }; }
   }
+  var treeSurfaceD = Math.hypot(TREE.x - a.x, TREE.z - a.z) - TREE.w;
+  if (treeSurfaceD < TREE_CLIMB_RADIUS && treeSurfaceD < bestD) best = { kind: 'tree' };
   return best;
 }
 
-function enterClimb(a, i) {
-  a.climb = { i: i, t: 0.03 };
+function enterClimb(a, target) {
+  a.climb = target.kind === 'tree'
+    ? { kind: 'tree', seg: 'trunk', t: 0.02 }
+    : { kind: 'grass', i: target.i, t: 0.03 };
   a.speed = 0;
 }
 
 function exitClimb(a) {
-  // no fall physics yet: dismounting drops the ant straight back to the ground
-  // below wherever it let go
-  var p = bladeCurvePoint(GRASS[a.climb.i], a.climb.t);
+  // no fall physics yet: dismounting drops the ant straight back to the
+  // ground below wherever it let go. Only ever called from ground level or
+  // near it (grass: any height, an accepted simplification for blades this
+  // short; tree: gated to TREE_DISMOUNT_T in tryInteract()/frame(), so the
+  // drop here is always small even though it reuses the same no-fall logic).
+  var p;
+  if (a.climb.kind === 'tree') {
+    var tb = bladeClimbBasis(TREE, a.climb.t);
+    p = add3(bladeCurvePoint(TREE, a.climb.t), scl3(tb.normal, treeTrunkRadius(a.climb.t)));
+  } else {
+    p = bladeCurvePoint(GRASS[a.climb.i], a.climb.t);
+  }
   a.climb = null;
   a.x = p[0]; a.z = p[2]; a.y = groundY(p[0], p[2]);
   a.speed = 0;
@@ -2267,13 +2457,18 @@ var curClimbTarget = -1, curHarvestTarget = -1;
 
 function updatePrompt() {
   if (ant.climb) {
-    prompttxtEl.textContent = 'redescendre du brin';
+    if (ant.climb.kind === 'tree') {
+      var canDismount = ant.climb.seg === 'trunk' && ant.climb.t <= TREE_DISMOUNT_T;
+      prompttxtEl.textContent = canDismount ? 'redescendre du tronc' : 'reculer pour redescendre';
+    } else {
+      prompttxtEl.textContent = 'redescendre du brin';
+    }
     promptEl.classList.add('on');
     return;
   }
   curClimbTarget = nearestClimbable(ant);
-  if (curClimbTarget >= 0) {
-    prompttxtEl.textContent = 'grimper au brin d’herbe';
+  if (curClimbTarget) {
+    prompttxtEl.textContent = curClimbTarget.kind === 'tree' ? 'grimper au tronc' : 'grimper au brin d’herbe';
     promptEl.classList.add('on');
     return;
   }
@@ -2287,8 +2482,19 @@ function updatePrompt() {
 }
 
 function tryInteract() {
-  if (ant.climb) { exitClimb(ant); return; }
-  if (curClimbTarget >= 0) { enterClimb(ant, curClimbTarget); return; }
+  if (ant.climb) {
+    // grass dismounts instantly at any height (unchanged, an already-accepted
+    // simplification for blades short enough that a teleport-to-ground barely
+    // reads as one). The tree is far taller, and the whole point of the
+    // walkable branch is the view from up there, so E only steps fully off
+    // once the ant is back down near the trunk's base; higher up, the way
+    // down is to walk backward and retrace the climb (see frame()), so the
+    // height is felt on the way down instead of skipped with a teleport.
+    if (ant.climb.kind === 'grass') { exitClimb(ant); return; }
+    if (ant.climb.seg === 'trunk' && ant.climb.t <= TREE_DISMOUNT_T) exitClimb(ant);
+    return;
+  }
+  if (curClimbTarget) { enterClimb(ant, curClimbTarget); return; }
   if (curHarvestTarget >= 0) { harvest(curHarvestTarget); return; }
 }
 
@@ -2351,39 +2557,74 @@ function updateNPC(npc, dt) {
 
 /* ==========================================================================
    7d. Decor collision: push the ant out of rocks, grass bases and mushroom
-   caps, then bleed the blocked motion sideways along the obstacle's edge —
-   the same push-out-then-slide idiom the queen's dais already uses below.
-   Radii are generous on purpose: mobility over rigor means a wide miss that
-   reads as "drifted a hair around that pebble" beats a snug one that reads
-   as "stuck on a pebble". Grass radii stay well under CLIMB_RADIUS so this
-   never fights the climb interaction. Wired to the player only for now —
-   the NPCs' waypoints are hand-picked to already clear the decor.
+   caps, then bleed the blocked motion sideways along the obstacle's edge.
+   Every overlapping obstacle is resolved as one *averaged* push per pass
+   instead of snapping fully out of them one at a time (issue #4 follow-up):
+   the old version teleported to the boundary of obstacle 1, then to the
+   boundary of obstacle 2, which could shove you back toward 1 -- most
+   visible in the fungus clusters, where several caps overlap in a 7x7 patch
+   right in the middle of a narrow gallery/branch. Averaging the penetration
+   vectors instead settles the ant toward the gap between them. Two passes:
+   the first pass's push (and the slide along it) can land you back inside
+   something else, so a light cleanup pass mops that up without a full
+   second slide. Grass/rock radii stay generous on purpose (a visible miss
+   reads better than a snug one); mushroom caps get a slimmer collide
+   radius than their visual flare, since the cap overhangs its stem and
+   forcing the ant to detour around the full cap silhouette is what made
+   the clustered gallery/chamber mushrooms feel like a maze. Grass radii
+   stay well under CLIMB_RADIUS so this never fights the climb interaction.
+   Wired to the player only for now — the NPCs' waypoints are hand-picked
+   to already clear the decor.
    ========================================================================== */
 
 function grassCollideR(g) { return g.w * 1.4 + 0.6; }
+function mushroomCollideR(m) { return m.r * 0.65; }
 
-function pushAndSlide(ant, cx, cz, r, step) {
-  var dx = ant.x - cx, dz = ant.z - cz;
+function accumulatePush(push, ax, az, cx, cz, r) {
+  var dx = ax - cx, dz = az - cz;
   var d = Math.hypot(dx, dz);
   if (d >= r || d < 0.001) return;
-  var nx = dx / d, nz = dz / d;
-  ant.x = cx + nx * r; ant.z = cz + nz * r;
-  var tx = -nz, tz = nx;
-  var along = Math.sin(ant.yaw) * tx + Math.cos(ant.yaw) * tz;
-  var slide = step * 0.6 * (along >= 0 ? 1 : -1);
-  ant.x += tx * slide; ant.z += tz * slide;
+  var pen = r - d;
+  push.x += (dx / d) * pen;
+  push.z += (dz / d) * pen;
+  push.n++;
 }
 
-function resolveDecorCollision(ant, step) {
+function collectDecorPush(ant) {
+  var push = { x: 0, z: 0, n: 0 };
   for (var i = 0; i < ROCKS.length; i++) {
-    pushAndSlide(ant, ROCKS[i].x, ROCKS[i].z, ROCKS[i].r, step);
+    accumulatePush(push, ant.x, ant.z, ROCKS[i].x, ROCKS[i].z, ROCKS[i].r);
   }
   for (var j = 0; j < GRASS.length; j++) {
     var g = GRASS[j];
-    pushAndSlide(ant, g.x, g.z, grassCollideR(g), step);
+    accumulatePush(push, ant.x, ant.z, g.x, g.z, grassCollideR(g));
   }
   for (var k = 0; k < MUSHROOMS.length; k++) {
-    pushAndSlide(ant, MUSHROOMS[k].x, MUSHROOMS[k].z, MUSHROOMS[k].r, step);
+    var m = MUSHROOMS[k];
+    accumulatePush(push, ant.x, ant.z, m.x, m.z, mushroomCollideR(m));
+  }
+  return push;
+}
+
+function resolveDecorCollision(ant, step) {
+  var push = collectDecorPush(ant);
+  if (push.n === 0) return;
+  var pdx = push.x / push.n, pdz = push.z / push.n;
+  ant.x += pdx; ant.z += pdz;
+
+  var d = Math.hypot(pdx, pdz);
+  if (d > 0.0005) {
+    var nx = pdx / d, nz = pdz / d;
+    var tx = -nz, tz = nx;
+    var along = Math.sin(ant.yaw) * tx + Math.cos(ant.yaw) * tz;
+    var slide = step * 0.6 * (along >= 0 ? 1 : -1);
+    ant.x += tx * slide; ant.z += tz * slide;
+  }
+
+  var cleanup = collectDecorPush(ant);
+  if (cleanup.n > 0) {
+    ant.x += cleanup.x / cleanup.n;
+    ant.z += cleanup.z / cleanup.n;
   }
 }
 
@@ -2595,7 +2836,7 @@ function frame(now) {
   var mag = Math.min(Math.hypot(ix, iy), 1);
 
   var camFwd = nrm3([camAim[0] - camEye[0], 0, camAim[2] - camEye[2]]);
-  var camRight = [camFwd[2], 0, -camFwd[0]];
+  var camRight = cross3(camFwd, [0, 1, 0]);   // was [camFwd[2],0,-camFwd[0]] — that's -right, see issue #15
   var wishX = camFwd[0] * iy + camRight[0] * ix;
   var wishZ = camFwd[2] * iy + camRight[2] * ix;
 
@@ -2605,14 +2846,42 @@ function frame(now) {
   if (ant.climb) {
     // climbing: forward/back walks the ant along the blade's own curve;
     // left/right is unused for now (see README "Suite" \u2014 grimpe des tiges)
-    var g = GRASS[ant.climb.i];
     var climbDir = clamp(iy, -1, 1);
-    ant.climb.t = clamp(ant.climb.t + climbDir * (CLIMB_SPEED / g.h) * dt, 0, CLIMB_MAX_T);
+    var didExit = false, segSwitch = null;
+    if (ant.climb.kind === 'tree') {
+      // trunk and branch are two segments of one continuous path (#5): trunk
+      // reuses the grass climb machinery on TREE (bladeCurvePoint/Basis), the
+      // branch walks TREE.walkBranch's own parametrization \u2014 see the comment
+      // above TREE.walkBranch and antBasis()'s a.climb.kind === 'tree' branch,
+      // which already expects exactly this seg/t/u shape. Segment transitions
+      // and exitClimb() are applied last (below), after speed/travel, so a
+      // frame that leaves climbing still gets the same "reset to 0" as grass.
+      if (ant.climb.seg === 'trunk') {
+        ant.climb.t = clamp(ant.climb.t + climbDir * (CLIMB_SPEED / TREE.h) * dt, 0, TREE.walkBranch.splitT);
+        var tb = bladeClimbBasis(TREE, ant.climb.t);
+        var tp = add3(bladeCurvePoint(TREE, ant.climb.t), scl3(tb.normal, treeTrunkRadius(ant.climb.t)));
+        ant.x = tp[0]; ant.y = tp[1]; ant.z = tp[2];
+        if (ant.climb.t <= 0.0005 && climbDir < 0) didExit = true;              // back down to the ground
+        else if (ant.climb.t >= TREE.walkBranch.splitT && climbDir > 0) segSwitch = 'branch'; // onto the branch
+      } else {
+        ant.climb.u = clamp(ant.climb.u + climbDir * (CLIMB_SPEED / TREE_WALK_LEN) * dt, 0, 1);
+        var wb = TREE.walkBranch.basis(ant.climb.u);
+        var wp = add3(wb.pos, scl3(wb.up, TREE.walkBranch.radius(ant.climb.u)));
+        ant.x = wp[0]; ant.y = wp[1]; ant.z = wp[2];
+        if (ant.climb.u <= 0.0005 && climbDir < 0) segSwitch = 'trunk';         // back onto the trunk
+      }
+    } else {
+      var g = GRASS[ant.climb.i];
+      ant.climb.t = clamp(ant.climb.t + climbDir * (CLIMB_SPEED / g.h) * dt, 0, CLIMB_MAX_T);
+      var cp = bladeCurvePoint(g, ant.climb.t);
+      ant.x = cp[0]; ant.y = cp[1]; ant.z = cp[2];
+      if (ant.climb.t <= 0.0005 && climbDir < 0) didExit = true;   // climbed back down to the ground
+    }
     ant.speed = damp(ant.speed, Math.abs(climbDir) * CLIMB_SPEED, 7, dt);
     ant.travel += Math.abs(climbDir) * CLIMB_SPEED * dt;
-    var cp = bladeCurvePoint(g, ant.climb.t);
-    ant.x = cp[0]; ant.y = cp[1]; ant.z = cp[2];
-    if (ant.climb.t <= 0.0005 && climbDir < 0) exitClimb(ant);   // climbed back down to the ground
+    if (didExit) exitClimb(ant);
+    else if (segSwitch === 'branch') { ant.climb.seg = 'branch'; ant.climb.u = 0; }
+    else if (segSwitch === 'trunk') { ant.climb.seg = 'trunk'; ant.climb.t = TREE.walkBranch.splitT; }
   } else {
     if (mag > 0.02) {
       ant.yaw = dampAngle(ant.yaw, Math.atan2(wishX, wishZ), 9, dt);
