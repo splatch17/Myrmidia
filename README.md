@@ -1,5 +1,7 @@
 # Myrmidia
 
+![Myrmidia — une fourmi minuscule au pied de hautes tiges d'herbe rétro-éclairées](design/banner.svg)
+
 MMORPG 3D dans lequel chaque joueur incarne une fourmi de sa colonie, à l'échelle d'un jardin. Inspiré de l'univers de [Formica](https://github.com/blxkourou/formica), avec l'ambition visuelle et systémique d'un WoW ou d'un Dofus.
 
 > Il n'y a pas de héros solitaire sous l'herbe. Il n'y a que des castes, et la colonie qu'elles servent.

@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="1200" height="340" role="img" aria-labelledby="titre desc">
+  <title id="titre">Myrmidia</title>
+  <desc id="desc">Une fourmi minuscule se tient au pied de hautes tiges d'herbe rétro-éclairées par une lueur chaude ambrée, illustrant l'échelle du monde de Myrmidia.</desc>
+
+  <defs>
+    <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#140d09"/>
+      <stop offset="35%"  stop-color="#4a2716"/>
+      <stop offset="62%"  stop-color="#b5652f"/>
+      <stop offset="80%"  stop-color="#e6b558"/>
+      <stop offset="100%" stop-color="#241407"/>
+    </linearGradient>
+
+    <radialGradient id="sunGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   stop-color="#fdefc2" stop-opacity="0.95"/>
+      <stop offset="40%"  stop-color="#e6b558" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#e6b558" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="bladeFill" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"   stop-color="#140c07"/>
+      <stop offset="70%"  stop-color="#170f09"/>
+      <stop offset="88%"  stop-color="#7a4a22"/>
+      <stop offset="96%"  stop-color="#e0a752"/>
+      <stop offset="100%" stop-color="#f3c87e"/>
+    </linearGradient>
+
+    <linearGradient id="antFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#6b4020"/>
+      <stop offset="30%"  stop-color="#3a2412"/>
+      <stop offset="100%" stop-color="#150c07"/>
+    </linearGradient>
+
+    <linearGradient id="shaftGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#f3d69a" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#f3d69a" stop-opacity="0"/>
+    </linearGradient>
+
+    <radialGradient id="vignetteGrad" cx="50%" cy="55%" r="75%">
+      <stop offset="0%"   stop-color="#000000" stop-opacity="0"/>
+      <stop offset="72%"  stop-color="#000000" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.55"/>
+    </radialGradient>
+
+    <filter id="blurSoft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <!-- ciel / fond -->
+  <rect x="0" y="0" width="1200" height="340" fill="url(#skyGrad)"/>
+
+  <!-- lueur chaude derriere l'herbe -->
+  <ellipse cx="880" cy="140" rx="480" ry="420" fill="url(#sunGlow)"/>
+
+  <!-- rayons de lumiere -->
+  <g opacity="0.55">
+    <rect x="-25" y="0" width="50" height="480" fill="url(#shaftGrad)" transform="translate(900,90) rotate(18)"/>
+    <rect x="-30" y="0" width="60" height="500" fill="url(#shaftGrad)" transform="translate(860,80) rotate(36)" opacity="0.7"/>
+  </g>
+
+  <!-- poussiere en suspension -->
+  <g fill="#e6b558">
+    <circle cx="150" cy="80"  r="2"   opacity="0.3"/>
+    <circle cx="340" cy="150" r="1.5" opacity="0.25"/>
+    <circle cx="520" cy="60"  r="2.2" opacity="0.35" fill="#e0a752"/>
+    <circle cx="700" cy="200" r="1.8" opacity="0.28"/>
+    <circle cx="820" cy="90"  r="2.5" opacity="0.4"/>
+    <circle cx="950" cy="180" r="1.6" opacity="0.22" fill="#e0a752"/>
+    <circle cx="1080" cy="70" r="2"   opacity="0.3"/>
+    <circle cx="1150" cy="220" r="1.8" opacity="0.25"/>
+  </g>
+
+  <!-- brins d'herbe, retro-eclaires -->
+  <g fill="url(#bladeFill)">
+    <path d="M -26,340 Q -21,186 6,60 Q 11,186 6,340 Z"/>
+    <path d="M 97,340 Q 90,98 98,-100 Q 136,98 143,340 Z"/>
+    <path d="M 247,340 Q 251,214 272,110 Q 277,214 273,340 Z"/>
+    <path d="M 381,340 Q 376,137 382,-30 Q 414,137 419,340 Z"/>
+    <path d="M 739,340 Q 746,115 782,-70 Q 788,115 781,340 Z"/>
+    <path d="M 876,340 Q 873,203 880,90 Q 901,203 904,340 Z"/>
+    <path d="M 988,340 Q 994,104 1030,-90 Q 1038,104 1032,340 Z"/>
+    <path d="M 1125,340 Q 1121,197 1126,80 Q 1151,197 1155,340 Z"/>
+    <path d="M 1203,340 Q 1206,170 1230,30 Q 1240,170 1237,340 Z"/>
+  </g>
+
+  <!-- la fourmi, minuscule au pied des tiges -->
+  <ellipse cx="580" cy="340" rx="95" ry="14" fill="#0b0503" opacity="0.5" filter="url(#blurSoft)"/>
+
+  <g stroke="#1c110a" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <polyline points="568,280 540,300 520,338"/>
+    <polyline points="560,296 520,312 500,338"/>
+    <polyline points="556,308 525,325 495,338"/>
+    <polyline points="592,280 620,300 640,338"/>
+    <polyline points="600,296 640,312 660,338"/>
+    <polyline points="604,308 635,325 665,338"/>
+  </g>
+  <g stroke="#1c110a" stroke-width="2.2" stroke-linecap="round" fill="none">
+    <path d="M 576,248 Q 566,236 566,224"/>
+    <path d="M 584,248 Q 594,236 594,224"/>
+  </g>
+  <g fill="url(#antFill)">
+    <ellipse cx="580" cy="310" rx="26" ry="18"/>
+    <ellipse cx="580" cy="278" rx="15" ry="14"/>
+    <ellipse cx="580" cy="256" rx="10" ry="10"/>
+  </g>
+
+  <!-- vignette -->
+  <rect x="0" y="0" width="1200" height="340" fill="url(#vignetteGrad)"/>
+</svg>
