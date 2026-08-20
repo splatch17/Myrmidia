@@ -709,8 +709,13 @@ function buildWorld() {
      hole in the gallery wall (WALL_HOLES) and a containment region
      (ROOM_BRANCHES, read by containUnderground() near the frame loop) so the
      room is both visible and walkable. th0 is 0 or PI, i.e. a clean +-X
-     branch, which keeps the corridor math a straight line. */
-  function buildBranch(th0, z0, corridorR, corridorLen, roomR, roomLen, angSegs, seed, cavityMul, wallColorFn) {
+     branch, which keeps the corridor math a straight line. doorLightCol, if
+     given, seeds one extra ALL_LIGHTS entry right at the mouth (see #17):
+     the room's own lamps sit deep enough inside that nothing signals from
+     the main gallery that an opening exists at all — this one is placed a
+     step into the corridor, dead-centre of the punched hole, specifically
+     so it's visible looking down the tube rather than only once turned in. */
+  function buildBranch(th0, z0, corridorR, corridorLen, roomR, roomLen, angSegs, seed, cavityMul, wallColorFn, doorLightCol) {
     var mouth = wallPoint(th0, z0, 0);
     var origin = [mouth[0], mouth[1], mouth[2]];
     var dir = nrm3([Math.cos(th0), 0, 0.0001]);
@@ -740,6 +745,10 @@ function buildWorld() {
     }
 
     WALL_HOLES.push({ th: th0, z: z0, rTh: Math.max(0.16, corridorR * 1.8 / profileR(z0)), rZ: corridorR * 1.7 });
+    if (doorLightCol) {
+      var doorLx = origin[0] + dir[0] * 1.2, doorLz = origin[2] + dir[2] * 1.2;
+      ALL_LIGHTS.push({ p: [doorLx, undergroundFloor(doorLx, doorLz) + 2.1, doorLz], c: doorLightCol });
+    }
 
     var SLu = 1.5, rows = [];
     for (var u = 0; u <= uMax + 0.0001; u += SLu) {
@@ -776,12 +785,12 @@ function buildWorld() {
   var granaryB = buildBranch(Math.PI, -70, 3.3, 9, 13, 10, 30, 4001, 1.0, function (proud, wx, wy, wz) {
     var c = mixc(C_WALL_B, C_WALL_A, proud * 0.8 + 0.12);
     return mixc(c, C_SOIL_A, 0.28 + proud * 0.18);
-  });
+  }, [0.55, 0.40, 0.20]);
   // brood chambers: warm extension of the queen's chamber — right side, deep by the chamber
   var broodB = buildBranch(0, -120, 4.2, 8, 17, 13, 34, 5117, 1.0, function (proud, wx, wy, wz) {
     var c = mixc(C_WALL_B, C_WALL_A, proud * 0.75 + 0.15);
     return mixc(c, C_SOIL_A, 0.55);
-  });
+  }, [0.68, 0.50, 0.25]);
   // midden: cramped, third register — right side, nearer the mouth, dimmed via cavityMul.
   // cavityMul pushed darker (0.62 -> 0.46, Cephalotes) so the midden reads as the sharpest
   // "sombre et inquiétant" anchor point on the site, ahead of a future prologue scene that
@@ -790,7 +799,11 @@ function buildWorld() {
   var middenB = buildBranch(0, -40, 2.9, 7, 10, 8, 26, 6229, 0.46, function (proud, wx, wy, wz) {
     var c = mixc(C_WALL_B, C_WALL_A, proud * 0.6 + 0.08);
     return mixc(c, C_MOLD, 0.3 + proud * 0.3);
-  });
+  },
+  // door light: sick green-grey, brighter than the room's own MOLD_LIGHT below
+  // (0.24,0.36,0.24) so it still reads as a doorway at gallery range -- the
+  // "avoid me" tone is the point either way
+  [0.30, 0.44, 0.28]);
 
   var ANG = 44, SL = 1.7;
   var slices = [];
@@ -2215,7 +2228,11 @@ function updateLegs(a, legState, dt) {
 var keys = {};
 /* camYaw is absolute, never an offset from the ant's facing: an offset would
    make the ant chase a target that moves with it, and it would spin forever. */
-var camYaw = 0, wantPitch = -0.19, camDist = 24;
+// Default pulled back from 24 to 36 (#18): a WoW-style MMO framing wants the
+// character small in frame outdoors, not filling it. The narrow-tunnel
+// tightening below (Math.max(13.5, room * 1.5)) is untouched by this, so
+// nothing changes underground in the gallery itself.
+var camYaw = 0, wantPitch = -0.19, camDist = 36;
 
 function dampAngle(a, b, rate, dt) {
   var d = ((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
@@ -2279,7 +2296,9 @@ function endPointer(e) {
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('wheel', function (e) {
-  camDist = clamp(camDist + e.deltaY * 0.03, 9, 60);
+  // widened from [9,60] alongside the default (#18) so there's real room to
+  // pull out further than the new default, not just up to it
+  camDist = clamp(camDist + e.deltaY * 0.03, 10, 85);
   e.preventDefault();
 }, { passive: false });
 
