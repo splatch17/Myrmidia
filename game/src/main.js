@@ -1,14 +1,14 @@
 import * as THREE from 'three';
 import { createRenderer, createCamera } from './core/renderer.js';
-import { antState } from './core/antState.js';
-import { createWorld, groundY } from './world/index.js';
+import { createWorld } from './world/index.js';
+import { createPlayerController } from './player/index.js';
 
-// Scaffold entry point for the Three.js/Vite migration (see design docs for
-// the full vision). Atta's world (underground gallery + side rooms, lawn,
-// grass, tree — see world/index.js) is wired in below; the ant here is
-// still a placeholder capsule until Cataglyphis's real controller lands and
-// takes over writing antState (see core/antState.js for the contract) and
-// driving the camera. Nothing here is final art or final gameplay.
+// Entry point for the Three.js/Vite migration (see design docs for the full
+// vision). Atta's world (underground gallery + side rooms, lawn, grass, tree
+// — see world/index.js) plus Cataglyphis's player controller (movement,
+// camera, IK legs, underground/lawn collision — see player/index.js) are
+// wired in below. Nothing here is final art; NPCs/harvest loop/HUD are a
+// later pass (see the agent notes for what's in vs. out of scope this round).
 
 const container = document.getElementById('app');
 const renderer = createRenderer(container);
@@ -34,16 +34,16 @@ scene.add(sun);
 const world = createWorld();
 scene.add(world.group);
 
-// Placeholder ant — a stand-in until the real mesh/rig lands. Walks a slow
-// loop over the lawn near the gallery mouth so the grass contact bend
-// (world/grass.js) has something to react to before Cataglyphis's
-// controller exists.
-const ant = new THREE.Mesh(
-  new THREE.CapsuleGeometry(1.1, 2.2, 4, 8),
-  new THREE.MeshStandardMaterial({ color: 0xe0a752, roughness: 0.45, metalness: 0.1 })
-);
-ant.castShadow = true;
-scene.add(ant);
+const player = createPlayerController({ scene, camera, domElement: renderer.domElement });
+
+// Debug/verification hook (not a gameplay feature): live references so an
+// external driver (e.g. scripts/verify-room-access.mjs, #21) can read the
+// ant's real position/yaw and the underground room centres without any
+// synthetic bypass of the actual input pipeline. Harmless in production —
+// just two object references on window.
+window.__ant = player.ant;
+window.__rooms = world.rooms;
+window.__camera = camera;
 
 renderer.setResizeCallback((aspect) => {
   camera.aspect = aspect;
@@ -52,21 +52,23 @@ renderer.setResizeCallback((aspect) => {
 
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
-  const dt = clock.getDelta();
+  // Capped like the old prototype's frame() (`Math.min((now-last)/1000,
+  // 0.05)`) — a tab-backgrounding/GC/rAF hitch would otherwise feed one huge
+  // dt through the damped movement/camera math (player/movement.js,
+  // player/camera.js), which can fling the ant several room-widths in a
+  // single step and land it somewhere containUnderground() then has to
+  // clamp from cold, looking like a random stall/teleport. Not part of the
+  // #21 fix itself (containUnderground was already fine per the session's
+  // diagnostic script), but found while live-verifying it — see the agent
+  // notes.
+  const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
 
-  const ax = Math.sin(t * 0.4) * 10;
-  const az = 40 + Math.cos(t * 0.25) * 8;
-  const ay = groundY(ax, az);
-  ant.position.set(ax, ay + 1.6, az);
-
-  // Stand-in for Cataglyphis's controller writing into antState every
-  // frame — see core/antState.js for the contract this satisfies.
-  antState.position.set(ax, ay, az);
-
-  camera.position.set(ax + 10, ay + 20, az + 36);
-  camera.lookAt(ax, ay + 1.5, az);
-
+  // World first (grass wind/contact-bend against last frame's antState,
+  // tree LOD against last frame's camera — one frame of lag, imperceptible),
+  // then the player (writes this frame's antState/camera for next frame).
   world.update(dt, t, camera);
+  player.update(dt, t);
+
   renderer.render(scene, camera);
 });
