@@ -63,12 +63,22 @@ La chambre de la reine est le cœur de ce système : c'est d'elle que dépend la
 
 Détail complet — mécanisme de ponte, déblocage des castes, articulation micro/macro, première esquisse des sorts de combat par caste — dans [`design/boucle-de-jeu.md`](design/boucle-de-jeu.md).
 
+## Liens de test
+
+Liens de playtest mis à jour à chaque round de développement — voir les issues GitHub liées pour le détail de ce qui a changé.
+
+| Prototype | Lien | Statut |
+|---|---|---|
+| Nouveau moteur (Three.js/Vite, `game/`) | [tester](https://raw.githack.com/splatch17/Myrmidia/feature/threejs-migration/game/dist/index.html) | En cours de portage — branche `feature/threejs-migration`, pas encore validé, pas sur `main` |
+| Ancien prototype (fichier HTML unique) | [tester](https://raw.githack.com/splatch17/Myrmidia/main/design/prototypes/sortie-fourmiliere.html) | Référence, `main` |
+
 ## État du projet
 
-Phase de brainstorming / pré-production. Un prototype jouable existe (voir `design/prototypes/`) ; rien du jeu lui-même n'est encore codé.
+Phase de brainstorming / pré-production. Le portage vers un vrai projet Three.js/Vite (`game/`) a démarré ; l'ancien prototype à fichier unique (`design/prototypes/`) reste comme référence pendant la transition.
 
 ## Structure du dépôt
 
 ```
 design/     esquisses, direction artistique et documents de concept
+game/       le jeu lui-même — projet npm Three.js/Vite (voir game/src/)
 ```
