@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createRenderer, createCamera } from './core/renderer.js';
-import { createWorld } from './world/index.js';
+import { createWorld, containUnderground, profileR, groundY } from './world/index.js';
 import { createPlayerController } from './player/index.js';
 
 // Entry point for the Three.js/Vite migration (see design docs for the full
@@ -46,6 +46,9 @@ window.__rooms = world.rooms;
 window.__camera = camera;
 window.__scene = scene;
 window.__world = world;
+window.__contain = containUnderground;
+window.__profileR = profileR;
+window.__groundY = groundY;
 
 renderer.setResizeCallback((aspect) => {
   camera.aspect = aspect;
