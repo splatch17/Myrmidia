@@ -73,8 +73,10 @@ export function buildLawn() {
     }
   }
 
+  // side: DoubleSide — see underground.js's roomMaterial() for why: the old
+  // prototype rendered with backface culling disabled globally.
   const mesh = new THREE.Mesh(M.toBufferGeometry(), new THREE.MeshStandardMaterial({
-    vertexColors: true, roughness: 0.95, metalness: 0,
+    vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide,
   }));
   mesh.name = 'lawn';
   mesh.receiveShadow = true;

@@ -233,7 +233,9 @@ const TREE_LOD_ON = 130, TREE_LOD_OFF = 170; // same hysteresis band as the old 
  * prototype's TREE_LOD_ON/OFF switch.
  */
 export function buildTree() {
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0 });
+  // side: DoubleSide — see underground.js's roomMaterial() for why: the old
+  // prototype rendered with backface culling disabled globally.
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, side: THREE.DoubleSide });
   const near = new THREE.Mesh(buildTreeMesh(true), material);
   const far = new THREE.Mesh(buildTreeMesh(false), material);
   near.castShadow = true; near.receiveShadow = true;

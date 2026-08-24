@@ -375,7 +375,11 @@ export function buildUnderground() {
 let _roomMaterial = null;
 function roomMaterial() {
   if (!_roomMaterial) {
-    _roomMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0 });
+    // side: DoubleSide — the old prototype rendered with gl.disable(CULL_FACE)
+    // globally, so this procedural tunnel/room geometry was never authored
+    // with consistent outward winding. Front-face-only culling (Three.js's
+    // default) makes the walls disappear when viewed from inside the tube.
+    _roomMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
   }
   return _roomMaterial;
 }

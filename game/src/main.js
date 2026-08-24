@@ -44,6 +44,8 @@ const player = createPlayerController({ scene, camera, domElement: renderer.domE
 window.__ant = player.ant;
 window.__rooms = world.rooms;
 window.__camera = camera;
+window.__scene = scene;
+window.__world = world;
 
 renderer.setResizeCallback((aspect) => {
   camera.aspect = aspect;
