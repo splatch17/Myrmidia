@@ -1,15 +1,18 @@
 import { clamp, lerp, damp } from '../core/noise.js';
 import { nrm3, cross3, add3, sub3, scl3 } from '../core/vecmath.js';
-import { groundY, groundNormal } from '../world/index.js';
+import { groundY, groundNormal, TREE, treeWalkBranch } from '../world/index.js';
+import { bladeClimbBasis } from '../world/blade.js';
+import { GRASS } from './climb.js';
 
 /* ==========================================================================
    Hexapod locomotion: two-bone IK per leg driving a tripod gait, ported from
    design/prototypes/sortie-fourmiliere.html section 5 (antBasis/antMatrix/
-   updateLegs/solveKnee). Ground-only this round (#20/#21) — the old
-   prototype's a.climb branch (grass/tree climbing, #5) is intentionally not
-   ported yet, out of scope for this migration pass; antBasis()/antMatrix()
-   below only implement the ground case, so re-introducing climbing later
-   means adding that branch back, not redesigning this file.
+   updateLegs/solveKnee). Ground case ported for #20/#21; the a.climb branch
+   (grass/tree climbing, #5) was intentionally deferred that round and is
+   added here — see climb.js for how ant.climb gets set. The legs then just
+   read whatever basis antBasis() below hands them, ground or blade/trunk
+   alike, so climb.js and this file don't need to know about each other's
+   internals beyond the {kind, i/seg, t/u} shape of ant.climb.
 
    Everything here works on plain arrays (not THREE.Vector3), same reasoning
    as core/vecmath.js: this is a straight port of generator code that already
@@ -38,7 +41,7 @@ export function makeAnt(x, y, z) {
     speed: 0,
     travel: 0,    // distance walked, drives the gait
     bob: 0,
-    climb: null,  // always null this round — see file header
+    climb: null,  // null on the ground; {kind:'grass',i,t} or {kind:'tree',seg,t|u} while climbing — see climb.js
     legsInit: false,
   };
 }
@@ -49,6 +52,23 @@ export function makeLegState() {
 
 /* side/up/fwd in world space for the ant's current pose. */
 export function antBasis(a) {
+  if (a.climb) {
+    if (a.climb.kind === 'tree') {
+      if (a.climb.seg === 'trunk') {
+        const tcb = bladeClimbBasis(TREE, a.climb.t);
+        return { side: tcb.width, up: tcb.normal, fwd: tcb.tangent };
+      }
+      // the branch is a round tube walked over the top of, not a face clung
+      // to — treeWalkBranch.basis() already returns exactly this shape
+      const wb = treeWalkBranch.basis(a.climb.u);
+      return { side: wb.side, up: wb.up, fwd: wb.fwd };
+    }
+    const cb = bladeClimbBasis(GRASS[a.climb.i], a.climb.t);
+    // local Y (up) -> away from the blade face, local Z (fwd) -> up the
+    // blade, local X (side) -> across the blade's width — legs land on the
+    // flat face.
+    return { side: cb.width, up: cb.normal, fwd: cb.tangent };
+  }
   const gn = groundNormal(a.x, a.z);
   const up = nrm3([gn[0] * 0.7, 1, gn[2] * 0.7]);
   const fRaw = [Math.sin(a.yaw), 0, Math.cos(a.yaw)];
@@ -63,6 +83,10 @@ export function antBasis(a) {
    conversion step. */
 export function antMatrix(a) {
   const b = antBasis(a);
+  if (a.climb) {
+    const p = add3([a.x, a.y, a.z], scl3(b.up, 1.05 + a.bob));
+    return { side: b.side, up: b.up, fwd: b.fwd, p, basis: b };
+  }
   const p = [a.x, groundY(a.x, a.z) + 1.05 + a.bob, a.z];
   return { side: b.side, up: b.up, fwd: b.fwd, p, basis: b };
 }
@@ -94,11 +118,12 @@ export function updateLegs(a, legState, dt) {
   const mat = antMatrix(a);
   const b = mat.basis;
   const gaitPhase = a.travel / STRIDE;
+  const climbing = !!a.climb; // on a blade/trunk, feet stay on the flat face instead of a height field
 
   for (let i = 0; i < LEGS.length; i++) {
     const L = LEGS[i], S = legState[i];
     const restW = localToWorld(mat, L.rest);
-    restW[1] = groundY(restW[0], restW[2]);
+    if (!climbing) restW[1] = groundY(restW[0], restW[2]);
 
     if (!a.legsInit) { S.planted = restW.slice(); S.from = restW.slice(); S.to = restW.slice(); }
 
@@ -109,7 +134,7 @@ export function updateLegs(a, legState, dt) {
       S.swinging = true;
       S.from = S.planted.slice();
       const ahead = add3(restW, scl3(b.fwd, STRIDE * 0.38 * clamp(a.speed / 16, 0, 1.4)));
-      ahead[1] = groundY(ahead[0], ahead[2]);
+      if (!climbing) ahead[1] = groundY(ahead[0], ahead[2]);
       S.to = ahead;
     }
     if (p < 0.5 && S.prevP >= 0.5) {

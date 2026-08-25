@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { clamp, damp } from '../core/noise.js';
+import { clamp, damp, lerp } from '../core/noise.js';
 import { profileR, groundY, getRoomBranches, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R } from '../world/index.js';
 
 /* ==========================================================================
@@ -12,36 +12,152 @@ import { profileR, groundY, getRoomBranches, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R
    involvement needed — see the agent notes), and iso mode wasn't part of
    this round's brief. Both are easy to add back onto this same desiredCamera
    shape later if wanted.
+
+   Eye containment rewrite (this session, prompted by #24's DoubleSide fix —
+   see the file-bottom section for why): the eye is now clamped into the
+   *actual branch/tube cavity* the ant is standing in (same {origin, dir,
+   side, uMax, profR} shape world/underground.js's containUnderground() and
+   getRoomBranches() use for the ant itself), not a world-axis-aligned box
+   around the ant. See clampEyeToCavity() below.
    ========================================================================== */
 
 // Side rooms (granary/brood/midden) are offset well off the main tube's own
-// axis, and the old prototype's "room" size (below) always read
-// profileR(z) — the *main tube's* cross-section at that world Z, regardless
-// of whether the ant/camera are actually sitting inside a much wider side
-// room at that Z. Found live while verifying #21 with Playwright: the camera
-// clamps this tight even once the ant has genuinely walked into e.g. midden
-// (roomR up to 13-17 vs. the main tube's TUNNEL_R=7.2), crowding the shot
-// right up against geometry and making an entered room look like a dead end
-// on camera even though the ant is standing in it. Same containUnderground-
-// style branch test (see world/underground.js), just for sizing, not clamping.
+// axis. Cached once populated (buildUnderground() runs before the player
+// controller is created in main.js) — see getRoomBranches()'s own doc for
+// the {name: {origin,dir,side,uMax,profR,doorFalloff}} shape.
 let roomBranches = null;
-function currentRoomRadius(x, z) {
+function branches() {
   if (!roomBranches) roomBranches = getRoomBranches();
-  for (const name in roomBranches) {
-    const br = roomBranches[name];
+  return roomBranches;
+}
+
+/* Which side-room branch (x, z) sits inside, or null for "main tube" — same
+   test containUnderground() uses to pick a branch before clamping into it. */
+function branchAt(x, z) {
+  const brs = branches();
+  for (const name in brs) {
+    const br = brs[name];
     const relX = x - br.origin[0], relZ = z - br.origin[2];
     const u = relX * br.dir[0] + relZ * br.dir[2];
     if (u <= -0.5 || u >= br.uMax + 1) continue;
     const lx = relX * br.side[0] + relZ * br.side[2];
     const r = br.profR(clamp(u, 0, br.uMax));
     if (Math.abs(lx) >= r * 0.82 + 2) continue;
-    return r;
+    return br;
   }
-  return profileR(z);
+  return null;
+}
+
+/* Room radius at (x, z) — main tube's cross-section if not inside a branch,
+   the branch's own (position-dependent, corridor-to-bulge) radius otherwise.
+   Used to size the tunnel auto-tighten distance (#18's Math.max(13.5,
+   room*1.5)), not to clamp position — see clampEyeToCavity() for that. */
+function currentRoomRadius(x, z) {
+  const br = branchAt(x, z);
+  if (!br) return profileR(z);
+  const relX = x - br.origin[0], relZ = z - br.origin[2];
+  const u = relX * br.dir[0] + relZ * br.dir[2];
+  return br.profR(clamp(u, 0, br.uMax));
+}
+
+/* Ported from containUnderground()'s own door-widening loop
+   (world/underground.js) — the main tube's horizontal half-widths at z,
+   locally widened near each branch mouth so a punched-through doorway reads
+   as a continuous opening instead of a wall the camera can get pinned
+   against right at the threshold. Kept in sync by construction: same
+   {origin, dir, doorFalloff} branch fields containUnderground() itself
+   reads, not separately-tuned numbers. */
+function mainTubeHalfWidth(z) {
+  const lim = Math.max(profileR(z) * 0.82 - 1.6, 3);
+  let limPos = lim, limNeg = lim;
+  const brs = branches();
+  for (const name in brs) {
+    const b2 = brs[name];
+    const fall = clamp(1 - Math.abs(z - b2.origin[2]) / b2.doorFalloff, 0, 1);
+    if (fall <= 0) continue;
+    const reach = lerp(lim, Math.abs(b2.origin[0]) + 1.5, fall);
+    if (b2.dir[0] > 0) { if (reach > limPos) limPos = reach; }
+    else { if (reach > limNeg) limNeg = reach; }
+  }
+  return { limPos, limNeg };
+}
+
+/* Vertical extent (floor/ceiling) at a given cross-section radius r, mirrors
+   world/underground.js's private vsqAt/riseAt (main tube) and buildBranch()'s
+   local vsq/rise closures (side rooms) — those aren't exported (see the
+   header note about staying out of world/*), so the formulas are duplicated
+   here rather than reached into. refR is the *reference* radius the vsq
+   exponent is measured against (TUNNEL_R for the main tube, the branch's own
+   corridor radius for a room — both "the narrowest this cavity gets"). The
+   0.92 fudge on the crown leaves a small margin below the idealised ceiling,
+   since the actual mesh has up to ~20% wobble noise on top of this formula
+   (wallN() in underground.js) that could locally dip a bit lower. */
+function verticalExtent(floorY, r, refR) {
+  const vsq = 0.86 * Math.pow(refR / Math.max(r, 0.001), 0.35);
+  const rise = 1.15 + r * vsq * 0.61; // splits the difference between the main tube's (1.2, 0.62) and a branch's (1.1, 0.6) — both call sites are already an approximation, not the exact per-vertex mesh
+  return { floorClamp: floorY + 1.6, ceilClamp: floorY + rise + r * vsq * 0.92 };
+}
+
+function clampToBranch(eye, br) {
+  const relX = eye[0] - br.origin[0], relZ = eye[2] - br.origin[2];
+  let u = relX * br.dir[0] + relZ * br.dir[2];
+  let lx = relX * br.side[0] + relZ * br.side[2];
+  // stay a little inside both the doorway and the back cap, rather than
+  // exactly at the boundary where the profile radius itself is at its most
+  // uncertain (mesh noise, cap taper)
+  u = clamp(u, -0.3, br.uMax - 0.3);
+  const r = Math.max(br.profR(u) * 0.8, 3);
+  lx = clamp(lx, -r, r);
+  eye[0] = br.origin[0] + br.dir[0] * u + br.side[0] * lx;
+  eye[2] = br.origin[2] + br.dir[2] * u + br.side[2] * lx;
+  const corridorR = Math.max(br.profR(-0.3), 0.5); // this branch's own narrow-corridor radius, stands in for buildBranch()'s corridorR parameter
+  const floorY = groundY(eye[0], eye[2]);
+  const { floorClamp, ceilClamp } = verticalExtent(floorY, r, corridorR);
+  eye[1] = clamp(eye[1], floorClamp, ceilClamp);
+}
+
+function clampToMainTube(eye) {
+  eye[2] = clamp(eye[2], TUNNEL_BACK + 5, TUNNEL_MOUTH + 40); // upper bound is generous — z beyond this is the open lawn, handled by the non-tunnel branch instead
+  const { limPos, limNeg } = mainTubeHalfWidth(eye[2]);
+  eye[0] = clamp(eye[0], -limNeg, limPos);
+  const r = Math.max(profileR(eye[2]) * 0.8, 3);
+  const floorY = groundY(eye[0], eye[2]);
+  const { floorClamp, ceilClamp } = verticalExtent(floorY, r, TUNNEL_R);
+  eye[1] = clamp(eye[1], floorClamp, ceilClamp);
+}
+
+/* The actual containment fix: clamps `eye` (mutated in place) into whichever
+   cavity (ref x, ref z) — always the ant's own position, not the eye's own
+   tentative one — sits inside. Using the ant as the reference keeps branch
+   selection stable frame to frame even when a dragged/damped eye briefly
+   tests as "outside every branch" near a doorway threshold, and matches
+   containUnderground()'s own contract (it clamps by branch membership of the
+   point being contained, and the ant is what actually has to be walkable).
+   Called both on desiredCamera()'s target (below) and on the *damped* rig
+   eye every frame (createCameraRig.update()) — a straight-line interpolation
+   between two legal points isn't guaranteed to stay legal itself once rooms
+   have real (non-convex, doorway-pinched) shapes, so the damped position
+   needs its own re-clamp, not just the target it's chasing. */
+function clampEyeToCavity(eye, antX, antZ) {
+  const br = branchAt(antX, antZ);
+  if (br) clampToBranch(eye, br);
+  else clampToMainTube(eye);
+  return eye;
+}
+
+function containCameraEye(eye, ant) {
+  const inTunnel = ant.z < TUNNEL_MOUTH - 2;
+  if (inTunnel) clampEyeToCavity(eye, ant.x, ant.z);
+  else eye[1] = Math.max(eye[1], groundY(eye[0], eye[2]) + 2.2);
+  return eye;
 }
 
 export function desiredCamera(ant, camYaw, wantPitch, camDist) {
-  const head = [ant.x, groundY(ant.x, ant.z) + 2.6, ant.z];
+  // while climbing, ant.y is the real height on the blade/trunk — groundY
+  // would look straight through it back down to the lawn
+  const head = ant.climb
+    ? [ant.x, ant.y + 2.0, ant.z]
+    : [ant.x, groundY(ant.x, ant.z) + 2.6, ant.z];
   const inTunnel = ant.z < TUNNEL_MOUTH - 2;
   const room = inTunnel ? currentRoomRadius(ant.x, ant.z) : TUNNEL_R;
   // resserrement automatique en tunnel étroit — constante inchangée (#18)
@@ -51,21 +167,7 @@ export function desiredCamera(ant, camYaw, wantPitch, camDist) {
     head[1] - Math.sin(wantPitch) * d + 3.4,
     head[2] - Math.cos(camYaw) * Math.cos(wantPitch) * d,
   ];
-  if (inTunnel) {
-    eye[2] = Math.max(eye[2], TUNNEL_BACK + 5);
-    // the room at the camera, not at the ant — but never smaller than the
-    // room the ant is actually standing in: pulling the eye back along
-    // camYaw can walk it just outside a side room's own (x,z) footprint
-    // even though the ant is well inside it, which under this branch-aware
-    // sizing (unlike the old main-tube-only profileR(z)) can under-count and
-    // clamp the eye down to a claustrophobic sliver — found live while
-    // verifying #21 (the midden screenshot came back solid black).
-    const here = Math.max(room, currentRoomRadius(eye[0], eye[2]));
-    eye[0] = clamp(eye[0], ant.x - here * 0.72, ant.x + here * 0.72);
-    eye[1] = clamp(eye[1], groundY(eye[0], eye[2]) + 1.6, 1.5 + here * 1.0);
-  } else {
-    eye[1] = Math.max(eye[1], groundY(eye[0], eye[2]) + 2.2);
-  }
+  containCameraEye(eye, ant);
   const aim = [head[0] + Math.sin(ant.yaw) * 3, head[1] + 0.4, head[2] + Math.cos(ant.yaw) * 3];
   return { eye, aim };
 }
@@ -90,6 +192,12 @@ export function createCameraRig(camera) {
       rig.eye[c] = damp(rig.eye[c], want.eye[c], rate, dt);
       rig.aim[c] = damp(rig.aim[c], want.aim[c], rate * 1.4, dt);
     }
+    // re-clamp *after* damping: the damped eye can cut the corner of a
+    // doorway-pinched room even when both endpoints of the interpolation are
+    // themselves legal (see clampEyeToCavity's doc comment) — this is what
+    // actually keeps the eye out of geometry while turning/moving, not just
+    // once movement settles.
+    containCameraEye(rig.eye, ant);
     camera.position.set(rig.eye[0], rig.eye[1], rig.eye[2]);
     camera.lookAt(new THREE.Vector3(rig.aim[0], rig.aim[1], rig.aim[2]));
   }

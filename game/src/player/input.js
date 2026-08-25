@@ -2,11 +2,11 @@ import { clamp } from '../core/noise.js';
 
 /* ==========================================================================
    Input: keyboard (WASD/ZQSD/arrows + Shift to sprint), pointer-drag camera
-   orbit, wheel zoom, and a touch joystick — ported from
+   orbit, wheel zoom, a touch joystick, and the E/interact key — ported from
    design/prototypes/sortie-fourmiliere.html section 6. No HUD wiring this
    round (no #objective/#playerhud/#prompt in game/index.html yet — out of
-   scope for #20/#21, see the mission notes); this module only owns raw input
-   state, camera.js and player/index.js consume it.
+   scope, see the mission notes); this module only owns raw input state,
+   camera.js and player/index.js consume it.
    ========================================================================== */
 
 export function createInput(domElement) {
@@ -22,6 +22,10 @@ export function createInput(domElement) {
 
   const touchMove = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
   let dragPointer = -1, lastPX = 0, lastPY = 0;
+  // edge-triggered (not "is held"): climbing on/off and future harvest
+  // pickups should fire once per press, same as the old prototype's
+  // keydown-time tryInteract() call rather than a per-frame poll.
+  let interactPressed = false;
 
   function isMoveKey(codes) {
     for (let i = 0; i < codes.length; i++) if (keys[codes[i]]) return true;
@@ -30,6 +34,7 @@ export function createInput(domElement) {
 
   function onKeyDown(e) {
     keys[e.code] = true;
+    if (e.code === 'KeyE') interactPressed = true;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].indexOf(e.code) >= 0) e.preventDefault();
   }
   function onKeyUp(e) { keys[e.code] = false; }
@@ -92,6 +97,15 @@ export function createInput(domElement) {
     return { ix, iy, mag, sprint };
   }
 
+  /* Consumes the pending interact press (if any) — reading it resets it, so
+     a single keydown maps to exactly one call site reacting to it per press,
+     no matter how many frames the key stays physically held afterward. */
+  function consumeInteract() {
+    const v = interactPressed;
+    interactPressed = false;
+    return v;
+  }
+
   function dispose() {
     window.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('keyup', onKeyUp);
@@ -103,5 +117,5 @@ export function createInput(domElement) {
     domElement.removeEventListener('wheel', onWheel);
   }
 
-  return { state, readMoveIntent, dispose };
+  return { state, readMoveIntent, consumeInteract, dispose };
 }
