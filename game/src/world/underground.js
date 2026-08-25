@@ -156,11 +156,11 @@ function wallN(th, z, k, sz) {
   return vnoise(Math.cos(th) * k + z * sz + 37, Math.sin(th) * k + z * sz * 0.7 + 91);
 }
 function vsqAt(r) { return 0.86 * Math.pow(TUNNEL_R / r, 0.35); }
-function riseAt(z) { const r = profileR(z); return 1.2 + r * vsqAt(r) * 0.62; }
+export function riseAt(z) { const r = profileR(z); return 1.2 + r * vsqAt(r) * 0.62; }
 
 /* Where a point on the main tube's wall sits, given cross-section angle and
    depth — same convention as getUndergroundRadius/getWallHoleAt above. */
-function wallPoint(th, z, inset) {
+export function wallPoint(th, z, inset) {
   const baseR = profileR(z), vsq = vsqAt(baseR);
   const wob = 0.84 + 0.20 * wallN(th, z, 1.6, 0.10)
                    + 0.10 * wallN(th, z, 4.1, 0.29)
@@ -202,12 +202,26 @@ function middenColor(proud) {
    world Z. th0 is 0 or PI (a clean +-X branch). Registers a hole in the
    gallery wall (WALL_HOLES) and a containment region (ROOM_BRANCHES, read by
    containUnderground() above) so the room is both visible and walkable. */
-// eslint-disable-next-line no-unused-vars -- cavityMul kept in the signature for
-// parity with the old prototype's call sites; it multiplied a baked per-vertex
-// "daylight" scalar there, which isn't ported this round (see file header).
+/* cavityMul darkens a room wholesale (the midden is a forgotten corner of the
+   nest, 0.46). The old prototype scaled its baked per-vertex daylight term by
+   it; daylight is evaluated per fragment now (world/lighting.js), so it is
+   folded into the wall albedo here instead — same visual result, and it also
+   correctly keeps the midden dingy under its own local lights. */
 function buildBranch(name, th0, z0, corridorR, corridorLen, roomR, roomLen, angSegs, seed, cavityMul, wallColorFn, doorLightCol) {
   const mouth = wallPoint(th0, z0, 0);
-  const origin = [mouth[0], mouth[1], mouth[2]];
+  /* The branch's vertical origin is the *floor* at the mouth, not the wall
+     point's own height. wallPoint(th0=0|PI) lands halfway up the gallery's
+     cross-section, so anchoring there left every room's tube hanging in the
+     air (8 units up for the brood chambers): the props inside, which are all
+     placed on undergroundFloor(), sat on nothing, and the ant — which walks
+     on the same floor function — walked underneath the room it was supposedly
+     in. Anchoring to the floor makes the lower half of each ring fall below
+     it and get clamped up by the Math.max(wy, fl) below, which is exactly how
+     the main gallery gets its floor. The doorway punched in the gallery wall
+     is re-centred to match (see WALL_HOLES below) — the (x, z) footprint the
+     ant is contained to is untouched, so room accessibility (#21) is
+     unaffected. */
+  const origin = [mouth[0], undergroundFloor(mouth[0], mouth[2]), mouth[2]];
   const dir = nrm3([Math.cos(th0), 0, 0.0001]);
   const side = nrm3(cross3([0, 1, 0], dir));
   const uEnd = corridorLen + roomLen, uMax = corridorLen + roomLen * 2;
@@ -234,7 +248,18 @@ function buildBranch(name, th0, z0, corridorR, corridorLen, roomR, roomLen, angS
     return [wx, Math.max(wy, fl), wz, wob];
   }
 
-  WALL_HOLES.push({ th: th0, z: z0, rTh: Math.max(0.16, corridorR * 1.8 / profileR(z0)), rZ: corridorR * 1.7 });
+  /* The doorway sits where the corridor actually meets the wall, which since
+     the branch is floor-anchored is *below* the cross-section's horizontal:
+     solve for the cross-section angle whose height matches the corridor's
+     axis. (Punching it at th0 flat left the door a window halfway up the
+     wall with solid rock at ant height underneath it.) The angular half-width
+     is unchanged — it already worked out to about one corridor diameter. */
+  {
+    const gR = profileR(z0), gV = vsqAt(gR);
+    const aa = Math.asin(clamp((origin[1] + rise(0) - riseAt(z0)) / (gR * gV), -0.92, 0.92));
+    const holeTh = th0 + (Math.cos(th0) >= 0 ? aa : -aa);
+    WALL_HOLES.push({ th: holeTh, z: z0, rTh: Math.max(0.16, corridorR * 1.8 / profileR(z0)), rZ: corridorR * 1.7 });
+  }
   if (doorLightCol) {
     const doorLx = origin[0] + dir[0] * 1.2, doorLz = origin[2] + dir[2] * 1.2;
     DOOR_LIGHTS.push({ p: [doorLx, undergroundFloor(doorLx, doorLz) + 2.1, doorLz], c: doorLightCol, name });
@@ -248,7 +273,7 @@ function buildBranch(name, th0, z0, corridorR, corridorLen, roomR, roomLen, angS
       const th = 2 * Math.PI * a / angSegs;
       const p = pointAt(th, u, 0);
       const proud = clamp((p[3] - 0.84) / 0.34 + 0.45, 0, 1);
-      ring.push(M.addVertex(p[0], p[1], p[2], wallColorFn(proud, p[0], p[1], p[2]).toArray()));
+      ring.push(M.addVertex(p[0], p[1], p[2], wallColorFn(proud, p[0], p[1], p[2]).multiplyScalar(cavityMul).toArray()));
     }
     rows.push(ring);
   }
@@ -259,7 +284,7 @@ function buildBranch(name, th0, z0, corridorR, corridorLen, roomR, roomLen, angS
     }
   }
   const capX = origin[0] + dir[0] * uMax, capZ = origin[2] + dir[2] * uMax, capWY = origin[1] + rise(uMax) * 0.6;
-  const capC = M.addVertex(capX, capWY, capZ, wallColorFn(0.2, capX, capWY, capZ).toArray());
+  const capC = M.addVertex(capX, capWY, capZ, wallColorFn(0.2, capX, capWY, capZ).multiplyScalar(cavityMul).toArray());
   const lastRow = rows[rows.length - 1];
   for (let a4 = 0; a4 < angSegs; a4++) M.addTri(capC, lastRow[a4], lastRow[(a4 + 1) % angSegs]);
 
@@ -338,7 +363,7 @@ export function buildUnderground() {
         const lump = 0.86 + 0.28 * wallN(th4, back * 1.7, 2.3, 0.2);
         const cx4 = v0[0] * shrink * lump;
         const cy4 = riseAt(TUNNEL_BACK) + (v0[1] - riseAt(TUNNEL_BACK)) * shrink * lump;
-        const cc4 = mixColor(C_WALL_B, C_WALL_A, 0.15 + lump * 0.4);
+        const cc4 = mixColor(C_WALL_B, C_WALL_A, 0.15 + lump * 0.4).multiplyScalar(0.35 + 0.3 * lump);
         row.push(M.addVertex(cx4, Math.max(cy4, undergroundFloor(cx4, back)), back, cc4.toArray()));
       }
       for (let a5 = 0; a5 < ANG; a5++) {
@@ -347,7 +372,7 @@ export function buildUnderground() {
       }
       prev = row;
     }
-    const capC = M.addVertex(0, riseAt(TUNNEL_BACK) * 0.6, TUNNEL_BACK - 10, C_WALL_B.toArray());
+    const capC = M.addVertex(0, riseAt(TUNNEL_BACK) * 0.6, TUNNEL_BACK - 10, C_WALL_B.clone().multiplyScalar(0.3).toArray());
     for (let a6 = 0; a6 < ANG; a6++) M.addTri(capC, prev[a6], prev[(a6 + 1) % ANG]);
   }
 
@@ -355,19 +380,14 @@ export function buildUnderground() {
   tunnelMesh.name = 'tunnel';
   group.add(tunnelMesh);
 
-  const doorLights = DOOR_LIGHTS.map((d) => {
-    const light = new THREE.PointLight(new THREE.Color(d.c[0], d.c[1], d.c[2]), 6, 22, 2);
-    light.position.set(d.p[0], d.p[1], d.p[2]);
-    light.name = `door-${d.name}`;
-    return light;
-  });
-  for (const light of doorLights) group.add(light);
-
-  // one more, at the mouth, matching the old prototype's [0,5,3] daylight
-  // hand-off lamp — otherwise the tube reads as a black hole from the lawn.
-  const mouthLight = new THREE.PointLight(0xffcf8a, 4, 40, 2);
-  mouthLight.position.set(0, 5, 3);
-  group.add(mouthLight);
+  // Door lamps are returned as plain {p, c} descriptors, not THREE.PointLights:
+  // they join the nest's local-light pool (world/lighting.js), which sends
+  // only the nearest few to the shader. One THREE.PointLight per lamp would
+  // instead make every lit surface shade against all of them.
+  const doorLights = DOOR_LIGHTS.slice();
+  // and one at the mouth, matching the old prototype's [0,5,3] hand-off lamp —
+  // otherwise the tube reads as a black hole from the lawn.
+  doorLights.push({ p: [0, 5, 3], c: [1.30, 0.90, 0.40], name: 'mouth' });
 
   return { group, doorLights, rooms: { granary: granary.branch, brood: brood.branch, midden: midden.branch } };
 }
