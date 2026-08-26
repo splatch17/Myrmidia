@@ -19,6 +19,9 @@ Suffixes de map (seul `albedo` existe à ce jour, les autres sont réservés) :
 | `_albedo` | Couleur de base | sRGB |
 | `_orm` | Occlusion (R) / Rugosité (G) / Métalique (B), packés — convention glTF/Three.js standard, un seul sampler pour `aoMap`/`roughnessMap`/`metalnessMap` | Linéaire |
 | `_normal` | Normal map tangent-space | Linéaire |
+| `_ramp-*` | Rampe de lumière toon (`gradientMap`), 64×4 — une **donnée**, pas une couleur | Linéaire (`NoColorSpace`) |
+
+Le pseudo-matériau `toon/` (`toon_ramp-lawn.png`, `toon_ramp-nest.png`) est la seule entrée du dossier qui ne décrit pas une surface : c'est la courbe lumière→ombre elle-même, rangée ici parce qu'elle s'itère comme un asset et appartient à la DA. Spec de la courbe et paramètres de chargement : `design/charte-stylisation.md` §2.
 
 `_orm` et `_normal` : pas encore produits, volontairement. Le rendu établi sur le prototype (`sortie-fourmiliere.html`) tient sa lisibilité par de l'ombre de creux **cuite par sommet** (low-poly à faces plates), pas par du relief en texture — le portage Three.js vise le même langage pour l'instant. Ajouter des normal maps a du sens seulement si/quand on lisse les surfaces (subdivision, PBR plus réaliste) ; tant que le style reste low-poly à faces plates, une normal map ferait un aller-retour incohérent avec la doctrine déjà actée. À revisiter si le style évolue, pas avant.
 
@@ -68,6 +71,9 @@ Les deux sont tileables par construction : le bruit de valeur utilisé est math�
 
 ## 5. Suite
 
-- Brancher ces deux textures dans `game/src/world/` dès que Atta a des UV sur le tronc et les murs de galerie (voir point d'action §3).
-- Étendre le même script pour la chitine (fourmi/PNJ) et pour un albedo de sol de pelouse, une fois que le monde Three.js a des surfaces qui en ont besoin — pas avant, pour éviter de produire des textures orphelines.
-- `_orm`/`_normal` : en attente d'une décision délibérée de changer le style vers des surfaces lissées (cf. §1) — pas un manque à ce stade.
+**Ce document s'arrête ici : la suite est dans `design/charte-stylisation.md`** (ticket #25), qui se pose au-dessus de cette fondation sans la refaire — charte de couleur par zone en valeurs numériques, spec de rampe toon, langage de contour, liste priorisée des matériaux, et les six textures produites depuis. Les deux textures d'exemple décrites en §4 ci-dessus ont été **régénérées** dans ce round : le langage a changé de « bruit » à « formes avec la lumière peinte dedans », les descriptions ci-dessus valent pour l'intention, pas pour le contenu actuel des fichiers.
+
+Restent valables et non revisités :
+
+- Brancher les textures dans `game/src/world/` dès que Atta a des UV (voir point d'action §3) — toujours rien de branché à ce jour.
+- `_orm`/`_normal` : en attente d'une décision délibérée de changer le style vers des surfaces lissées (cf. §1) — pas un manque à ce stade, et la charte de #25 renforce cet arbitrage plutôt qu'elle ne le remet en cause.
