@@ -69,7 +69,7 @@ Liens de playtest mis à jour à chaque round de développement — voir les iss
 
 | Prototype | Lien | Statut |
 |---|---|---|
-| Nouveau moteur (Three.js/Vite, `game/`) | [tester](https://raw.githack.com/splatch17/Myrmidia/feature/threejs-migration/game/dist/index.html) | En cours de portage — branche `feature/threejs-migration`, pas encore validé, pas sur `main` |
+| Nouveau moteur (Three.js/Vite, `game/`) | [tester](https://raw.githack.com/splatch17/Myrmidia/feature/threejs-migration/game/dist/index.html) | Round 3 — intérieur de la fourmilière, reine + lumières locales, grimpe des tiges, caméra dégagée. Branche `feature/threejs-migration`, pas sur `main` |
 | Ancien prototype (fichier HTML unique) | [tester](https://raw.githack.com/splatch17/Myrmidia/main/design/prototypes/sortie-fourmiliere.html) | Référence, `main` |
 
 ## État du projet
