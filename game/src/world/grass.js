@@ -122,6 +122,23 @@ export function createGrassField({ count = 620, seed = 7 } = {}) {
     uAntPos: { value: new THREE.Vector3(0, 0, -9999) },
     uAntRadius: { value: 0.9 },
     uBaseColor: { value: new THREE.Color(C_MOSS_A) },
+    // near-camera fade window (world units). At ant scale the grass is the
+    // main thing between the player and their character: walking into a
+    // clump used to fill the screen with black slabs, which reads exactly
+    // like the "je ne vois que les parois" the nest had. The old prototype
+    // solved this camera-side with unoccludedFraction() raycasting GRASS[];
+    // done here instead, per fragment, so it also covers blades that are
+    // merely brushing the frustum rather than dead centre.
+    uOccNear: { value: 5.0 },
+    uOccFar: { value: 16.0 },
+    // Leaf translucency floor. A blade whose face is turned away from the
+    // sun gets nothing but the hemisphere light's ground colour, which is
+    // near-black soil — so half the field was rendering as flat black slabs
+    // (seen on screen, not assumed). Real grass never does that: it is thin
+    // enough to glow with the light coming through it from behind. One
+    // cheap constant term is enough to read as that, and it doubles as the
+    // guarantee that a blade is never a silhouette the player can't see past.
+    uTransl: { value: 0.16 },
   };
 
   const material = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, side: THREE.DoubleSide });
@@ -144,6 +161,8 @@ export function createGrassField({ count = 620, seed = 7 } = {}) {
         uniform float uAntRadius;
         uniform vec3 uBaseColor;
         varying vec3 vGrassColor;
+        varying float vGrassDist;
+        varying vec3 vGrassRay; // x: distance along the camera->ant ray, y: perpendicular distance from it, z: camera->ant distance
         #include <common>
       `)
       .replace('#include <beginnormal_vertex>', `
@@ -178,16 +197,69 @@ export function createGrassField({ count = 620, seed = 7 } = {}) {
         transformed.xz += pushDir * influence * aH * 0.22;
 
         vGrassColor = mix(uBaseColor, aTip, gT) * (0.52 + 0.48 * gT);
+        vec3 grassWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        vGrassDist = distance(grassWorld, cameraPosition);
+        // where this blade sits relative to the line of sight from the
+        // camera to the ant — see the fragment side for what it's for
+        vec3 toAnt = uAntPos - cameraPosition;
+        float antDist = length(toAnt);
+        vec3 sightDir = toAnt / max(antDist, 0.001);
+        vec3 rel = grassWorld - cameraPosition;
+        float along = dot(rel, sightDir);
+        vGrassRay = vec3(along, length(rel - sightDir * along), antDist);
       `);
 
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `
         varying vec3 vGrassColor;
+        varying float vGrassDist;
+        varying vec3 vGrassRay;
+        uniform float uOccNear;
+        uniform float uOccFar;
+        uniform float uTransl;
         #include <common>
+      `)
+      // Dissolve rather than blend: the field is one InstancedMesh, so real
+      // transparency would need per-instance depth sorting every frame (and
+      // would still be wrong within a single blade). A stable screen-space
+      // dither threshold gives the same "it thins out and I can see through
+      // it" read for free, keeps the blades in the depth buffer where they
+      // are still solid, and costs one discard.
+      .replace('#include <clipping_planes_fragment>', `
+        #include <clipping_planes_fragment>
+        // Two reasons a blade gets dissolved. Near-camera: anything within
+        // arm's reach of the eye is a slab across the whole screen and tells
+        // the player nothing. In the line of sight: blades standing between
+        // the camera and the ant hide the character outright — at ant scale,
+        // with a 36-unit boom, a normal clump of grass is a wall. The old
+        // prototype handled the second case camera-side, raycasting GRASS[]
+        // (unoccludedFraction(), section 7); doing it here instead clears
+        // exactly the blades that are in the way and leaves the rest of the
+        // field standing, rather than yanking the whole camera in.
+        float cone = 1.0 - smoothstep(4.0, 7.5, vGrassRay.y);
+        float inFront = smoothstep(0.5, 3.0, vGrassRay.x)
+                      * (1.0 - smoothstep(vGrassRay.z - 4.0, vGrassRay.z - 1.0, vGrassRay.x));
+        float occFade = min(smoothstep(uOccNear, uOccFar, vGrassDist), 1.0 - cone * inFront);
+        if (occFade < 0.999) {
+          // 4x4 ordered Bayer threshold, computed rather than table-indexed
+          // (dynamic indexing into a local array is not portable GLSL). A
+          // fixed screen-space pattern, not noise, so the dissolve doesn't
+          // crawl or shimmer as the camera moves.
+          vec2 b1 = mod(gl_FragCoord.xy, 2.0);
+          vec2 b2 = floor(0.5 * mod(gl_FragCoord.xy, 4.0));
+          float th = (4.0 * mix(mix(0.0, 2.0, b1.y), mix(3.0, 1.0, b1.y), b1.x)
+                          + mix(mix(0.0, 2.0, b2.y), mix(3.0, 1.0, b2.y), b2.x) + 0.5) / 16.0;
+          if (occFade < th) discard;
+        }
       `)
       .replace('#include <color_fragment>', `
         #include <color_fragment>
         diffuseColor.rgb *= vGrassColor;
+      `)
+      // after gl_FragColor is composed, before tone mapping — see uTransl
+      .replace('#include <tonemapping_fragment>', `
+        gl_FragColor.rgb += vGrassColor * uTransl;
+        #include <tonemapping_fragment>
       `);
   };
 

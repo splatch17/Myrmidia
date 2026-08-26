@@ -152,6 +152,65 @@ function containCameraEye(eye, ant) {
   return eye;
 }
 
+/* Eye position for a given boom length, before containment. */
+function eyeAt(head, camYaw, wantPitch, d) {
+  return [
+    head[0] - Math.sin(camYaw) * Math.cos(wantPitch) * d,
+    head[1] - Math.sin(wantPitch) * d + 3.4,
+    head[2] - Math.cos(camYaw) * Math.cos(wantPitch) * d,
+  ];
+}
+
+/* How far containment had to move the eye to make it legal, squared. Zero
+   means the boom fits in the cavity as-is; a large value means the eye is
+   being shoved into rock, which on screen is a solid brown gradient with the
+   ant nowhere in it. */
+function clampErrorSq(head, camYaw, wantPitch, d, ant) {
+  const want = eyeAt(head, camYaw, wantPitch, d);
+  const got = containCameraEye(want.slice(), ant);
+  const dx = got[0] - want[0], dy = got[1] - want[1], dz = got[2] - want[2];
+  return dx * dx + dy * dy + dz * dz;
+}
+
+/* The boom length actually used. #18's Math.max(13.5, room*1.5) tightens the
+   camera by the cavity radius *at the ant*, which is right in the main tube
+   but not in the side rooms: a granary corridor of radius ~3.3 still gets a
+   13.5-unit boom whose far end is buried in rock, and containment then
+   slides the eye flat onto the wall it is buried in. Atta's #24 render pass
+   hit exactly this — two of its three walked-room screenshots were solid
+   brown — and it is the same failure the user reported as "je ne vois que
+   les parois", from a different cause.
+
+   Rather than tune a second radius constant, pull the boom in until it
+   actually fits: the longest d whose contained eye is within TOL of where it
+   wanted to be, or — when nothing in the range fits, which happens in the
+   narrowest corridors — whichever d needed the least correction, since that
+   is the least-buried shot available. Same intent as the old prototype's
+   unoccludedFraction() pull-in (design/prototypes/sortie-fourmiliere.html
+   section 7), but tested against the cavity itself rather than by raycasting
+   the grass, so it covers corridors and doorways too, which the old raycast
+   never had to handle. Coarse stepping keeps this to a handful of cheap
+   arithmetic evaluations a frame, no raycasts.
+
+   TOL is deliberately loose (a metre-ish): a low ceiling pushing the eye
+   down is normal and reads fine — it is what makes a tunnel feel like a
+   tunnel — so only a correction big enough to mean "in the wall" should
+   shorten the boom. A tight tolerance reports "doesn't fit" at every length
+   in every corridor and collapses the camera onto the ant's back; verified
+   on screen, both ways. */
+const BOOM_STEPS = 8, MIN_D = 6, FIT_TOL_SQ = 1.1 * 1.1;
+
+function fittedBoom(head, camYaw, wantPitch, dWant, ant) {
+  let bestD = dWant, bestErr = Infinity;
+  for (let i = 0; i <= BOOM_STEPS; i++) {
+    const d = lerp(dWant, MIN_D, i / BOOM_STEPS);
+    const err = clampErrorSq(head, camYaw, wantPitch, d, ant);
+    if (err <= FIT_TOL_SQ) return d;
+    if (err < bestErr) { bestErr = err; bestD = d; }
+  }
+  return bestD;
+}
+
 export function desiredCamera(ant, camYaw, wantPitch, camDist) {
   // while climbing, ant.y is the real height on the blade/trunk — groundY
   // would look straight through it back down to the lawn
@@ -161,12 +220,9 @@ export function desiredCamera(ant, camYaw, wantPitch, camDist) {
   const inTunnel = ant.z < TUNNEL_MOUTH - 2;
   const room = inTunnel ? currentRoomRadius(ant.x, ant.z) : TUNNEL_R;
   // resserrement automatique en tunnel étroit — constante inchangée (#18)
-  const d = inTunnel ? Math.min(camDist, Math.max(13.5, room * 1.5)) : camDist;
-  const eye = [
-    head[0] - Math.sin(camYaw) * Math.cos(wantPitch) * d,
-    head[1] - Math.sin(wantPitch) * d + 3.4,
-    head[2] - Math.cos(camYaw) * Math.cos(wantPitch) * d,
-  ];
+  const dWant = inTunnel ? Math.min(camDist, Math.max(13.5, room * 1.5)) : camDist;
+  const d = inTunnel ? fittedBoom(head, camYaw, wantPitch, dWant, ant) : dWant;
+  const eye = eyeAt(head, camYaw, wantPitch, d);
   containCameraEye(eye, ant);
   const aim = [head[0] + Math.sin(ant.yaw) * 3, head[1] + 0.4, head[2] + Math.cos(ant.yaw) * 3];
   return { eye, aim };
