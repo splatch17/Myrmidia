@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { vnoise, clamp, lerp } from '../core/noise.js';
 import { nrm3, cross3 } from '../core/vecmath.js';
 import { MeshBuilder } from '../core/meshBuilder.js';
+import { texturedSurfaceMaterial, dirtAlbedo } from './texturing.js';
 
 /* ==========================================================================
    Underground: the gallery tube (with the queen's chamber as a bulge in it)
@@ -387,7 +388,7 @@ export function buildUnderground() {
   const doorLights = DOOR_LIGHTS.slice();
   // and one at the mouth, matching the old prototype's [0,5,3] hand-off lamp —
   // otherwise the tube reads as a black hole from the lawn.
-  doorLights.push({ p: [0, 5, 3], c: [1.30, 0.90, 0.40], name: 'mouth' });
+  doorLights.push({ p: [0, 5, 3], c: [1.15, 1.20, 1.35], name: 'mouth' });  // cold: this one is daylight (charte §1d)
 
   return { group, doorLights, rooms: { granary: granary.branch, brood: brood.branch, midden: midden.branch } };
 }
@@ -399,7 +400,13 @@ function roomMaterial() {
     // globally, so this procedural tunnel/room geometry was never authored
     // with consistent outward winding. Front-face-only culling (Three.js's
     // default) makes the walls disappear when viewed from inside the tube.
-    _roomMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
+    //
+    // One material for the gallery and all three rooms: the per-room palette
+    // lives entirely in the vertex colours, and the triplanar albedo only
+    // multiplies its own variation on top of them (world/texturing.js), so
+    // the granary/brood/midden identity survives being textured by the same
+    // dirt — and they stay a single program with a single texture bound.
+    _roomMaterial = texturedSurfaceMaterial({ map: dirtAlbedo(), strength: 0.62, side: THREE.DoubleSide });
   }
   return _roomMaterial;
 }

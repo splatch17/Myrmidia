@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import barkUrl from '../assets/textures/bark/bark_albedo.png';
 import dirtUrl from '../assets/textures/tunnel-dirt/tunnel-dirt_albedo.png';
+import lawnUrl from '../assets/textures/lawn-soil/lawn-soil_albedo.png';
+import stoneUrl from '../assets/textures/stone/stone_albedo.png';
+import capUrl from '../assets/textures/mushroom-cap/mushroom-cap_albedo.png';
 
 /* ==========================================================================
    Hand-painted albedo on the world's procedural surfaces (#26).
@@ -91,12 +94,23 @@ function loadAlbedo(url, worldPerTile) {
    the visible gallery wall and its own large-scale cavity noise read as
    marbling, not grain; bark grooves narrower than ~2 units per ridge stop
    reading as bark from an ant's distance and turn into corduroy. */
-export const DIRT_TILE = 3.5;
+/* Densities are the art direction's, derived from how big one *motif* should
+   read on screen against the ant's ~6-7 unit body — see the table in
+   design/charte-stylisation.md §7.5. tunnel-dirt moved 3.5 -> 5.0 there: at
+   3.5 the clods fall under the readable threshold and the wall goes back to
+   being noise. */
+export const DIRT_TILE = 5.0;
 export const BARK_TILE = 16;
+export const LAWN_TILE = 45;
+export const STONE_TILE = 12;
+export const CAP_TILE = 2.5;
 
-let _dirt = null, _bark = null;
+let _dirt = null, _bark = null, _lawn = null, _stone = null, _cap = null;
 export function dirtAlbedo() { return (_dirt ||= loadAlbedo(dirtUrl, DIRT_TILE)); }
 export function barkAlbedo() { return (_bark ||= loadAlbedo(barkUrl, BARK_TILE)); }
+export function lawnAlbedo() { return (_lawn ||= loadAlbedo(lawnUrl, LAWN_TILE)); }
+export function stoneAlbedo() { return (_stone ||= loadAlbedo(stoneUrl, STONE_TILE)); }
+export function capAlbedo() { return (_cap ||= loadAlbedo(capUrl, CAP_TILE)); }
 
 const TRIPLANAR_PARS = /* glsl */`
 uniform vec3 uTexMid;
@@ -104,6 +118,8 @@ uniform vec2 uTexRepeat;
 uniform float uTexStrength;
 varying vec3 vTexWorld;
 varying vec3 vTexNormal;
+vec3 gTriTex = vec3(1.0);   // filled by the <map_fragment> injection below,
+                            // reused by the emissive one (which runs later)
 `;
 
 /* Sharpness of the projection blend. 4 keeps each plane dominant over most
@@ -126,9 +142,39 @@ const TRIPLANAR_MAP = /* glsl */`
   // darks. A gamma on the ratio compresses both sides by the same factor and
   // leaves 1.0 (the mean) fixed, so uTexStrength really is "how much grain",
   // with the vertex colour untouched at the average.
-  diffuseColor.rgb *= pow(max(tex / uTexMid, vec3(1e-3)), vec3(uTexStrength));
+  gTriTex = pow(max(tex / uTexMid, vec3(1e-3)), vec3(uTexStrength));
+  diffuseColor.rgb *= gTriTex;
 }
 `;
+
+/* The two injections, applied to any material that carries a `map`. Split out
+   so the emissive variant below can reuse exactly the same sampler. */
+function injectTriplanar(shader, texUniforms) {
+  Object.assign(shader.uniforms, texUniforms);
+
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', 'varying vec3 vTexWorld;\nvarying vec3 vTexNormal;\n#include <common>')
+    .replace('#include <project_vertex>', `#include <project_vertex>
+      vTexWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
+      vTexNormal = mat3(modelMatrix) * objectNormal;`);
+
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', TRIPLANAR_PARS + '\n#include <common>')
+    .replace('#include <map_fragment>', TRIPLANAR_MAP);
+}
+
+function texUniformsFor(map, strength) {
+  /* One uniform object per name, kept on the material and assigned *into*
+     the compiled shader (same trick as world/lighting.js's sharedUniforms):
+     writing .value here retunes the live render, which is how the tile size
+     and strength were settled — on screen, at several viewpoints, in one
+     browser session, instead of by rebuild-and-guess. */
+  return {
+    uTexMid: { value: map.userData.meanLinear },
+    uTexRepeat: { value: map.repeat },
+    uTexStrength: { value: strength },
+  };
+}
 
 /**
  * A vertex-coloured surface material whose albedo is modulated by a
@@ -145,37 +191,43 @@ export function texturedSurfaceMaterial({ map, strength = 1.0, ...opts }) {
     vertexColors: true, roughness: 0.95, metalness: 0, map, ...opts,
   });
 
-  /* One uniform object per name, kept on the material and assigned *into*
-     the compiled shader (same trick as world/lighting.js's sharedUniforms):
-     writing .value here retunes the live render, which is how the tile size
-     and strength below were settled — on screen, at several viewpoints, in
-     one browser session, instead of by rebuild-and-guess. */
-  const texUniforms = {
-    uTexMid: { value: map.userData.meanLinear },
-    uTexRepeat: { value: map.repeat },
-    uTexStrength: { value: strength },
-  };
+  const texUniforms = texUniformsFor(map, strength);
   material.userData.texUniforms = texUniforms;
+  material.onBeforeCompile = (shader) => injectTriplanar(shader, texUniforms);
 
-  material.onBeforeCompile = (shader) => {
-    Object.assign(shader.uniforms, texUniforms);
-
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', 'varying vec3 vTexWorld;\nvarying vec3 vTexNormal;\n#include <common>')
-      .replace('#include <project_vertex>', `#include <project_vertex>
-        vTexWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
-        vTexNormal = mat3(modelMatrix) * objectNormal;`);
-
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', TRIPLANAR_PARS + '\n#include <common>')
-      .replace('#include <map_fragment>', TRIPLANAR_MAP);
-  };
   // Same guard as world/lighting.js: an injected material must not be served
   // a program compiled for a differently-injected one. applyNestShading()
-  // later overwrites this key with its own, which is harmless — every
-  // material that ends up with both injections carries the same code, and
-  // Three's cache key already separates them from untextured materials by
-  // the USE_MAP parameter.
+  // later folds this tag into its own key (userData.shaderTag) rather than
+  // overwriting it, so a textured surface and a textured *emitter* can never
+  // collide in the program cache.
+  material.userData.shaderTag = 'triplanar-albedo';
   material.customProgramCacheKey = () => 'triplanar-albedo';
+  return material;
+}
+
+/**
+ * Same triplanar sampler, but the texture drives the *emission* as well as
+ * the albedo: `totalEmissiveRadiance += vColor * grain * emissive`, so the
+ * pale warts of a mushroom cap glow brighter than the cap around them and a
+ * smooth sphere reads as a living lamp instead of moulded plastic
+ * (design/charte-stylisation.md §7.8). Emitters are excluded from the
+ * daylight attenuation on purpose — see nestDecor.js.
+ */
+export function texturedEmissiveMaterial({ map, strength = 1.0, emissive = 1.6, ...opts }) {
+  const material = new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 0.6, metalness: 0, map, ...opts,
+  });
+
+  const texUniforms = texUniformsFor(map, strength);
+  material.userData.texUniforms = texUniforms;
+  material.onBeforeCompile = (shader) => {
+    injectTriplanar(shader, texUniforms);
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <emissivemap_fragment>',
+      `#include <emissivemap_fragment>
+       totalEmissiveRadiance += vColor * gTriTex * ${emissive.toFixed(2)};`);
+  };
+  material.userData.shaderTag = 'triplanar-emissive';
+  material.customProgramCacheKey = () => 'triplanar-emissive';
   return material;
 }

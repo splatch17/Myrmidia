@@ -3,7 +3,11 @@ import {
   buildUnderground, containUnderground, getUndergroundRadius, getWallHoleAt, getRoomBranches, profileR,
   QUEEN, START, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R,
 } from './underground.js';
-import { buildLawn, groundY, groundNormal, LAWN_BOUNDS } from './terrain.js';
+import {
+  buildLawn, buildWater, buildHorizon, groundY, groundNormal, groundSlope,
+  soilAt, sampleTerrain, waterDepthAt, distanceToWater, riverEdgeAt, containSurface,
+  LAWN_BOUNDS, TERRAIN_BOUNDS, WATER_Y, RIVER,
+} from './terrain.js';
 import { createGrassField } from './grass.js';
 import { buildTree, TREE, treeTrunkRadius, walkBranch as treeWalkBranch } from './tree.js';
 import { buildNestDecor, MUSHROOMS, ROCKS, mushroomCollideR } from './nestDecor.js';
@@ -20,10 +24,33 @@ import { addLocalLight, updateLocalLights, applyNestShading, daylightAt } from '
 // prototype kept (resolveDecorCollision); exported for a later gameplay pass,
 // deliberately not wired into the player controller from here.
 // applyNestShading/daylightAt are the lighting rig's public surface (main.js).
+//
+// SURFACE TERRAIN (#31), for the controller/legs/camera and for gameplay that
+// has to judge a piece of ground (design/boucle-de-jeu.md §0: where the player
+// founds is a terrain decision):
+//   groundY(x,z)            the one true ground height, outdoors and in
+//   groundNormal(x,z)       unit normal of that surface
+//   groundSlope(x,z)        steepness as tan(angle): 0 flat, 1 = 45 degrees
+//   soilAt(x,z)             { kind: water|sand|rock|moss|soil, moss, slope,
+//                             depth, toWater }
+//   sampleTerrain(x,z)      all of the above at once, plus `diggable`
+//   waterDepthAt(x,z)       0 on land, >0 in the river
+//   distanceToWater(x,z)    signed, positive on the dry side of the waterline
+//   riverEdgeAt(z)          x of the shoreline at that depth
+//   containSurface(x,z)     outdoor twin of containUnderground() — clamps into
+//                           the walkable map, river included. Not wired into
+//                           player/movement.js (not my file); LAWN_BOUNDS is
+//                           picked so that file's existing box clamp already
+//                           lands on the waterline.
+//   LAWN_BOUNDS             playable area   TERRAIN_BOUNDS  meshed area
+//   WATER_Y, RIVER          water height and the river's shape constants
 export {
   containUnderground, getUndergroundRadius, getWallHoleAt, getRoomBranches, profileR,
-  groundY, groundNormal, TREE, treeTrunkRadius, treeWalkBranch,
-  QUEEN, START, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R, LAWN_BOUNDS,
+  groundY, groundNormal, groundSlope, soilAt, sampleTerrain, waterDepthAt,
+  distanceToWater, riverEdgeAt, containSurface,
+  TREE, treeTrunkRadius, treeWalkBranch,
+  QUEEN, START, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R,
+  LAWN_BOUNDS, TERRAIN_BOUNDS, WATER_Y, RIVER,
   MUSHROOMS, ROCKS, mushroomCollideR, applyNestShading, daylightAt,
 };
 
@@ -53,6 +80,12 @@ export function createWorld() {
   const lawn = buildLawn();
   group.add(lawn);
 
+  const water = buildWater();
+  group.add(water.mesh);
+
+  const horizon = buildHorizon();
+  group.add(horizon.group);
+
   const grass = createGrassField({});
   group.add(grass.mesh);
 
@@ -62,8 +95,10 @@ export function createWorld() {
   function update(dt, elapsed, camera) {
     grass.update(dt, elapsed);
     queen.update(elapsed);
+    water.update(elapsed);
     if (camera) {
       tree.update(camera);
+      horizon.update(camera);
       updateLocalLights(camera.position);
     }
   }

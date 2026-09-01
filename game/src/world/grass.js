@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { rng, vnoise } from '../core/noise.js';
+import { rng, vnoise, lerp } from '../core/noise.js';
 import { antState } from '../core/antState.js';
 import { bladeBaseWidth } from './blade.js';
-import { groundY, LAWN_BOUNDS } from './terrain.js';
+import { groundY, waterDepthAt, LAWN_BOUNDS, TERRAIN_BOUNDS } from './terrain.js';
 
 /* ==========================================================================
    Grass (#22): rebuilt as a THREE.InstancedMesh instead of the old
@@ -55,8 +55,8 @@ function buildBladeGeometry() {
   return geo;
 }
 
-const C_MOSS_A = new THREE.Color('#4c5f2f');
-const C_MOSS_B = new THREE.Color('#7d9c4e'), C_MOSS_TIP = new THREE.Color('#a8c774');
+const C_MOSS_A = new THREE.Color('#5A7331');
+const C_MOSS_B = new THREE.Color('#8FB055'), C_MOSS_TIP = new THREE.Color('#C6DC82');
 
 /**
  * Builds the grass field: an InstancedMesh plus the footprint data
@@ -64,7 +64,7 @@ const C_MOSS_B = new THREE.Color('#7d9c4e'), C_MOSS_TIP = new THREE.Color('#a8c7
  * shape as the old prototype's GRASS[] entries, so anything already written
  * against that shape ports over unchanged).
  */
-export function createGrassField({ count = 620, seed = 7 } = {}) {
+export function createGrassField({ count = 900, seed = 7 } = {}) {
   const R = rng(seed);
   const geometry = buildBladeGeometry();
 
@@ -81,8 +81,11 @@ export function createGrassField({ count = 620, seed = 7 } = {}) {
   // open" skip (near = |x|<16 && z<34, 82% of candidates there discarded)
   while (i < count && guard < count * 8) {
     guard++;
-    const bx = (R() - 0.5) * 340;
-    const bz = 6 + R() * 236;
+    // spread over the meshed map, not just the playable box, so the far bank
+    // across the river is grassed too — it is the backdrop of every view west
+    const bx = lerp(TERRAIN_BOUNDS.x0 + 8, LAWN_BOUNDS.x1 - 4, R());
+    const bz = 6 + R() * (LAWN_BOUNDS.z1 - 6);
+    if (waterDepthAt(bx, bz) > 0) continue;          // nothing grows in the river
     const near = Math.abs(bx) < 16 && bz < 34;
     if (near && R() < 0.82) continue;
 
@@ -112,7 +115,7 @@ export function createGrassField({ count = 620, seed = 7 } = {}) {
   // frustum culling against a per-vertex bounding sphere would be wrong, so
   // hand it one that covers the whole lawn instead of disabling culling
   // outright.
-  const cx = (LAWN_BOUNDS.x0 + LAWN_BOUNDS.x1) / 2, cz = (LAWN_BOUNDS.z0 + LAWN_BOUNDS.z1) / 2;
+  const cx = (TERRAIN_BOUNDS.x0 + LAWN_BOUNDS.x1) / 2, cz = (LAWN_BOUNDS.z0 + LAWN_BOUNDS.z1) / 2;
   const radius = Math.hypot(LAWN_BOUNDS.x1 - cx, LAWN_BOUNDS.z1 - cz) + 120;
   geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(cx, 40, cz), radius);
 

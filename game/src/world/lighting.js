@@ -32,6 +32,10 @@ import { TUNNEL_BACK, TUNNEL_MOUTH } from './underground.js';
 
 export const LIGHT_SLOTS = 8;
 
+/* How much of the hemisphere fill survives at the deepest point of the nest
+   (see the injection below). */
+const AMBIENT_FLOOR = 0.30;
+
 const ALL_LIGHTS = [];
 
 /** p: [x,y,z] world position. c: [r,g,b] radiance (may exceed 1). */
@@ -128,9 +132,17 @@ export function applyNestShading(material) {
         {
           float nestDay = nestDaylight(vNestWorld);
           reflectedLight.directDiffuse *= nestDay;
-          reflectedLight.indirectDiffuse *= nestDay;
           reflectedLight.directSpecular *= nestDay;
           reflectedLight.indirectSpecular *= nestDay;
+          // The ambient/hemisphere term keeps a floor underground instead of
+          // being attenuated to nothing with the sun. Without it the nest is
+          // lit by warm point lamps alone and every surface out of their reach
+          // falls to black — the single most expensive defect for a stylised
+          // look (design/charte-stylisation.md §1c: a shadow is a colour, not
+          // an absence). The floor is what makes the hemisphere's cavern
+          // blue-violet actually reach the walls. Outdoors nestDay is already
+          // 0.82-1.0, so max() leaves the lawn untouched.
+          reflectedLight.indirectDiffuse *= max(nestDay, ${AMBIENT_FLOOR.toFixed(2)});
           vec3 nestSum = vec3(0.0);
           for (int i = 0; i < ${LIGHT_SLOTS}; i++) {
             vec3 Ld = uLightPos[i] - vNestWorld;
@@ -142,9 +154,15 @@ export function applyNestShading(material) {
         }
       `);
   };
-  // without this, two materials with identical parameters can share one
-  // compiled program and only one of them would carry the injection
-  material.customProgramCacheKey = () => 'nest-shading';
+  // Without this, two materials with identical *parameters* share one
+  // compiled program even though their injected source differs — Three keys
+  // the cache on the parameter hash, not on the text onBeforeCompile
+  // produced. The tag carries whatever other injection the material already
+  // had (userData.shaderTag, set by world/texturing.js and by the glow
+  // material in nestDecor.js); dropping it is how the glow material's
+  // emissive line could end up compiled into — or out of — the wrong program.
+  const tag = material.userData.shaderTag || '';
+  material.customProgramCacheKey = () => 'nest-shading|' + tag;
   material.needsUpdate = true;
   return material;
 }

@@ -4,6 +4,7 @@ import { nrm3, cross3, add3, sub3, scl3, segBasis } from '../core/vecmath.js';
 import { MeshBuilder, unitSphere, unitCylinder } from '../core/meshBuilder.js';
 import { bladeCurvePoint } from './blade.js';
 import { groundY } from './terrain.js';
+import { texturedSurfaceMaterial, barkAlbedo } from './texturing.js';
 
 /* ==========================================================================
    The first tree — a landmark on the lawn, at grass-blade scale rather than
@@ -26,7 +27,7 @@ const C_WALL_A = new THREE.Color('#5a4226'), C_WALL_B = new THREE.Color('#332412
 const C_ROOT = new THREE.Color('#4a3418');
 const C_BARK_A = new THREE.Color(C_WALL_A).lerp(C_ROOT, 0.3);
 const C_BARK_B = new THREE.Color(C_WALL_B).lerp(C_ROOT, 0.55);
-const C_LEAF_A = new THREE.Color('#5d7a37'), C_LEAF_B = new THREE.Color('#93b25c');
+const C_LEAF_A = new THREE.Color('#6C8E3C'), C_LEAF_B = new THREE.Color('#AECB6E');
 
 function mixColor(a, b, t) { return new THREE.Color(a).lerp(b, clamp(t, 0, 1)); }
 
@@ -103,7 +104,12 @@ TREE.walkBranch = walkBranch;
    switch — see buildTree()'s comment there for the original budget numbers,
    which this mirrors: near ~1770 tris, far ~175 tris after #14/#19). ---- */
 function buildTreeMesh(near) {
+  // Two buffers: bark (trunk, walkable branch, roots, decorative limbs) gets
+  // the bark albedo, foliage stays on vertex colour. One extra draw call, but
+  // a single shared material would have printed bark grooves across every
+  // leaf blob — and at CAP/BARK tile sizes that reads as damage, not detail.
   const M = new MeshBuilder();
+  const L = new MeshBuilder();
   const R = rng(near ? 481001 : 481002);
   const rings = near ? 20 : 4, angSegs = near ? 16 : 6;
 
@@ -141,7 +147,7 @@ function buildTreeMesh(near) {
   function foliageBlob(center, radius, tintT) {
     const scaleXZ = radius * (0.9 + R() * 0.3), scaleY = radius * (0.75 + R() * 0.25);
     const sphBasis = { x: [scaleXZ, 0, 0], y: [0, scaleY, 0], z: [0, 0, scaleXZ], p: center };
-    M.bake(spherePrim, sphBasis, () => {
+    L.bake(spherePrim, sphBasis, () => {
       const c = near ? mixColor(C_LEAF_A, C_LEAF_B, tintT) : leafFlat;
       return c.toArray();
     });
@@ -215,7 +221,7 @@ function buildTreeMesh(near) {
     foliageBlob(add3(treeCenterAt(TREE_TRUNK_T), [18, 22, -8]), 48, 0.5);
   }
 
-  return M.toBufferGeometry();
+  return { bark: M.toBufferGeometry(), leaf: L.toBufferGeometry() };
 }
 
 const TREE_LOD_ON = 130, TREE_LOD_OFF = 170; // same hysteresis band as the old prototype
@@ -235,11 +241,18 @@ const TREE_LOD_ON = 130, TREE_LOD_OFF = 170; // same hysteresis band as the old 
 export function buildTree() {
   // side: DoubleSide — see underground.js's roomMaterial() for why: the old
   // prototype rendered with backface culling disabled globally.
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, side: THREE.DoubleSide });
-  const near = new THREE.Mesh(buildTreeMesh(true), material);
-  const far = new THREE.Mesh(buildTreeMesh(false), material);
-  near.castShadow = true; near.receiveShadow = true;
-  far.castShadow = true;
+  const barkMat = texturedSurfaceMaterial({
+    map: barkAlbedo(), strength: 1.0, roughness: 0.92, side: THREE.DoubleSide,
+  });
+  const leafMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, side: THREE.DoubleSide });
+
+  const geoNear = buildTreeMesh(true), geoFar = buildTreeMesh(false);
+  const near = new THREE.Group();
+  near.add(new THREE.Mesh(geoNear.bark, barkMat), new THREE.Mesh(geoNear.leaf, leafMat));
+  const far = new THREE.Group();
+  far.add(new THREE.Mesh(geoFar.bark, barkMat), new THREE.Mesh(geoFar.leaf, leafMat));
+  for (const m of near.children) { m.castShadow = true; m.receiveShadow = true; }
+  for (const m of far.children) m.castShadow = true;
   far.visible = false;
 
   const group = new THREE.Group();

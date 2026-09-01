@@ -3,11 +3,12 @@ import { rng, vnoise, clamp, lerp } from '../core/noise.js';
 import { makeBasis, segBasis } from '../core/vecmath.js';
 import { MeshBuilder, unitSphere, unitCylinder } from '../core/meshBuilder.js';
 import { addLocalLight } from './lighting.js';
+import { texturedSurfaceMaterial, texturedEmissiveMaterial, stoneAlbedo, capAlbedo } from './texturing.js';
 import {
   undergroundFloor, wallPoint, profileR,
   QUEEN, START, CH_Z, CH_R, TUNNEL_BACK, DAIS_R,
 } from './underground.js';
-import { groundY } from './terrain.js';
+import { groundY, waterDepthAt, distanceToWater } from './terrain.js';
 
 /* ==========================================================================
    Everything that lives *inside* the nest: the queen's dais, roots arching
@@ -16,8 +17,16 @@ import { groundY } from './terrain.js';
    granary/brood/midden props. Ported from the decor pass of buildWorld() in
    design/prototypes/sortie-fourmiliere.html (~lines 870-1160).
 
-   Two buffers, two draw calls, no per-prop objects:
-   - `M` collects everything matte and lit normally.
+   Three buffers, three draw calls, no per-prop objects:
+   - `M` collects everything matte and lit normally. It stays on vertex
+     colour alone: eggs, roots, rootlets, silk and resin are small
+     strong-silhouette props whose reading comes from shape and value, and
+     the art direction keeps them untextured on purpose
+     (design/charte-stylisation.md §4).
+   - `S` collects the stony props — floor pebbles, midden refuse, lawn
+     boulders — which do get the `stone` albedo. Split out of `M` for that
+     reason alone: one extra draw call buys a material that covers a lot of
+     screen outdoors.
    - `G` collects the things that are meant to *be* light (mushroom caps,
      glow-beads): normally lit, plus their own vertex colour added as
      emission, so they stay bright against a dark cavity without going flat.
@@ -40,7 +49,8 @@ const C_SOIL_A = col('#6d5130');
 const C_WALL_A = col('#5a4226'), C_WALL_B = col('#332412');
 const C_MOSS_A = col('#4c5f2f');
 const C_STONE = col('#6a6154');
-const C_ROOT = col('#4a3418'), C_ROOTLET = col('#7a5f38');
+const C_ROOTLET_HEX = '#5E4526';  // charte §1d: was #7a5f38, read as pink stems louder than the ant
+const C_ROOT = col('#4a3418'), C_ROOTLET = col(C_ROOTLET_HEX);
 const C_BROOD = col('#efdcb0'), C_GRAIN = col('#7a6040');
 const C_GLOW = col('#ffc46a');
 const C_SPORE = col('#c497d9');
@@ -50,7 +60,9 @@ const C_SILK = col('#9db0d8');
 const C_MOLD = scl(mix(C_MOSS_A, C_WALL_B, 0.62), 0.58);
 const C_CARCASS = scl(C_WALL_B, 0.7);
 
-const SPORE_LIGHT = [1.15, 0.50, 1.45];
+// charte §1d: blue-violet, not magenta — magenta x a warm-brown wall albedo
+// reinforces the wall's own hue and the lamp stops reading as another light
+const SPORE_LIGHT = [0.72, 0.48, 1.75];
 // the queen's chamber is the site's "feerique et epoustouflant" anchor, so its
 // one fantastical note reads brighter than every warm-but-mundane lamp elsewhere
 const GLOW_LIGHT = [1.95, 1.20, 0.52];
@@ -68,6 +80,7 @@ export function mushroomCollideR(m) { return m.r * 0.65; }
 export function buildNestDecor(rooms) {
   const M = new MeshBuilder();
   const G = new MeshBuilder();
+  const S = new MeshBuilder();
   const R = rng(20260812);
   const sphere = unitSphere(10, 7);
   const grain = unitSphere(6, 4);
@@ -145,7 +158,7 @@ export function buildNestDecor(rooms) {
     const fx = (R() - 0.5) * 2 * lim;
     const fs = 0.3 + R() * 0.9;
     const fc = scl(C_STONE, (0.6 + R() * 0.8) * 0.8);
-    M.bake(grain, box(fs * 1.3, fs * 0.7, fs * 1.1, [fx, undergroundFloor(fx, fz) + fs * 0.3, fz]), () => fc);
+    S.bake(grain, box(fs * 1.3, fs * 0.7, fs * 1.1, [fx, undergroundFloor(fx, fz) + fs * 0.3, fz]), () => fc);
   }
 
   /* ---- fungus gardens: the gallery's only real light -------------------- */
@@ -314,7 +327,7 @@ export function buildNestDecor(rooms) {
         const dx3 = hpt[0] + (R() - 0.5) * 5, dz3 = hpt[2] + (R() - 0.5) * 5;
         const ds = 0.4 + R() * 1.1;
         const dcol = scl(R() < 0.5 ? C_STONE : C_GRAIN, (0.3 + R() * 0.35) * 0.55);
-        M.bake(grain, box(ds * 1.2, ds * 0.7, ds,
+        S.bake(grain, box(ds * 1.2, ds * 0.7, ds,
           [dx3, undergroundFloor(dx3, dz3) + ds * 0.3, dz3]), () => dcol);
       }
     }
@@ -341,13 +354,14 @@ export function buildNestDecor(rooms) {
   }
 
   /* ---- lawn pebbles: the outdoor half of the decor collision set --------- */
-  for (let pb = 0; pb < 26; pb++) {
-    const px2 = (R() - 0.5) * 260, pz2 = 8 + R() * 200;
+  for (let pb = 0; pb < 42; pb++) {
+    const px2 = -200 + R() * 380, pz2 = 8 + R() * 250;
+    if (waterDepthAt(px2, pz2) > 0 || distanceToWater(px2, pz2) < 4) continue;
     const sxx = 2 + R() * 6, syy = 1.5 + R() * 4, szz = 2 + R() * 6;
     const yy = groundY(px2, pz2) + syy * 0.35;
     const shade = 0.75 + R() * 0.5;
     const mossSeed = R() * 40, mossCap = R() < 0.6 ? 0.5 + R() * 0.5 : 0;
-    M.bake(sphere, box(sxx, syy, szz, [px2, yy, pz2]), (x, y, z) => {
+    S.bake(sphere, box(sxx, syy, szz, [px2, yy, pz2]), (x, y, z) => {
       const stone = scl(C_STONE, shade);
       if (mossCap <= 0) return stone;
       const up = clamp((y - yy) / syy + 0.15 * vnoise(x * 0.3 + mossSeed, z * 0.3 + mossSeed), 0, 1);
@@ -365,24 +379,27 @@ export function buildNestDecor(rooms) {
   matte.name = 'nest-decor-matte';
   group.add(matte);
 
-  const glowMat = new THREE.MeshStandardMaterial({
-    // half-strength diffuse: a cap sits about two units from its own cluster
-    // lamp, so at full albedo the nearest ones blew out to white while the
-    // ones a few metres down the gallery still read correctly. Damping what
-    // they *receive* and leaning on what they *emit* keeps the whole garden
-    // on the same curve.
-    color: 0x777777,
-    vertexColors: true, roughness: 0.6, metalness: 0, side: THREE.DoubleSide,
+  const stone = new THREE.Mesh(S.toBufferGeometry(), texturedSurfaceMaterial({
+    map: stoneAlbedo(), strength: 1.0, roughness: 0.92, side: THREE.DoubleSide,
+  }));
+  stone.name = 'nest-decor-stone';
+  stone.castShadow = true;
+  stone.receiveShadow = true;
+  group.add(stone);
+
+  // emission = the vertex colour, modulated by the cap albedo so the pale
+  // warts glow brighter than the cap around them (charte §7.8). Added after
+  // lighting (see opaque_fragment), so world/lighting.js's daylight
+  // attenuation leaves it alone — a glow-bead is not dimmer for being deep
+  // underground. Diffuse is damped to half (color 0x777777): a cap sits about
+  // two units from its own cluster lamp, so at full albedo the nearest ones
+  // blew out to white while the ones a few metres down the gallery still read
+  // correctly. Damping what they *receive* and leaning on what they *emit*
+  // keeps the whole garden on the same curve.
+  const glowMat = texturedEmissiveMaterial({
+    map: capAlbedo(), strength: 0.7, emissive: 0.95,
+    color: 0x777777, side: THREE.DoubleSide,
   });
-  // emission = the vertex colour itself, so a cap/bead reads as a source
-  // rather than as a very pale surface. Added after lighting (see
-  // opaque_fragment), so world/lighting.js's daylight attenuation leaves it
-  // alone — a glow-bead is not dimmer for being deep underground.
-  glowMat.onBeforeCompile = (shader) => {
-    shader.fragmentShader = shader.fragmentShader.replace(
-      '#include <emissivemap_fragment>',
-      '#include <emissivemap_fragment>\n  totalEmissiveRadiance += vColor * 0.8;');
-  };
   const glow = new THREE.Mesh(G.toBufferGeometry(), glowMat);
   glow.name = 'nest-decor-glow';
   group.add(glow);
