@@ -237,10 +237,10 @@ function containCameraEye(eye, ant, cav) {
 }
 
 /* Eye position for a given boom length, before containment. */
-function eyeAt(head, camYaw, wantPitch, d) {
+function eyeAt(head, camYaw, wantPitch, d, s = 1) {
   return [
     head[0] - Math.sin(camYaw) * Math.cos(wantPitch) * d,
-    head[1] - Math.sin(wantPitch) * d + 3.4,
+    head[1] - Math.sin(wantPitch) * d + 3.4 * s,
     head[2] - Math.cos(camYaw) * Math.cos(wantPitch) * d,
   ];
 }
@@ -252,32 +252,66 @@ function eyeAt(head, camYaw, wantPitch, d) {
    absorb ceiling clamps, and still collapsed). */
 const BOOM_STEPS = 8, MIN_D = 6, FIT_TOL = 0.9;
 
+/* Extra downward pitch tried when no boom length fits at the pitch the
+   player asked for. A small room can be too shallow to put the eye *behind*
+   an ant 2.2x a worker's size and still be inside the cavity, but it is
+   rarely too shallow to put it *above and behind* — the height band widens
+   toward the middle of the section (heightBand()), which is exactly where a
+   steeper boom lands. Trying the requested pitch first and stopping at the
+   first that fits means this costs nothing outdoors and in the gallery,
+   where the first candidate always fits. */
+const PITCH_FALLBACKS = [0, 0.25, 0.5, 0.8];
+const MAX_PITCH_DOWN = -1.25;
+
 function fittedBoom(head, camYaw, wantPitch, dWant, ant, cav) {
   let bestD = dWant, bestErr = Infinity;
+  const minD = Math.min(MIN_D * (ant.scale || 1), dWant); // never shorter than the body is long
   for (let i = 0; i <= BOOM_STEPS; i++) {
-    const d = lerp(dWant, MIN_D, i / BOOM_STEPS);
-    const err = containCameraEye(eyeAt(head, camYaw, wantPitch, d), ant, cav);
-    if (err <= FIT_TOL) return d;
+    const d = lerp(dWant, minD, i / BOOM_STEPS);
+    const err = containCameraEye(eyeAt(head, camYaw, wantPitch, d, ant.scale || 1), ant, cav);
+    if (err <= FIT_TOL) return { d, err };
     if (err < bestErr) { bestErr = err; bestD = d; }
   }
-  return bestD;
+  return { d: bestD, err: bestErr };
+}
+
+/* The (pitch, length) the shot actually uses: the player's own pitch and the
+   longest boom that fits at it, or failing that the shallowest extra pitch
+   that does fit, or failing that whichever candidate ends up least wrong. */
+function fittedShot(head, camYaw, wantPitch, dWant, ant, cav) {
+  let best = null;
+  for (const extra of PITCH_FALLBACKS) {
+    const pitch = Math.max(wantPitch - extra, MAX_PITCH_DOWN);
+    const fit = fittedBoom(head, camYaw, pitch, dWant, ant, cav);
+    if (fit.err <= FIT_TOL) return { pitch, d: fit.d };
+    if (!best || fit.err < best.err) best = { pitch, d: fit.d, err: fit.err };
+    if (pitch <= MAX_PITCH_DOWN) break; // already as steep as it goes
+  }
+  return best;
 }
 
 export function desiredCamera(ant, camYaw, wantPitch, camDist) {
+  // every framing offset below is in body-lengths, not metres: the same shot
+  // whether the player is a worker or the queen (avatar.js, #32)
+  const s = ant.scale || 1;
   // while climbing, ant.y is the real height on the blade/trunk — groundY
   // would look straight through it back down to the lawn
   const head = ant.climb
-    ? [ant.x, ant.y + 2.0, ant.z]
-    : [ant.x, groundY(ant.x, ant.z) + 2.6, ant.z];
+    ? [ant.x, ant.y + 2.0 * s, ant.z]
+    : [ant.x, groundY(ant.x, ant.z) + 2.6 * s, ant.z];
   const inTunnel = ant.z < TUNNEL_MOUTH - 2;
   const cav = inTunnel ? cavityAt(ant) : null;
   const room = inTunnel ? currentRoomRadius(ant.x, ant.z) : TUNNEL_R;
-  // resserrement automatique en tunnel étroit — constante inchangée (#18)
-  const dWant = inTunnel ? Math.min(camDist, Math.max(13.5, room * 1.5)) : camDist;
-  const d = inTunnel ? fittedBoom(head, camYaw, wantPitch, dWant, ant, cav) : dWant;
-  const eye = eyeAt(head, camYaw, wantPitch, d);
+  // resserrement automatique en tunnel étroit (#18): the floor follows the
+  // avatar, the room term does not — a gallery is as wide as it is whoever
+  // is walking down it
+  const dWant = inTunnel ? Math.min(camDist, Math.max(13.5 * s, room * 1.5)) : camDist;
+  const shot = inTunnel
+    ? fittedShot(head, camYaw, wantPitch, dWant, ant, cav)
+    : { pitch: wantPitch, d: dWant };
+  const eye = eyeAt(head, camYaw, shot.pitch, shot.d, s);
   containCameraEye(eye, ant, cav);
-  const aim = [head[0] + Math.sin(ant.yaw) * 3, head[1] + 0.4, head[2] + Math.cos(ant.yaw) * 3];
+  const aim = [head[0] + Math.sin(ant.yaw) * 3 * s, head[1] + 0.4 * s, head[2] + Math.cos(ant.yaw) * 3 * s];
   return { eye, aim };
 }
 

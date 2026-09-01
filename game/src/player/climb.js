@@ -3,6 +3,7 @@ import { add3, scl3 } from '../core/vecmath.js';
 import { groundY, TREE, treeTrunkRadius, treeWalkBranch } from '../world/index.js';
 import { createGrassField } from '../world/grass.js';
 import { bladeCurvePoint, bladeClimbBasis } from '../world/blade.js';
+import { PLAYER_AVATAR } from './avatar.js';
 
 /* ==========================================================================
    Stem/tree climbing (README "Suite" — grimpe des tiges, #5 on the old
@@ -25,10 +26,22 @@ import { bladeCurvePoint, bladeClimbBasis } from '../world/blade.js';
 
 export const GRASS = createGrassField({}).footprints;
 
-export const CLIMB_MIN_H = 42; // only sufficiently tall blades are worth climbing (and, in decorCollision.js, worth colliding with)
-const CLIMB_RADIUS = 4.5;   // how close to a blade's base an ant must be to grab it
-const CLIMB_SPEED = 20;     // arc-length units per second while climbing
+// Deliberately NOT scaled with the avatar: this is about the blade's own
+// stiffness (can it hold a climber at all), not about who is climbing it —
+// and decorCollision.js uses the same threshold to decide which stems are
+// solid, so scaling it would silently delete colliders.
+export const CLIMB_MIN_H = 42;
+const CLIMB_RADIUS = 4.5;   // how close to a blade's base an ant must be to grab it — reach, so it scales with the body
+const CLIMB_SPEED = 20;     // arc-length units per second, worker reference; the avatar profile overrides it
 const CLIMB_MAX_T = 0.93;   // stop short of the tip, where the blade gets too thin to stand on
+
+// reach/speed for whoever is climbing (avatar.js): a queen grabs a stem from
+// further out and hauls herself up it, she does not scurry
+function reach(ant) { return CLIMB_RADIUS * (ant.scale || 1); }
+function climbSpeed(ant) {
+  const p = ant.profile || PLAYER_AVATAR;
+  return (p.climbSpeed !== undefined ? p.climbSpeed : CLIMB_SPEED) * (ant.scale || 1);
+}
 
 // measured from the bark, not the trunk's centre (see treeTrunkRadius) —
 // a centre-relative radius like CLIMB_RADIUS would have the ant brushing
@@ -53,7 +66,7 @@ const TREE_WALK_LEN = (() => {
 /** Nearest climbable target within range, or null — grass blades tall
  *  enough to bother with, or the tree trunk. */
 export function nearestClimbable(ant) {
-  let best = null, bestD = CLIMB_RADIUS; // plain distance, so it compares fairly against the tree's surface distance below
+  let best = null, bestD = reach(ant); // plain distance, so it compares fairly against the tree's surface distance below
   for (let i = 0; i < GRASS.length; i++) {
     const g = GRASS[i];
     if (g.h < CLIMB_MIN_H) continue;
@@ -61,7 +74,7 @@ export function nearestClimbable(ant) {
     if (d < bestD) { bestD = d; best = { kind: 'grass', i }; }
   }
   const treeSurfaceD = Math.hypot(TREE.x - ant.x, TREE.z - ant.z) - TREE.w;
-  if (treeSurfaceD < TREE_CLIMB_RADIUS && treeSurfaceD < bestD) best = { kind: 'tree' };
+  if (treeSurfaceD < TREE_CLIMB_RADIUS * (ant.scale || 1) && treeSurfaceD < bestD) best = { kind: 'tree' };
   return best;
 }
 
@@ -134,14 +147,14 @@ export function stepClimb(ant, climbDir, dt) {
     // ant.speed get re-damped to a nonzero value right after exitClimb()
     // just zeroed it.
     if (ant.climb.seg === 'trunk') {
-      ant.climb.t = clamp(ant.climb.t + climbDir * (CLIMB_SPEED / TREE.h) * dt, 0, treeWalkBranch.splitT);
+      ant.climb.t = clamp(ant.climb.t + climbDir * (climbSpeed(ant) / TREE.h) * dt, 0, treeWalkBranch.splitT);
       const tb = bladeClimbBasis(TREE, ant.climb.t);
       const tp = add3(bladeCurvePoint(TREE, ant.climb.t), scl3(tb.normal, treeTrunkRadius(ant.climb.t)));
       ant.x = tp[0]; ant.y = tp[1]; ant.z = tp[2];
       if (ant.climb.t <= 0.0005 && climbDir < 0) didExit = true; // back down to the ground
       else if (ant.climb.t >= treeWalkBranch.splitT && climbDir > 0) segSwitch = 'branch'; // onto the branch
     } else {
-      ant.climb.u = clamp(ant.climb.u + climbDir * (CLIMB_SPEED / TREE_WALK_LEN) * dt, 0, 1);
+      ant.climb.u = clamp(ant.climb.u + climbDir * (climbSpeed(ant) / TREE_WALK_LEN) * dt, 0, 1);
       const wb = treeWalkBranch.basis(ant.climb.u);
       const wp = add3(wb.pos, scl3(wb.up, treeWalkBranch.radius(ant.climb.u)));
       ant.x = wp[0]; ant.y = wp[1]; ant.z = wp[2];
@@ -149,14 +162,15 @@ export function stepClimb(ant, climbDir, dt) {
     }
   } else {
     const g = GRASS[ant.climb.i];
-    ant.climb.t = clamp(ant.climb.t + climbDir * (CLIMB_SPEED / g.h) * dt, 0, CLIMB_MAX_T);
+    ant.climb.t = clamp(ant.climb.t + climbDir * (climbSpeed(ant) / g.h) * dt, 0, CLIMB_MAX_T);
     const cp = bladeCurvePoint(g, ant.climb.t);
     ant.x = cp[0]; ant.y = cp[1]; ant.z = cp[2];
     if (ant.climb.t <= 0.0005 && climbDir < 0) didExit = true; // climbed back down to the ground
   }
 
-  ant.speed = damp(ant.speed, Math.abs(climbDir) * CLIMB_SPEED, 7, dt);
-  ant.travel += Math.abs(climbDir) * CLIMB_SPEED * dt;
+  const cs = climbSpeed(ant);
+  ant.speed = damp(ant.speed, Math.abs(climbDir) * cs, 7, dt);
+  ant.travel += Math.abs(climbDir) * cs * dt;
 
   if (didExit) exitClimb(ant);
   else if (segSwitch === 'branch') { ant.climb.seg = 'branch'; ant.climb.u = 0; }

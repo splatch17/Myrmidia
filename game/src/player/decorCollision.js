@@ -1,6 +1,8 @@
-import { MUSHROOMS, ROCKS, mushroomCollideR, TREE, treeTrunkRadius, TUNNEL_MOUTH, containUnderground } from '../world/index.js';
+import { MUSHROOMS, ROCKS, mushroomCollideR, TREE, treeTrunkRadius, TUNNEL_MOUTH, containUnderground, profileR, getRoomBranches } from '../world/index.js';
+import { clamp } from '../core/noise.js';
 import { bladeCurvePoint } from '../world/blade.js';
 import { GRASS, CLIMB_MIN_H } from './climb.js';
+import { PLAYER_AVATAR, collideRadius } from './avatar.js';
 
 /* ==========================================================================
    Decor non-penetration (#4/#16): the ant stops at rocks, mushroom caps,
@@ -57,8 +59,16 @@ const TREE_COLLIDE_R = treeTrunkRadius(TREE_GROUND_T) * 0.88;
    Cheap enough to do eagerly (a few thousand containUnderground() calls,
    once), but deferred to first use because MUSHROOMS is only filled when the
    world is built, after this module is imported. */
-const ANT_SQUEEZE = 2.4;   // walkable width the ant needs to pass a prop
-const POCKET_GAP = 2.6;    // a gap narrower than this is a trap, not a route
+/* Both derived from the avatar's own footprint (avatar.js) rather than left
+   as the worker-sized literals they were (2.4 / 2.6): the founding queen is
+   2.2x a worker, and a gap she does not fit through is a gap that has to be
+   treated as a wall, not squeezed into. The visible consequence is that most
+   caps standing in the middle of the 11.8-unit-wide gallery stop colliding
+   for her altogether — the second branch of fittedRadius() below. That is the
+   safe failure: walking through a glowing mushroom looks wrong for a moment,
+   being wedged behind one ends the session. */
+const ANT_SQUEEZE = collideRadius(PLAYER_AVATAR) * 2 + 0.6;
+const POCKET_GAP = ANT_SQUEEZE + 0.2;
 const WALL_PROBE = 14;     // no wall further out than this matters
 
 /* Distance from (x, z) to the edge of the walkable footprint along a
@@ -90,10 +100,59 @@ function fittedRadius(x, z, r) {
   return grown;
 }
 
-let mushroomR = null;
-function mushroomRadii() {
-  if (!mushroomR || mushroomR.length !== MUSHROOMS.length) {
-    mushroomR = MUSHROOMS.map((m) => fittedRadius(m.x, m.z, mushroomCollideR(m)));
+/* ---- props vs. a body that fills the corridor ---------------------------
+   The nest was authored around a worker: containUnderground() clamps a
+   walker's centre to +-(profileR*0.82 - 1.6), which is 8.6 units across the
+   plain gallery. The founding queen is 6.6 units wide (avatar.js). She fits
+   the corridor; she does not fit the corridor *and* a mushroom standing in
+   it, and measuring it on the built game shows exactly that: the caps at
+   z=-68.6 and z=-74 close the gallery for her between them, with no route
+   past that does not detour through the granary doorway. Being unable to
+   walk your own gallery is a far worse bug than brushing through a glowing
+   cap, so a prop only collides when the cavity it stands in can hold the
+   prop and the walker side by side.
+
+   The width used is containUnderground()'s own half-width for the cavity the
+   prop is in — the main tube's, or the branch's if the prop is inside a side
+   room. Deliberately *not* including the door-mouth widening that
+   containUnderground() adds near a branch: that widening is a hole in the
+   wall to walk through, not corridor to squeeze past furniture in, and
+   counting it is what makes a doorway read as a slalom. */
+const LANE_MARGIN = 1.0;
+
+let branchList = null;
+function branches() {
+  if (!branchList) branchList = Object.values(getRoomBranches());
+  return branchList;
+}
+
+/* containUnderground()'s own branch test and half-width, kept in the same
+   shape so the two can't drift. */
+function laneHalfWidth(x, z) {
+  for (const br of branches()) {
+    const relX = x - br.origin[0], relZ = z - br.origin[2];
+    const u = relX * br.dir[0] + relZ * br.dir[2];
+    if (u <= -0.5 || u >= br.uMax + 1) continue;
+    const lx = relX * br.side[0] + relZ * br.side[2];
+    const rr = Math.max(br.profR(clamp(u, 0, br.uMax)) * 0.82 - 1.2, 2.2);
+    if (Math.abs(lx) >= rr + 3) continue;
+    return rr;
+  }
+  return Math.max(profileR(z) * 0.82 - 1.6, 3);
+}
+
+function fitsBeside(x, z, r, antR) {
+  return 2 * laneHalfWidth(x, z) >= 2 * antR + 2 * r + LANE_MARGIN;
+}
+
+let mushroomR = null, mushroomRForR = null;
+export function mushroomRadii(antR = collideRadius(PLAYER_AVATAR)) {
+  if (!mushroomR || mushroomR.length !== MUSHROOMS.length || mushroomRForR !== antR) {
+    mushroomRForR = antR;
+    mushroomR = MUSHROOMS.map((m) => {
+      const r = fittedRadius(m.x, m.z, mushroomCollideR(m));
+      return r > 0 && fitsBeside(m.x, m.z, r, antR) ? r : 0;
+    });
   }
   return mushroomR;
 }
@@ -123,11 +182,13 @@ function forEachCollider(x, z, fn) {
 
 /** How deep (x, z) sits inside the deepest collider it overlaps, 0 if clear.
  *  Used by scripts/verify-room-access.mjs to assert non-penetration against
- *  exactly the radii the resolver uses, rather than a copy of them. */
-export function deepestPenetration(x, z) {
+ *  exactly the radii the resolver uses, rather than a copy of them. `antR`
+ *  defaults to 0, i.e. "is the ant's centre inside something"; pass a body
+ *  radius to ask the stricter "is any of the ant inside something". */
+export function deepestPenetration(x, z, antR = 0) {
   let worst = 0;
   forEachCollider(x, z, (cx, cz, r) => {
-    const pen = r - Math.hypot(x - cx, z - cz);
+    const pen = r + antR - Math.hypot(x - cx, z - cz);
     if (pen > worst) worst = pen;
   });
   return worst;
@@ -137,7 +198,12 @@ export function deepestPenetration(x, z) {
    penetration vector, and resolveDecorCollision() applies their average. */
 function collectDecorPush(ant) {
   const push = { x: 0, z: 0, n: 0 };
-  forEachCollider(ant.x, ant.z, (cx, cz, r) => {
+  // the ant is a disc, not a point: its own half-width is added to every
+  // obstacle rather than baked into the obstacle radii, so the same world
+  // data serves whichever body the player is in (avatar.js)
+  const antR = collideRadius(ant.profile || PLAYER_AVATAR);
+  forEachCollider(ant.x, ant.z, (cx, cz, r0) => {
+    const r = r0 + antR;
     const dx = ant.x - cx, dz = ant.z - cz;
     const d = Math.hypot(dx, dz);
     if (d >= r || d < 0.001) return;

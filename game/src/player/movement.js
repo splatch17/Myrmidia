@@ -3,6 +3,7 @@ import { nrm3, cross3 } from '../core/vecmath.js';
 import { dampAngle } from './mathUtil.js';
 import { containUnderground, groundY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '../world/index.js';
 import { resolveDecorCollision } from './decorCollision.js';
+import { PLAYER_AVATAR, collideRadius, strideOf } from './avatar.js';
 
 /* ==========================================================================
    Ground movement + underground/lawn containment — ported from the tail of
@@ -32,7 +33,10 @@ import { resolveDecorCollision } from './decorCollision.js';
    a wall.
    ========================================================================== */
 
-const QUEEN_AVOID_R = 11; // matches the old prototype's "you walk around the queen, not through her"
+// The old prototype's "you walk around the queen, not through her", plus the
+// player's own half-width: an avatar 2.2x a worker (#32) would otherwise have
+// its front half inside her dais at the same centre distance.
+const QUEEN_AVOID_BASE = 11;
 
 export function computeWishDir(intent, camEye, camAim) {
   const camFwd = nrm3([camAim[0] - camEye[0], 0, camAim[2] - camEye[2]]);
@@ -44,10 +48,13 @@ export function computeWishDir(intent, camEye, camAim) {
 }
 
 export function stepAnt(ant, wish, intent, dt) {
-  const maxSpeed = 15 * intent.sprint;
+  const p = ant.profile || PLAYER_AVATAR;
+  const s = ant.scale || 1;
+  const bodyR = collideRadius(p);
+  const maxSpeed = p.maxSpeed * (intent.sprint ? p.sprint : 1);
 
   if (intent.mag > 0.02) {
-    ant.yaw = dampAngle(ant.yaw, Math.atan2(wish.wishX, wish.wishZ), 9, dt);
+    ant.yaw = dampAngle(ant.yaw, Math.atan2(wish.wishX, wish.wishZ), p.turnRate, dt);
     ant.speed = damp(ant.speed, maxSpeed * intent.mag, 7, dt);
   } else {
     ant.speed = damp(ant.speed, 0, 9, dt);
@@ -64,12 +71,13 @@ export function stepAnt(ant, wish, intent, dt) {
     const [cx, cz] = containUnderground(ant.x, ant.z);
     ant.x = cx; ant.z = cz;
 
+    const avoidR = QUEEN_AVOID_BASE + bodyR;
     const qdx = ant.x - QUEEN[0], qdz = ant.z - QUEEN[2];
     const qd = Math.hypot(qdx, qdz);
-    if (qd < QUEEN_AVOID_R && qd > 0.001) { // you walk around the queen, not through her
+    if (qd < avoidR && qd > 0.001) { // you walk around the queen, not through her
       const nx = qdx / qd, nz = qdz / qd;
-      ant.x = QUEEN[0] + nx * QUEEN_AVOID_R;
-      ant.z = QUEEN[2] + nz * QUEEN_AVOID_R;
+      ant.x = QUEEN[0] + nx * avoidR;
+      ant.z = QUEEN[2] + nz * avoidR;
       // slide along her, so walking straight at her never pins you
       const tx = -nz, tz = nx;
       const along = Math.sin(ant.yaw) * tx + Math.cos(ant.yaw) * tz;
@@ -77,10 +85,13 @@ export function stepAnt(ant, wish, intent, dt) {
       ant.x += tx * slide; ant.z += tz * slide;
     }
   } else {
-    ant.x = clamp(ant.x, LAWN_BOUNDS.x0 + 15, LAWN_BOUNDS.x1 - 15);
-    ant.z = Math.min(ant.z, LAWN_BOUNDS.z1 - 12);
+    // margin from the lawn's edge: the old 15/12 was a worker's body plus
+    // slack, so it follows the avatar rather than staying a literal
+    const margin = Math.max(15, bodyR * 4);
+    ant.x = clamp(ant.x, LAWN_BOUNDS.x0 + margin, LAWN_BOUNDS.x1 - margin);
+    ant.z = Math.min(ant.z, LAWN_BOUNDS.z1 - margin * 0.8);
   }
 
   ant.y = groundY(ant.x, ant.z);
-  ant.bob = Math.sin(ant.travel * (Math.PI * 2 / 7.0) * 2) * 0.13 * clamp(ant.speed / 8, 0, 1);
+  ant.bob = Math.sin(ant.travel * (Math.PI * 2 / strideOf(p)) * 2) * 0.13 * s * clamp(ant.speed / (8 * s), 0, 1);
 }

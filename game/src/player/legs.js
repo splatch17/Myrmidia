@@ -3,6 +3,7 @@ import { nrm3, cross3, add3, sub3, scl3 } from '../core/vecmath.js';
 import { groundY, groundNormal, TREE, treeWalkBranch } from '../world/index.js';
 import { bladeClimbBasis } from '../world/blade.js';
 import { GRASS } from './climb.js';
+import { PLAYER_AVATAR, legLengths, strideOf } from './avatar.js';
 
 /* ==========================================================================
    Hexapod locomotion: two-bone IK per leg driving a tripod gait, ported from
@@ -14,27 +15,20 @@ import { GRASS } from './climb.js';
    alike, so climb.js and this file don't need to know about each other's
    internals beyond the {kind, i/seg, t/u} shape of ant.climb.
 
+   Body size, stance and gait length come from the ant's avatar profile
+   (avatar.js), not from literals here (#32): the queen is 2.2x a worker and
+   her legs have to cover 2.2x the ground per step, or she moon-walks. The
+   scale is applied *once*, to the basis returned by antMatrix(), so every
+   local coordinate downstream (hips, rest feet, and every body part
+   antMesh.js places) inherits it without a second multiply.
+
    Everything here works on plain arrays (not THREE.Vector3), same reasoning
    as core/vecmath.js: this is a straight port of generator code that already
    reads that way, and the mesh layer (antMesh.js) is the only place that
    needs to touch THREE objects.
    ========================================================================== */
 
-export const LEG_L1 = 2.7, LEG_L2 = 2.9;
-
-// local-space hips and rest feet: +Z is forward, +X is the left side
-export const LEGS = [
-  { hip: [ 0.85, 1.5,  1.5], rest: [ 3.6, 0,  3.4], phase: 0.0 },
-  { hip: [-0.85, 1.5,  1.5], rest: [-3.6, 0,  3.4], phase: 0.5 },
-  { hip: [ 0.95, 1.4,  0.3], rest: [ 4.3, 0,  0.2], phase: 0.5 },
-  { hip: [-0.95, 1.4,  0.3], rest: [-4.3, 0,  0.2], phase: 0.0 },
-  { hip: [ 0.85, 1.4, -1.0], rest: [ 4.0, 0, -3.2], phase: 0.0 },
-  { hip: [-0.85, 1.4, -1.0], rest: [-4.0, 0, -3.2], phase: 0.5 },
-];
-
-export const STRIDE = 7.0; // world distance per full gait cycle
-
-export function makeAnt(x, y, z) {
+export function makeAnt(x, y, z, profile = PLAYER_AVATAR) {
   return {
     x, y, z,
     yaw: 0,       // 0 = facing +Z
@@ -43,14 +37,16 @@ export function makeAnt(x, y, z) {
     bob: 0,
     climb: null,  // null on the ground; {kind:'grass',i,t} or {kind:'tree',seg,t|u} while climbing — see climb.js
     legsInit: false,
+    profile,
+    scale: profile.scale, // read often (camera/collision), kept flat on the record
   };
 }
 
-export function makeLegState() {
-  return LEGS.map(() => ({ planted: [0, 0, 0], from: [0, 0, 0], to: [0, 0, 0], swinging: false, prevP: 0 }));
+export function makeLegState(profile = PLAYER_AVATAR) {
+  return profile.legs.map(() => ({ planted: [0, 0, 0], from: [0, 0, 0], to: [0, 0, 0], swinging: false, prevP: 0 }));
 }
 
-/* side/up/fwd in world space for the ant's current pose. */
+/* side/up/fwd in world space for the ant's current pose (unit length). */
 export function antBasis(a) {
   if (a.climb) {
     if (a.climb.kind === 'tree') {
@@ -80,15 +76,16 @@ export function antBasis(a) {
 /* A basis = three (already-scaled) axis vectors + an origin, matching
    core/vecmath.js's makeBasis/applyBasis shape, so antMesh.js can feed it
    straight into a THREE.Matrix4.makeBasis()+setPosition() without another
-   conversion step. */
+   conversion step. side/up/fwd carry the avatar's scale; `basis` keeps the
+   unit-length axes for anything that needs a pure direction. */
 export function antMatrix(a) {
   const b = antBasis(a);
-  if (a.climb) {
-    const p = add3([a.x, a.y, a.z], scl3(b.up, 1.05 + a.bob));
-    return { side: b.side, up: b.up, fwd: b.fwd, p, basis: b };
-  }
-  const p = [a.x, groundY(a.x, a.z) + 1.05 + a.bob, a.z];
-  return { side: b.side, up: b.up, fwd: b.fwd, p, basis: b };
+  const s = a.scale || 1;
+  const ride = 1.05 * s + a.bob;
+  const p = a.climb
+    ? add3([a.x, a.y, a.z], scl3(b.up, ride))
+    : [a.x, groundY(a.x, a.z) + ride, a.z];
+  return { side: scl3(b.side, s), up: scl3(b.up, s), fwd: scl3(b.fwd, s), p, basis: b, scale: s };
 }
 
 export function localToWorld(mat, v) {
@@ -117,11 +114,14 @@ export function solveKnee(hip, foot, l1, l2, poleDir) {
 export function updateLegs(a, legState, dt) {
   const mat = antMatrix(a);
   const b = mat.basis;
-  const gaitPhase = a.travel / STRIDE;
+  const p_ = a.profile || PLAYER_AVATAR;
+  const s = a.scale || 1;
+  const stride = strideOf(p_);
+  const gaitPhase = a.travel / stride;
   const climbing = !!a.climb; // on a blade/trunk, feet stay on the flat face instead of a height field
 
-  for (let i = 0; i < LEGS.length; i++) {
-    const L = LEGS[i], S = legState[i];
+  for (let i = 0; i < p_.legs.length; i++) {
+    const L = p_.legs[i], S = legState[i];
     const restW = localToWorld(mat, L.rest);
     if (!climbing) restW[1] = groundY(restW[0], restW[2]);
 
@@ -133,7 +133,9 @@ export function updateLegs(a, legState, dt) {
     if (p >= 0.5 && S.prevP < 0.5) {
       S.swinging = true;
       S.from = S.planted.slice();
-      const ahead = add3(restW, scl3(b.fwd, STRIDE * 0.38 * clamp(a.speed / 16, 0, 1.4)));
+      // speed reference scales too: "full stride reach" means the same
+      // fraction of top speed for a queen as for a worker
+      const ahead = add3(restW, scl3(b.fwd, stride * 0.38 * clamp(a.speed / (16 * s), 0, 1.4)));
       if (!climbing) ahead[1] = groundY(ahead[0], ahead[2]);
       S.to = ahead;
     }
@@ -145,7 +147,7 @@ export function updateLegs(a, legState, dt) {
 
     if (S.swinging) {
       const t = (p - 0.5) * 2;
-      const lift = Math.sin(t * Math.PI) * 1.5;
+      const lift = Math.sin(t * Math.PI) * 1.5 * s;
       S.planted = [
         lerp(S.from[0], S.to[0], t),
         lerp(S.from[1], S.to[1], t) + lift,
@@ -153,7 +155,7 @@ export function updateLegs(a, legState, dt) {
       ];
     }
 
-    if (a.speed < 0.4 && !S.swinging) {
+    if (a.speed < 0.4 * s && !S.swinging) {
       S.planted[0] = damp(S.planted[0], restW[0], 4, dt);
       S.planted[1] = damp(S.planted[1], restW[1], 4, dt);
       S.planted[2] = damp(S.planted[2], restW[2], 4, dt);
@@ -161,3 +163,7 @@ export function updateLegs(a, legState, dt) {
   }
   a.legsInit = true;
 }
+
+/* Kept as named exports because antMesh.js and the old call sites read them;
+   they now come from the profile rather than being module constants. */
+export { legLengths, strideOf };

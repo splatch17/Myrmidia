@@ -1,4 +1,5 @@
 import { clamp } from '../core/noise.js';
+import { PLAYER_AVATAR } from './avatar.js';
 
 /* ==========================================================================
    Input: keyboard (WASD/ZQSD/arrows + Shift to sprint), pointer-drag camera
@@ -9,14 +10,14 @@ import { clamp } from '../core/noise.js';
    camera.js and player/index.js consume it.
    ========================================================================== */
 
-export function createInput(domElement) {
+export function createInput(domElement, profile = PLAYER_AVATAR) {
   const keys = {};
   const state = {
     camYaw: 0,
     wantPitch: -0.19,
-    // Default pulled back to 36 / clamp [10,85] (#18) — kept identical to
-    // the validated old-prototype constants, see the mission brief.
-    camDist: 36,
+    // #18's default/clamp, now scaled to whichever body the player is in
+    // (avatar.js's `cam`): the same framing, not the same literal.
+    camDist: profile.cam.dist,
     dragging: false,
   };
 
@@ -72,7 +73,7 @@ export function createInput(domElement) {
   function onWheel(e) {
     // widened alongside the #18 default so there's room to pull out further
     // than the new default, not just up to it
-    state.camDist = clamp(state.camDist + e.deltaY * 0.03, 10, 85);
+    state.camDist = clamp(state.camDist + e.deltaY * 0.03 * profile.scale, profile.cam.min, profile.cam.max);
     e.preventDefault();
   }
 
@@ -93,7 +94,9 @@ export function createInput(domElement) {
     if (isMoveKey(['KeyD', 'ArrowRight'])) ix += 1;
     if (touchMove.active) { ix += touchMove.dx; iy -= touchMove.dy; }
     const mag = Math.min(Math.hypot(ix, iy), 1);
-    const sprint = (keys.ShiftLeft || keys.ShiftRight) ? 1.75 : 1;
+    // a flag, not a multiplier: how much faster sprinting is belongs to the
+    // avatar profile (avatar.js), a queen does not dash like a worker
+    const sprint = !!(keys.ShiftLeft || keys.ShiftRight);
     return { ix, iy, mag, sprint };
   }
 
