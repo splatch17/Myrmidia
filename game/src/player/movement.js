@@ -2,6 +2,7 @@ import { clamp, damp } from '../core/noise.js';
 import { nrm3, cross3 } from '../core/vecmath.js';
 import { dampAngle } from './mathUtil.js';
 import { containUnderground, groundY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '../world/index.js';
+import { resolveDecorCollision } from './decorCollision.js';
 
 /* ==========================================================================
    Ground movement + underground/lawn containment — ported from the tail of
@@ -24,10 +25,11 @@ import { containUnderground, groundY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '.
        (undergroundFloor() is the single source of truth for both).
      - queen avoidance is applied after the room/tunnel clamp, exactly like
        the old file, so it can't fight containUnderground for the same frame.
-   Decor collision (rocks/mushroom caps/grass) is intentionally NOT ported
-   this round — world/index.js doesn't expose ROCKS/MUSHROOMS yet, and outdoor
-   grass is instanced (world/grass.js) without per-blade collision data;
-   out of scope for #20/#21.
+   Decor collision (rocks/mushroom caps/thick grass/the tree trunk) is
+   resolved *before* the containment clamp (#4/#16, see decorCollision.js),
+   exactly as the old prototype ordered it: containUnderground() then has the
+   last word, so being pushed off a mushroom can never shove the ant through
+   a wall.
    ========================================================================== */
 
 const QUEEN_AVOID_R = 11; // matches the old prototype's "you walk around the queen, not through her"
@@ -55,6 +57,8 @@ export function stepAnt(ant, wish, intent, dt) {
   ant.x += Math.sin(ant.yaw) * step;
   ant.z += Math.cos(ant.yaw) * step;
   ant.travel += step;
+
+  resolveDecorCollision(ant, step);
 
   if (ant.z < TUNNEL_MOUTH) {
     const [cx, cz] = containUnderground(ant.x, ant.z);

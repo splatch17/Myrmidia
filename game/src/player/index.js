@@ -8,6 +8,7 @@ import { createInput } from './input.js';
 import { createCameraRig } from './camera.js';
 import { computeWishDir, stepAnt } from './movement.js';
 import { nearestClimbable, tryInteract, stepClimb } from './climb.js';
+import { deepestPenetration } from './decorCollision.js';
 import { dampAngle } from './mathUtil.js';
 
 /**
@@ -67,6 +68,12 @@ export function createPlayerController({ scene, camera, domElement }) {
     }
     cameraRig.update(ant, input.state.camYaw, input.state.wantPitch, input.state.camDist, dt);
   }
+
+  // Debug/verification hook (not a gameplay feature, mirrors main.js's
+  // window.__ant): lets scripts/verify-room-access.mjs assert that the ant
+  // never ends up inside a rock/mushroom/stem/trunk, measured against the
+  // very radii the collision resolver uses (#4/#16).
+  if (typeof window !== 'undefined') window.__decorPenetration = deepestPenetration;
 
   function dispose() {
     input.dispose();

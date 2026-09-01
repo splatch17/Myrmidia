@@ -25,7 +25,7 @@ import { bladeCurvePoint, bladeClimbBasis } from '../world/blade.js';
 
 export const GRASS = createGrassField({}).footprints;
 
-const CLIMB_MIN_H = 42;     // only sufficiently tall blades are worth climbing
+export const CLIMB_MIN_H = 42; // only sufficiently tall blades are worth climbing (and, in decorCollision.js, worth colliding with)
 const CLIMB_RADIUS = 4.5;   // how close to a blade's base an ant must be to grab it
 const CLIMB_SPEED = 20;     // arc-length units per second while climbing
 const CLIMB_MAX_T = 0.93;   // stop short of the tip, where the blade gets too thin to stand on
