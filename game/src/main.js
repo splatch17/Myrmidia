@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { createRenderer, createCamera } from './core/renderer.js';
-import { createWorld, containUnderground, profileR, groundY, applyNestShading } from './world/index.js';
+import { createWorld, containUnderground, profileR, groundY, applyNestShading, TREE } from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
 
@@ -70,6 +70,7 @@ scene.traverse((obj) => {
 // ant's real position/yaw and the underground room centres without any
 // synthetic bypass of the actual input pipeline. Harmless in production —
 // just two object references on window.
+window.__renderer = renderer;
 window.__ant = player.ant;
 window.__rooms = world.rooms;
 window.__camera = camera;
@@ -78,6 +79,7 @@ window.__world = world;
 window.__contain = containUnderground;
 window.__profileR = profileR;
 window.__groundY = groundY;
+window.__tree = TREE;
 
 renderer.setResizeCallback((aspect) => {
   camera.aspect = aspect;
@@ -85,7 +87,7 @@ renderer.setResizeCallback((aspect) => {
 });
 
 const clock = new THREE.Clock();
-renderer.setAnimationLoop(() => {
+function frame() {
   // Capped like the old prototype's frame() (`Math.min((now-last)/1000,
   // 0.05)`) — a tab-backgrounding/GC/rAF hitch would otherwise feed one huge
   // dt through the damped movement/camera math (player/movement.js,
@@ -114,4 +116,8 @@ renderer.setAnimationLoop(() => {
   renderer.toneMappingExposure = lerp(1.35, 1.05, outside);
 
   renderer.render(scene, camera);
-});
+}
+renderer.setAnimationLoop(frame);
+// named and exposed so a verification driver can stop the loop, time a burst
+// of renders of one fixed view, and start it again (scripts/verify-textures.mjs)
+window.__frame = frame;
