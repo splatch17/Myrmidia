@@ -361,6 +361,72 @@ function generateRamps() {
 }
 
 // ---------------------------------------------------------------------
+// sky_gradient-lawn / sky_gradient-prologue — the sky, not a surface.
+//
+// Shipped as a texture for the same reason the toon ramps are: the curve
+// belongs to the DA and has to be iterable without touching a shader.
+// Today `scene.background` is a single flat colour, and the captures show
+// what that costs — the sky reads exactly #8FB6CF at the zenith and
+// exactly #8FB6CF one pixel above the ground line, so the world ends in a
+// hard 111-value cut with no air in between (see design/ambiance-
+// prologue.md, section 0).
+//
+// v = 0 is the zenith, v = 1 the horizon. The bottom stop of each ramp is
+// also that state's fog colour, so ground fading into fog and sky meeting
+// the horizon arrive at the same value and the seam disappears.
+//
+// These are colour, not data: they load with colorSpace = SRGBColorSpace,
+// unlike the toon ramps.
+// ---------------------------------------------------------------------
+
+/** stops: [[t, '#rrggbb'], ...] sorted by t, smoothstepped between. */
+function gradient(stops) {
+  const cs = stops.map(([t, hex]) => [t, hexToRGB(hex)]);
+  return (t) => {
+    if (t <= cs[0][0]) return cs[0][1];
+    for (let i = 1; i < cs.length; i++) {
+      if (t <= cs[i][0]) {
+        const k = smoothstep((t - cs[i - 1][0]) / (cs[i][0] - cs[i - 1][0]));
+        return mixRGB(cs[i - 1][1], cs[i][1], k);
+      }
+    }
+    return cs[cs.length - 1][1];
+  };
+}
+
+function generateSky() {
+  const W = 8, H = 128;
+
+  // Founded colony — full morning. Cool at the zenith, hazy pale at the
+  // horizon, and a last stop that picks up a trace of the green the
+  // horizon is actually made of, so the sky belongs to this lawn rather
+  // than to a stock skybox.
+  const lawn = gradient([
+    [0.00, '#4E8FD6'],
+    [0.38, '#77B0E2'],
+    [0.72, '#A3CBE9'],
+    [0.92, '#AFC8D8'],   // == fog colour, founded
+    [1.00, '#C3D2D0'],
+  ]);
+
+  // Prologue — the end of dusk. Deliberately NOT a golden hour: gold is
+  // reserved for the colony, so the reward of founding stays univocal.
+  // The haze family is a heavily desaturated spore violet (#C497D9 at
+  // ~10% chroma), which keeps the loneliest moment of the game inside the
+  // project's own palette instead of a generic sunset.
+  const prologue = gradient([
+    [0.00, '#232A4E'],
+    [0.35, '#3A4269'],
+    [0.66, '#5C6183'],
+    [0.88, '#8B8399'],   // == fog colour, prologue
+    [1.00, '#A88E92'],
+  ]);
+
+  writeTexture('sky', 'gradient-lawn', W, H, (u, v) => lawn(v), 1);
+  writeTexture('sky', 'gradient-prologue', W, H, (u, v) => prologue(v), 1);
+}
+
+// ---------------------------------------------------------------------
 // lawn-soil_albedo — the ground quad, 380x250 units, half of every
 // outdoor frame. Highest-value texture in the game by surface area.
 //
@@ -459,45 +525,69 @@ function generateStone() {
 }
 
 // ---------------------------------------------------------------------
-// chitin_albedo — the ant, the queen, every future NPC. Smallest surface
-// on this list and the most looked-at: on screen 100% of the time, and
-// the one thing a player identifies with. Currently flat vertex colour,
-// which is why it reads as orange plastic in every capture.
+// chitin_albedo — v2. The ant, the queen, every future NPC: the smallest
+// surface on this list and the most looked-at.
 //
-// Overlapping plates on an offset row grid: a lit lip just inside each
-// plate's leading edge, a dark seam at the trailing one. Two strokes,
-// exactly how a plated insect is painted by hand. The per-plate value
-// spread and the broad blotch pass are what stop it reading as quilting.
+// v1 laid down a 5 x 8 grid of overlapping oval plates. At the density it
+// is used (worldPerTile 4, an ant ~7 units long => ~9 plate columns and
+// ~14 rows over the whole body) that is not an insect, it is bubble wrap:
+// one scale, perfectly periodic, exactly the failure the bark rib grid
+// had. And it fights the mesh — the ant is built from smooth low-poly
+// lobes, so a plate pattern drawn in the texture never lines up with the
+// silhouette and reads as a printed fabric stretched over the body.
+//
+// v2 gives up on drawing the plates. A real ant's segmentation is a
+// property of its *body*, not of its cuticle finish, so it belongs to the
+// mesh (a darker vertex-colour band per gaster tergite — see the request
+// to Atta in design/ambiance-prologue.md). What the texture carries
+// instead is the finish, which is what makes chitin read as chitin:
+//
+//   - punctation: dense, irregular, shallow pits with a lit upper-left
+//     lip, ~0.16 world units each at worldPerTile 4 — fine enough to
+//     dissolve into a matte sheen at combat distance, present enough to
+//     kill the "orange plastic" read at close camera;
+//   - hair sockets: sparser, darker pinpricks;
+//   - broad sheen: two low-frequency diagonal bands of warmer, lighter
+//     cuticle, the painted equivalent of a specular sweep, so the body is
+//     never one flat value across a lobe.
+//
+// With no repeating motif left, the tile boundary has nothing to line up
+// on, which makes the density far less critical than it was for v1.
 // ---------------------------------------------------------------------
 
 function generateChitin() {
   const W = 128, H = 128;
-  const COLS = 5, ROWS = 8; // ROWS even so the half-row offset still tiles in v
-  const fine = tileableNoise(80, 80, 42);
-  const broad = tileableNoise(3, 4, 43);
-  const wob = tileableNoise(6, 6, 46);
-  const pit = fleckMask(32, 44, 0.28, 0.18);
+  const punct = warped(cellular(24, 24, 41), 0.012, 42);
+  const sheen = tileableNoise(3, 2, 43);
+  const blotch = tileableNoise(6, 5, 44);
+  const fine = tileableNoise(96, 96, 45);
+  const socket = fleckMask(16, 46, 0.09, 0.16);
 
   writeTexture('chitin', 'albedo', W, H, (u, v) => {
-    const uu = u + (wob(u, v) - 0.5) * 0.05;
-    const gy = v * ROWS, ry = Math.floor(gy), fy = gy - ry;
-    const gx = uu * COLS + (ry % 2) * 0.5, rx = Math.floor(gx), fx = gx - rx;
-    const ex = (fx - 0.5) / 0.54, ey = (fy - 0.50) / 0.56;
-    const d = Math.hypot(ex, ey);
-    const id = hash2(wrap(rx, COLS), wrap(ry, ROWS), 45);
-
+    // Diagonal sheen: a slow sweep across the tile plus a broad blotch
+    // pass, so no lobe of the body is ever one flat value.
+    // u + v, not 0.5u + 0.5v: tileableNoise is periodic with period 1 in
+    // each argument, so only an integer coefficient on u keeps the diagonal
+    // sweep continuous across the tile seam (a 0.5 coefficient measured 1.69x
+    // the mean column step at the seam, i.e. a visible vertical join).
+    const sw = sheen(u + v, v);
     let col = tri(CHIT_DK, CHIT_MD, CHIT_LT, clamp01(
-      (0.60 - ey * 0.50) + (id - 0.5) * 0.34 + (broad(u, v) - 0.5) * 0.28
-      + (fine(u, v) - 0.5) * 0.10));
+      0.56 + (sw - 0.5) * 0.60 + (blotch(u, v) - 0.5) * 0.30
+      + (fine(u, v) - 0.5) * 0.08));
 
-    const seam = 1 - Math.abs(d - 1.0) / 0.18;
-    if (seam > 0) col = mixRGB(col, darken(CHIT_DK, 0.55), smoothstep(clamp01(seam)) * 0.72);
-    const lip = 1 - Math.abs(d - 0.78) / 0.14;
-    if (lip > 0 && ey < 0.10) col = mixRGB(col, CHIT_HI, smoothstep(clamp01(lip)) * 0.45);
-    if (d > 1.10) col = mixRGB(col, darken(CHIT_DK, 0.45), 0.45);
+    // Punctation: a shallow pit, lit lip on the light side, dark contact
+    // on the other — the same two strokes as every other shape in the set.
+    const p = punct(u, v);
+    const pr = 0.30 + 0.16 * p.id;
+    if (p.d < pr) {
+      const t = smoothstep(clamp01((1 - p.d / pr) / 0.7));
+      const lit = facetLight(p.dx, p.dy);
+      col = mixRGB(col, darken(CHIT_DK, 0.25), t * clamp01(0.30 - lit * 0.55) * 0.85);
+      col = mixRGB(col, CHIT_HI, t * clamp01(lit - 0.15) * 0.34);
+    }
 
-    const p = pit(u, v);
-    if (p > 0) col = mixRGB(col, darken(CHIT_DK, 0.20), p * 0.28);
+    const s = socket(u, v);
+    if (s > 0) col = mixRGB(col, darken(CHIT_DK, 0.55), s * 0.55);
     return col;
   });
 }
@@ -540,42 +630,79 @@ function generateMushroomCap() {
 }
 
 // ---------------------------------------------------------------------
-// bark_albedo — regenerated. v1 was vertical noise streaks; this is
-// vertical *ridges*: each with a lit left flank, a crest, and a hard dark
-// groove where it meets the next one. The cracks that break the ridges up
-// use anisotropic cells (2 wide x 7 tall) so their boundaries run mostly
-// horizontally — an isotropic crack field cuts the ridges in every
-// direction and the trunk comes out looking like wickerwork.
+// bark_albedo — v3, plates instead of ribs.
+//
+// v2 was a strict grid of RIDGES=9 sine ribs plus a `grain` noise whose
+// axes were swapped relative to its own comment (`tileableNoise(20, 90)`
+// makes features 1/20 wide and 1/90 tall, i.e. *horizontal* streaks, not
+// grain running along the trunk). A regular vertical rib crossed by
+// horizontal banding is corrugated cardboard, and that is exactly how it
+// read on review.
+//
+// Real bark has no period: it is irregular plates at several scales at
+// once, split by a fissure network that forks and merges. So it is built
+// here the way tunnel-dirt's clods are built — the one texture of the set
+// that was validated — but with the cells stretched along the trunk:
+//
+//   - major plates: cellular(5, 3), heavily warped. 5 cells across x 3 down
+//     means each plate is 0.20 wide and 0.33 tall, so plates are elongated
+//     along the trunk without a single straight edge anywhere.
+//   - sub-plates: cellular(9, 7) at ~half the fissure depth, so each major
+//     plate is itself broken up. This is the "multi-scale" part: one scale
+//     alone always reads as a pattern, whatever its shape.
+//   - checking: cellular(19, 13), shallow, the surface crazing.
+//
+// Each plate carries facetLight() across it (lit lip on the light side of
+// its rim, dark contact on the other) — the same two strokes as the
+// pebbles in tunnel-dirt. Fibre is a *narrow, tall* noise this time
+// (tileableNoise(46, 6)), and it is modulated per plate so the fibre stops
+// at each fissure instead of running the full height of the texture, which
+// is the other half of what made v2 look extruded.
+//
+// No knots. A knot is a one-off accident and this texture tiles: a knot
+// would repeat on a regular lattice all over the trunk, which reads far
+// worse than no knot at all. Knots belong to geometry or to a decal.
 // ---------------------------------------------------------------------
 
 function generateBark() {
   const W = 128, H = 128;
-  const wobbleN = tileableNoise(3, 7, 5);
-  const grain = tileableNoise(20, 90, 3); // grain runs along the trunk
-  const fine = tileableNoise(80, 80, 6);
-  const crack = warped(cellular(2, 7, 7), 0.06, 9);
-  const moss = fleckMask(16, 4, 0.14, 0.30);
-  const RIDGES = 9;
+  const plate = warped(cellular(6, 2, 71), 0.085, 72);
+  const sub = warped(cellular(11, 5, 73), 0.055, 74);
+  const check = warped(cellular(21, 11, 75), 0.035, 76);
+  const fibre = tileableNoise(46, 6, 77);  // narrow and tall: runs along the trunk
+  const broad = tileableNoise(2, 3, 78);
+  const fine = tileableNoise(90, 90, 79);
+  const moss = fleckMask(16, 80, 0.16, 0.30);
 
   writeTexture('bark', 'albedo', W, H, (u, v) => {
-    const g = (u + (wobbleN(u, v) - 0.5) * 0.07) * RIDGES;
-    const rf = g - Math.floor(g);
-    const id = hash2(wrap(Math.floor(g), RIDGES), 0, 8);
-    const prof = Math.sin(rf * Math.PI); // 0 in the grooves, 1 on the crest
+    const P = plate(u, v), S = sub(u, v), C = check(u, v);
+    const pl = facetLight(P.dx, P.dy), sl = facetLight(S.dx, S.dy);
+
+    // Fibre is keyed to the plate id, so neighbouring plates do not share
+    // a phase and the streaks cannot line up across a fissure.
+    const fib = (fibre(u + P.id * 0.37, v) - 0.5);
 
     let col = tri(BARK_DK, BARK_MD, BARK_LT, clamp01(
-      prof * 0.52 + (1 - rf) * 0.26 + (id - 0.5) * 0.26 + (grain(u, v) - 0.5) * 0.26));
+      0.51 + (P.id - 0.5) * 0.38 + (S.id - 0.5) * 0.20
+      + pl * 0.26 + sl * 0.12
+      + (broad(u, v) - 0.5) * 0.18 + fib * 0.34));
 
-    const groove = Math.min(
-      smoothstep(clamp01(1 - rf / 0.11)) + smoothstep(clamp01(1 - (1 - rf) / 0.11)), 1);
-    col = mixRGB(col, darken(BARK_DK, 0.45), groove * 0.65);
+    // Bevel each major plate before cutting the fissures, so the crack
+    // itself stays the darkest thing and the lip beside it the lightest.
+    const nearMaj = smoothstep(clamp01((0.30 - P.edge) / 0.26));
+    if (pl > 0) col = mixRGB(col, BARK_LT, nearMaj * pl * 0.34);
+    else col = mixRGB(col, darken(BARK_DK, 0.50), nearMaj * -pl * 0.44);
 
-    // sparse horizontal breaks
-    const ck = 1 - smoothstep(clamp01(crack(u, v).edge / 0.09));
-    col = mixRGB(col, darken(BARK_DK, 0.35), ck * 0.35);
+    const fMaj = 1 - smoothstep(clamp01(P.edge / 0.16));
+    const fSub = (1 - smoothstep(clamp01(S.edge / 0.11))) * 0.60;
+    const fChk = (1 - smoothstep(clamp01(C.edge / 0.07))) * 0.30;
+    const fis = clamp01(Math.max(fMaj, Math.max(fSub, fChk)));
+    col = mixRGB(col, darken(BARK_DK, 0.62), fis * 0.88);
 
-    const mm = moss(u, v) * clamp01(1 - prof * 1.4);
-    if (mm > 0) col = mixRGB(col, tri(MOSS_DK, MOSS_MD, MOSS_LT, 0.45), mm * 0.6);
+    // Moss lives in the fissures, never on the crests — the same "moss
+    // climbs into the hollows" idiom the rocks and the midden already use.
+    const mm = moss(u, v) * fis;
+    if (mm > 0) col = mixRGB(col, tri(MOSS_DK, MOSS_MD, MOSS_LT, 0.42), mm * 0.70);
 
     const n = (fine(u, v) - 0.5) * 12;
     return [col[0] + n, col[1] + n, col[2] + n];
@@ -628,6 +755,7 @@ function generateTunnelDirt() {
 
 console.log('Generating procedural textures ->', TEXTURES_DIR);
 generateRamps();
+generateSky();
 generateLawnSoil();
 generateTunnelDirt();
 generateStone();

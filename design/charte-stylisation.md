@@ -2,6 +2,8 @@
 
 Réponse au ticket [#25](https://github.com/splatch17/MYRMIDIA/issues/25). Cible de rendu actée avec le porteur du projet : **stylisé façon World of Warcraft, à notre manière** — texture peinte à la main lisible avant réalisme, silhouettes fortes, couleur qui porte l'information.
 
+> **Prolongée par [`design/ambiance-prologue.md`](ambiance-prologue.md)** (ticket #2, round suivant) : ambiance du prologue reine-seule, bascule à la fondation, langage du choix de site, perspective atmosphérique du lointain. Ce document-ci reste la référence pour la pelouse « colonie fondée » et pour le nid ; trois points y sont amendés — `bark` v3 et `chitin` v2 (§5a/§5b du nouveau document) remplacent les versions décrites en §5 ci-dessous, et la recommandation de pack CC0 pour l'écorce en §6 est retirée.
+
 Ce document se pose **au-dessus** de `design/pipeline-textures.md` (convention de nommage, budget 128×128, encodeur PNG maison, pipeline couleur Three.js) et ne le refait pas. Ancrage palette : README racine — `#E0A752` chitine · `#8FAE5E` mousse · `#E07356` rouille · `#E6B558` miel · `#9DB0D8` soie · `#C497D9` spore.
 
 ---
