@@ -69,7 +69,7 @@ Liens de playtest mis à jour à chaque round de développement — voir les iss
 
 | Prototype | Lien | Statut |
 |---|---|---|
-| Nouveau moteur (Three.js/Vite, `game/`) | [tester](https://raw.githack.com/splatch17/Myrmidia/feature/threejs-migration/game/dist/index.html) | Round 3 — intérieur de la fourmilière, reine + lumières locales, grimpe des tiges, caméra dégagée. Branche `feature/threejs-migration`, pas sur `main` |
+| Nouveau moteur (Three.js/Vite, `game/`) | [tester](https://raw.githack.com/splatch17/Myrmidia/feature/threejs-migration/game/dist/index.html) | **Round 5** — on joue la reine fondatrice, seule dehors : carte de surface écrite à la main (relief, rivière, montagnes au loin), textures peintes sur tout le monde, et une lecture permanente de ce que vaut le sol sous ses pattes. Le nid et la grimpe des tiges sont toujours là. Branche `feature/threejs-migration`, pas sur `main` — voir [PROGRESS.md](PROGRESS.md) |
 | Ancien prototype (fichier HTML unique) | [tester](https://raw.githack.com/splatch17/Myrmidia/main/design/prototypes/sortie-fourmiliere.html) | Référence, `main` |
 
 ## État du projet
