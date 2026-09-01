@@ -450,10 +450,15 @@ function generateLawnSoil() {
     let col = tri(SOIL_DK, SOIL_MD, SOIL_LT,
       smoothstep(clamp01(broad(u, v) * 0.6 + grain(u, v) * 0.4)));
 
-    // big tufts: r ~0.45-0.68 in cell units against a cell of 1, so they
-    // overlap and cover most of the surface
+    // big tufts: r ~0.55-0.75 in cell units against a cell of 1, so they
+    // overlap and cover most of the surface. Widened from 0.46-0.68 after
+    // seeing the texture in engine for the first time: the bare soil left
+    // between tufts formed a continuous dark brown web that read as cracked
+    // dry mud rather than as turf. The soil/moss coverage ratio is
+    // scale-invariant, so this is the right knob whatever worldPerTile ends
+    // up being.
     const c = clump(u, v);
-    const r = 0.46 + 0.22 * c.id;
+    const r = 0.55 + 0.20 * c.id;
     if (c.d < r) {
       const lit = facetLight(c.dx, c.dy);
       const g = tri(MOSS_DK, MOSS_MD, MOSS_LT,
@@ -463,7 +468,7 @@ function generateLawnSoil() {
       // ring all the way round reads as a bubble, not as a plant sitting
       // in soil
       const rim = (1 - Math.abs(c.d - r * 0.90) / (r * 0.18)) * clamp01(0.55 - lit);
-      if (rim > 0) col = mixRGB(col, darken(SOIL_DK, 0.30), smoothstep(clamp01(rim)) * 0.45);
+      if (rim > 0) col = mixRGB(col, darken(SOIL_DK, 0.30), smoothstep(clamp01(rim)) * 0.34);
     }
 
     // small blades catching the light on top of the tufts
