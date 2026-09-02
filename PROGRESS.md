@@ -14,11 +14,25 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ## État au 2026-09-03
 
-**Branche de travail :** `feature/threejs-migration` (rien n'est encore allé
-sur `main`).
+**Branche de travail :** `feature/threejs-migration`.
+**Pull request :** [#23](https://github.com/splatch17/Myrmidia/pull/23), ouverte
+contre `main`, mergeable. **Pas encore mergée** — le merge a été refusé par le
+classificateur d'auto-mode, il faut l'autoriser ou cliquer sur GitHub.
 **Stack :** Three.js 0.169 + Vite 5, projet npm à la racine `game/`.
 **Lien de test :** voir le tableau du `README.md` (build `game/dist/`, servi
 par raw.githack depuis la branche).
+
+### Pour reprendre en trois minutes
+
+```
+git -C <repo> status --short        # 3 rounds sur 3, des agents ont été coupés
+                                    # en pleine session : leur travail est SUR
+                                    # LE DISQUE. L'inventorier avant tout.
+cd game && npx vite build           # doit passer sans erreur
+node scripts/verify-terrain.mjs _s  # 13 vues + perf + mémoire
+```
+Puis **regarder les PNG**. Tous les défauts rattrapés depuis le round 3 l'ont
+été en regardant des images, aucun en relisant du code.
 
 ### Ce qui tourne aujourd'hui
 
@@ -76,6 +90,47 @@ Par ordre de dépendance, pas d'envie.
 4. **#6 — la ponte**, et la chambre qui se peuple (`populateNest()` existe déjà).
 5. **#34 — mode macro**, le nid en coupe vue de côté.
 6. Défauts 2, 3, 5, 6, 7 ci-dessus.
+
+## Où sont les choses
+
+| Je cherche… | C'est dans… |
+|---|---|
+| La hauteur du sol, le relief, la rivière | `world/terrain.js` — `groundY()` est la **seule** source de vérité, dehors et dedans |
+| Où le joueur peut marcher | `containSurface()` (dehors), `containUnderground()` (dedans) |
+| Ce que vaut un sol | `world/terrain.js` `sampleTerrain()` → `player/siteQuality.js` traduit en verdict de jeu |
+| Les ressources | `world/resources.js` (données + mesh), `player/harvest.js` (ce qu'on en fait) |
+| Creuser le nid | `world/founding.js` — `canFoundAt` / `foundNest` / `populateNest` |
+| Le ciel, le soleil, la bascule prologue→colonie | `world/sun.js` (`RIG_PROLOGUE`, `RIG_FOUNDED`, `setFoundedMix`) |
+| Les tailles/vitesses de la fourmi | `player/avatar.js` — un second corps = une entrée de plus, pas un contrôleur |
+| Les textures | `world/texturing.js` (triplanaire), `scripts/generate-procedural-textures.mjs` (génération) |
+| L'éclairage du nid | `world/lighting.js` — `applyNestShading()` s'applique à toute la scène depuis `main.js` |
+| Le contrat monde ↔ gameplay | `design/api-monde-gameplay.md` — **fait autorité, aucun agent ne le modifie** |
+
+---
+
+## Pièges qui ont déjà coûté du temps
+
+Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
+
+1. **`tex.colorSpace = THREE.SRGBColorSpace`** sur tout albédo. L'oubli délave
+   le rendu en silence. Rampes toon et `_orm`/`_normal` en `NoColorSpace`.
+2. **Chromium sans `--use-gl=angle --use-angle=d3d11`** mesure le rasteriseur
+   logiciel. Le cap `Math.min(dt, 0.05)` fait ramper le temps de jeu et les
+   harnais expirent pour rien.
+3. **`onBeforeCompile` compose, ne remplace jamais**, et toute injection pose
+   son `material.userData.shaderTag` — sinon deux matériaux aux mêmes
+   paramètres partagent un programme et l'un perd son injection.
+4. **Les backticks dans un commentaire GLSL** terminent le template literal JS.
+   Erreur de parsing à des lignes de distance.
+5. **Une normale substituée dans le vertex shader** (l'eau) ne survit pas à une
+   orientation de face inversée : `faceDirection` la retourne. C'est ce qui
+   éclairait le dessous de la rivière.
+6. **Un chiffre de DA écrit pour une échelle humaine** appliqué à l'échelle de
+   la fourmi. Le brouillard du prologue (40 unités = 2 longueurs de corps) et
+   la largeur des brins (calibrée sur l'ouvrière, jamais suivie quand l'avatar
+   est devenu une reine 2,2×) sont le même bug deux fois.
+
+---
 
 ## Comment on travaille
 
