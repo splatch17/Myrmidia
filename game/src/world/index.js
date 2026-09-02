@@ -12,7 +12,14 @@ import { createGrassField } from './grass.js';
 import { buildTree, TREE, treeTrunkRadius, walkBranch as treeWalkBranch } from './tree.js';
 import { buildNestDecor, MUSHROOMS, ROCKS, mushroomCollideR } from './nestDecor.js';
 import { buildQueen } from './queen.js';
-import { addLocalLight, updateLocalLights, applyNestShading, daylightAt } from './lighting.js';
+import { addLocalLight, updateLocalLights, applyNestShading, daylightAt, pitFactorAt } from './lighting.js';
+import { shadeAt } from './shade.js';
+import { RESOURCE_NODES, harvestNode, nodesNear, buildResources } from './resources.js';
+import {
+  initFounding, canFoundAt, foundNest, nestOrigin, getFoundedNest,
+  populateNest, sealNest, updateFounding,
+} from './founding.js';
+import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
 
 // Re-exported so Cataglyphis can pull everything needed for collision/climb
 // from one module without reaching into world/underground.js, world/tree.js,
@@ -44,6 +51,26 @@ import { addLocalLight, updateLocalLights, applyNestShading, daylightAt } from '
 //                           lands on the waterline.
 //   LAWN_BOUNDS             playable area   TERRAIN_BOUNDS  meshed area
 //   WATER_Y, RIVER          water height and the river's shape constants
+//
+// ROUND 6 — the three halves of the contract this world now holds up
+// (design/api-monde-gameplay.md, which is authoritative and which nothing
+// here renames):
+//   §2 shadeAt(x, z)          0..1, 1 = fully shaded. Analytic; follows the
+//                             sun currently in the sky (world/sun.js).
+//   §3 RESOURCE_NODES         live array; a spent node stays in it with
+//                             amount 0. harvestNode(id, qty) -> amount
+//                             actually removed, and updates the visual.
+//                             nodesNear() is a convenience on top, not part
+//                             of the contract.
+//   §4 canFoundAt / foundNest / nestOrigin
+//                             dig the first chamber at run time. The world
+//                             never calls the player; the player calls this.
+//                             populateNest(n) / sealNest() are the #12 half
+//                             (empty chamber that fills up) and are an
+//                             addition to the contract — see the report.
+// RIG_PROLOGUE/RIG_FOUNDED/sunDir/foundedMix/setFoundedMix are the sky rig
+// main.js drives and shadeAt() reads, kept in one place so the light the
+// player is told about and the light drawn on screen cannot diverge.
 export {
   containUnderground, getUndergroundRadius, getWallHoleAt, getRoomBranches, profileR,
   groundY, groundNormal, groundSlope, soilAt, sampleTerrain, waterDepthAt,
@@ -51,7 +78,11 @@ export {
   TREE, treeTrunkRadius, treeWalkBranch,
   QUEEN, START, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R,
   LAWN_BOUNDS, TERRAIN_BOUNDS, WATER_Y, RIVER,
-  MUSHROOMS, ROCKS, mushroomCollideR, applyNestShading, daylightAt,
+  MUSHROOMS, ROCKS, mushroomCollideR, applyNestShading, daylightAt, pitFactorAt,
+  shadeAt,
+  RESOURCE_NODES, harvestNode, nodesNear,
+  canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
+  RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
 
 /**
@@ -92,13 +123,25 @@ export function createWorld() {
   const tree = buildTree();
   group.add(tree.group);
 
+  const resources = buildResources();
+  group.add(resources.group);
+
+  /* Anything dug later (foundNest) hangs here, so a run-time nest is a child
+     of the world like everything else and nothing has to be rebuilt for it
+     to exist. */
+  const dug = new THREE.Group();
+  dug.name = 'dug';
+  group.add(dug);
+  initFounding(dug);
+
   function update(dt, elapsed, camera) {
     grass.update(dt, elapsed);
+    updateFounding(dt);
     queen.update(elapsed);
     water.update(elapsed);
     if (camera) {
       tree.update(camera);
-      horizon.update(camera);
+      horizon.update(camera, foundedMix());
       updateLocalLights(camera.position);
     }
   }
@@ -107,6 +150,7 @@ export function createWorld() {
     group,
     update,
     grassFootprints: grass.footprints,
+    resources: resources.nodes,
     rooms: underground.rooms,
     doorLights: underground.doorLights,
     mushrooms: decor.mushrooms,

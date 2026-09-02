@@ -471,13 +471,22 @@ function ridgeHeight(a, seed, rough) {
   return clamp(0.30 + (n1 - 0.5) * 1.5 + (n2 - 0.5) * rough + (n3 - 0.5) * rough * 0.45, 0.05, 1.0);
 }
 
-export function buildHorizon(fogColor = '#AFC8D8') {
-  const haze = new THREE.Color(fogColor);
+/* Two haze colours, not one: the aerial perspective is baked into the vertex
+   colours (the curtains are unfogged on purpose — see above), so when the
+   sky commutes from the prologue's violet-grey to the founded blue, a single
+   baked haze leaves the mountains hanging in front of a sky they no longer
+   belong to. Both sets are baked once and cross-faded on the CPU while the
+   transition runs: ~1700 float lerps a frame for six seconds, against a
+   shader permutation and a second program for the same result. */
+export function buildHorizon(hazeProlog = '#8B8399', hazeFounded = '#AFC8D8') {
+  const hazeA = new THREE.Color(hazeProlog), hazeB = new THREE.Color(hazeFounded);
   const group = new THREE.Group();
   group.name = 'horizon';
+  const layers = [];
 
   for (const L of HORIZON_LAYERS) {
     const M = new MeshBuilder();
+    const altColors = [];       // the same vertices, hazed for the other sky
     const tint = new THREE.Color(L.tint);
     const top = [], mid = [], bot = [];
     for (let i = 0; i <= L.segs; i++) {
@@ -492,11 +501,16 @@ export function buildHorizon(fogColor = '#AFC8D8') {
       const hPrev = ridgeHeight(a - 0.04, L.seed, L.rough);
       const face = clamp(0.5 + (hN - hPrev) * 6, 0, 1);
       const lit = mixColor(tint.clone().multiplyScalar(0.72), tint.clone().multiplyScalar(1.16), face);
-      const peakC = mixColor(lit, haze, L.haze * 0.75);
-      const footC = mixColor(lit.clone().multiplyScalar(0.85), haze, Math.min(1, L.haze + 0.22));
-      top.push(M.addVertex(cx, y, cz, peakC.toArray()));
-      mid.push(M.addVertex(cx, lerp(L.base, y, 0.45), cz, mixColor(peakC, footC, 0.6).toArray()));
-      bot.push(M.addVertex(cx, L.base, cz, footC.toArray()));
+      const hazed = (h) => {
+        const peak = mixColor(lit, h, L.haze * 0.75);
+        const foot = mixColor(lit.clone().multiplyScalar(0.85), h, Math.min(1, L.haze + 0.22));
+        return [peak, mixColor(peak, foot, 0.6), foot];
+      };
+      const A = hazed(hazeA), B = hazed(hazeB);
+      top.push(M.addVertex(cx, y, cz, A[0].toArray()));
+      mid.push(M.addVertex(cx, lerp(L.base, y, 0.45), cz, A[1].toArray()));
+      bot.push(M.addVertex(cx, L.base, cz, A[2].toArray()));
+      for (const c of B) altColors.push(c.r, c.g, c.b);
     }
     for (let i = 0; i < L.segs; i++) {
       M.addQuad(top[i], top[i + 1], mid[i + 1], mid[i]);
@@ -509,10 +523,21 @@ export function buildHorizon(fogColor = '#AFC8D8') {
     mesh.renderOrder = -1000;
     mesh.frustumCulled = false;
     group.add(mesh);
+    layers.push({ mesh, base: mesh.geometry.attributes.color.array.slice(), alt: new Float32Array(altColors) });
   }
 
+  let hazedAt = -1;
   return {
     group,
-    update(camera) { group.position.set(camera.position.x, 0, camera.position.z); },
+    update(camera, founded = 0) {
+      group.position.set(camera.position.x, 0, camera.position.z);
+      if (Math.abs(founded - hazedAt) < 0.002) return;
+      hazedAt = founded;
+      for (const L of layers) {
+        const a = L.mesh.geometry.attributes.color;
+        for (let i = 0; i < a.array.length; i++) a.array[i] = L.base[i] + (L.alt[i] - L.base[i]) * founded;
+        a.needsUpdate = true;
+      }
+    },
   };
 }

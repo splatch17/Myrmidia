@@ -154,9 +154,19 @@ function injectTriplanar(shader, texUniforms) {
 
   shader.vertexShader = shader.vertexShader
     .replace('#include <common>', 'varying vec3 vTexWorld;\nvarying vec3 vTexNormal;\n#include <common>')
+    /* instanceMatrix applied by hand — see the same note in
+       world/lighting.js: <project_vertex> leaves `transformed` in instance
+       space, so without this every instance would sample the texture at the
+       same world position. */
     .replace('#include <project_vertex>', `#include <project_vertex>
-      vTexWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
-      vTexNormal = mat3(modelMatrix) * objectNormal;`);
+      vec4 texLocal = vec4(transformed, 1.0);
+      vec3 texNrm = objectNormal;
+      #ifdef USE_INSTANCING
+        texLocal = instanceMatrix * texLocal;
+        texNrm = mat3(instanceMatrix) * texNrm;
+      #endif
+      vTexWorld = (modelMatrix * texLocal).xyz;
+      vTexNormal = mat3(modelMatrix) * texNrm;`);
 
   shader.fragmentShader = shader.fragmentShader
     .replace('#include <common>', TRIPLANAR_PARS + '\n#include <common>')

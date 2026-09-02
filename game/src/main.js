@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import { createRenderer, createCamera } from './core/renderer.js';
-import { createWorld, containUnderground, profileR, groundY, applyNestShading, TREE } from './world/index.js';
+import {
+  createWorld, containUnderground, profileR, groundY, applyNestShading, TREE,
+  RIG_PROLOGUE, RIG_FOUNDED, sunDir, setFoundedMix, foundedMix,
+  nestOrigin, canFoundAt, foundNest, populateNest, sealNest, getFoundedNest,
+  pitFactorAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
+} from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
 
@@ -29,10 +34,32 @@ scene.fog = new THREE.Fog(0x1a1610, 40, 220);
 const hemi = new THREE.HemisphereLight(0xbfd8f5, 0x6e6a38, 0.85);
 scene.add(hemi);
 
-const HEMI_OUT = { sky: new THREE.Color(0xbfd8f5), ground: new THREE.Color(0x6e6a38), intensity: 0.85 };
 const HEMI_IN = { sky: new THREE.Color(0x4a5c86), ground: new THREE.Color(0x241f33), intensity: 0.55 };
 
-const sun = new THREE.DirectionalLight(0xffd98a, 2.5);
+/* The outdoor end of every commutation below is itself commuted, by a second
+   scalar: `founded`, 0 during the prologue (queen alone, end of dusk) and 1
+   once the colony is dug — design/ambiance-prologue.md §2a, which asks for
+   exactly this and no more ("toute la bascule vit dans huit nombres du
+   rig"). The *nest* endpoints (HEMI_IN / FOG_IN / SKY_IN) do not move: the
+   nest changes by lighting up, not by changing rig.
+
+   The two rigs themselves live in world/sun.js, not here, because
+   world/shade.js has to answer shadeAt() against the same sun the renderer
+   is drawing — a HUD reasoning about a sky the player cannot see is the
+   failure design/api-monde-gameplay.md exists to prevent. */
+const P = RIG_PROLOGUE, F = RIG_FOUNDED;
+const outSky = new THREE.Color(), outGround = new THREE.Color();
+const outFog = new THREE.Color(), outBg = new THREE.Color();
+const cP = {
+  sky: new THREE.Color(P.hemiSky), ground: new THREE.Color(P.hemiGround),
+  fog: new THREE.Color(P.fog), bg: new THREE.Color(P.sky), sun: new THREE.Color(P.sunColor),
+};
+const cF = {
+  sky: new THREE.Color(F.hemiSky), ground: new THREE.Color(F.hemiGround),
+  fog: new THREE.Color(F.fog), bg: new THREE.Color(F.sky), sun: new THREE.Color(F.sunColor),
+};
+
+const sun = new THREE.DirectionalLight(P.sunColor, P.sunIntensity);
 sun.castShadow = true;
 /* The shadow box FOLLOWS THE CAMERA rather than sitting on the world origin.
    The map grew to ~550 x 320 units for #31; a box big enough to cover it from
@@ -45,7 +72,6 @@ sun.castShadow = true;
    The anchor is snapped to a texel step, which is what stops the shadow edges
    from crawling as the camera moves (an unsnapped box re-rasterises the same
    silhouette against a slightly different grid every frame). */
-const SUN_DIR = new THREE.Vector3(30, 45, 20).normalize();
 const SHADOW_HALF = 110, SHADOW_MAP = 2048, SUN_DIST = 220;
 const SHADOW_TEXEL = (2 * SHADOW_HALF) / SHADOW_MAP;
 sun.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP);
@@ -62,8 +88,9 @@ scene.add(sun.target);
 function trackSun(camera) {
   const sx = Math.round(camera.position.x / SHADOW_TEXEL) * SHADOW_TEXEL;
   const sz = Math.round(camera.position.z / SHADOW_TEXEL) * SHADOW_TEXEL;
+  const d = sunDir();
   sun.target.position.set(sx, 0, sz);
-  sun.position.set(sx + SUN_DIR.x * SUN_DIST, SUN_DIR.y * SUN_DIST, sz + SUN_DIR.z * SUN_DIST);
+  sun.position.set(sx + d[0] * SUN_DIST, d[1] * SUN_DIST, sz + d[2] * SUN_DIST);
 }
 
 /* Fog/exposure are commuted between "inside the nest" and "out on the lawn"
@@ -71,8 +98,8 @@ function trackSun(camera) {
    exposure in its frame loop): outdoors a warm haze that recedes for 400
    units, indoors a near-black one that closes in at 120 so the far end of the
    gallery falls away into darkness instead of staying a uniform brown wash. */
-const FOG_IN = new THREE.Color(0x191a2e), FOG_OUT = new THREE.Color(0xafc8d8);
-const SKY_IN = new THREE.Color(0x0c0b16), SKY_OUT = new THREE.Color(0x9cc6e4);
+const FOG_IN = new THREE.Color(0x191a2e);
+const SKY_IN = new THREE.Color(0x0c0b16);
 
 const world = createWorld();
 scene.add(world.group);
@@ -105,6 +132,16 @@ window.__contain = containUnderground;
 window.__profileR = profileR;
 window.__groundY = groundY;
 window.__tree = TREE;
+
+/* Round 6 seam for scripts/verify-round6.mjs. The harness founds a nest by
+   calling the world directly, with no controller and no ant involved, which
+   is the point of the dependency direction in the contract (§5): if this
+   needed the player to work, the world could not be tested without one. */
+window.__world6 = {
+  shadeAt, canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
+  harvestNode, get nodes() { return RESOURCE_NODES; }, foundedMix, sunDir,
+  waterDepthAt, distanceToWater,
+};
 
 renderer.setResizeCallback((aspect) => {
   camera.aspect = aspect;
@@ -165,7 +202,24 @@ function nestnessAt(x, y, z) {
    the two nestness values keeps the eye's early transition on the way in and
    refuses to put the lawn under nest fog on the way out. */
 function nestness(cam, ant) {
-  return Math.min(nestnessAt(cam.x, cam.y, cam.z), nestnessAt(ant.x, ant.y, ant.z));
+  const tube = Math.min(nestnessAt(cam.x, cam.y, cam.z), nestnessAt(ant.x, ant.y, ant.z));
+  /* A nest dug at run time (world/founding.js) is somewhere on the lawn, so
+     the gates above know nothing about it: without this the freshly dug
+     chamber is a hole in the ground with the meadow's own haze in it. Same
+     "whichever is more outdoors" rule as the tube. */
+  const pit = Math.min(pitFactorAt(cam.x, cam.y, cam.z), pitFactorAt(ant.x, ant.y, ant.z));
+  return Math.max(tube, pit);
+}
+
+/* 0 = prologue, 1 = founded, animated once over FOUND_FADE seconds when the
+   nest appears. Read from the world rather than set by a gameplay call, so
+   this file keeps not knowing who founded or why. */
+const FOUND_FADE = 6.0;
+let foundedAt = null;
+function advanceFoundedMix() {
+  const now = performance.now() / 1000;
+  if (foundedAt === null && nestOrigin()) foundedAt = now;
+  if (foundedAt !== null) setFoundedMix(clamp((now - foundedAt) / FOUND_FADE, 0, 1));
 }
 
 /* Fog / sky / exposure / hemisphere fill, commuted between "in the nest" and
@@ -173,15 +227,24 @@ function nestness(cam, ant) {
    driver can render a free-flown camera through exactly the same environment
    the game uses, instead of a differently-lit approximation of it. */
 function applyEnvironment() {
+  advanceFoundedMix();
+  const f = foundedMix();
+  outSky.copy(cP.sky).lerp(cF.sky, f);
+  outGround.copy(cP.ground).lerp(cF.ground, f);
+  outFog.copy(cP.fog).lerp(cF.fog, f);
+  outBg.copy(cP.bg).lerp(cF.bg, f);
+  sun.color.copy(cP.sun).lerp(cF.sun, f);
+  sun.intensity = lerp(P.sunIntensity, F.sunIntensity, f);
+
   const outside = 1 - nestness(camera.position, player.ant);
-  scene.fog.color.copy(FOG_IN).lerp(FOG_OUT, outside);
-  scene.fog.near = lerp(6, 90, outside);
-  scene.fog.far = lerp(135, 420, outside);
-  scene.background.copy(SKY_IN).lerp(SKY_OUT, outside);
-  renderer.toneMappingExposure = lerp(1.28, 1.15, outside);
-  hemi.color.copy(HEMI_IN.sky).lerp(HEMI_OUT.sky, outside);
-  hemi.groundColor.copy(HEMI_IN.ground).lerp(HEMI_OUT.ground, outside);
-  hemi.intensity = lerp(HEMI_IN.intensity, HEMI_OUT.intensity, outside);
+  scene.fog.color.copy(FOG_IN).lerp(outFog, outside);
+  scene.fog.near = lerp(6, lerp(P.fogNear, F.fogNear, f), outside);
+  scene.fog.far = lerp(135, lerp(P.fogFar, F.fogFar, f), outside);
+  scene.background.copy(SKY_IN).lerp(outBg, outside);
+  renderer.toneMappingExposure = lerp(1.28, lerp(P.exposure, F.exposure, f), outside);
+  hemi.color.copy(HEMI_IN.sky).lerp(outSky, outside);
+  hemi.groundColor.copy(HEMI_IN.ground).lerp(outGround, outside);
+  hemi.intensity = lerp(HEMI_IN.intensity, lerp(P.hemiIntensity, F.hemiIntensity, f), outside);
   trackSun(camera);
 }
 

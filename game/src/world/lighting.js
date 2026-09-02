@@ -38,9 +38,14 @@ const AMBIENT_FLOOR = 0.30;
 
 const ALL_LIGHTS = [];
 
-/** p: [x,y,z] world position. c: [r,g,b] radiance (may exceed 1). */
+/** p: [x,y,z] world position. c: [r,g,b] radiance (may exceed 1).
+ *  Returns the entry, so a caller can keep it and change its radiance later
+ *  — a lamp that is not lit yet is a lamp with c = 0, because this pool is a
+ *  flat array with no removal (world/founding.js relies on both). */
 export function addLocalLight(p, c) {
-  ALL_LIGHTS.push({ p: [p[0], p[1], p[2]], c: [c[0], c[1], c[2]], _d: 0 });
+  const L = { p: [p[0], p[1], p[2]], c: [c[0], c[1], c[2]], _d: 0 };
+  ALL_LIGHTS.push(L);
+  return L;
 }
 
 export function getLocalLights() { return ALL_LIGHTS; }
@@ -51,10 +56,37 @@ const lightCol = new Float32Array(LIGHT_SLOTS * 3);
 /* One uniform object per name, shared by every patched material: assigning
    these same {value} objects into each compiled shader's uniform map means
    writing the arrays in place below updates all of them at once. */
+/* The run-time-dug nest (world/founding.js). It sits at z > 0, which the
+   daylight falloff below calls "outdoors" — without a term for it, a chamber
+   twenty units under the meadow is lit as if it were standing in the meadow.
+   Packed as two vec4 rather than five scalars so the whole thing is two
+   uniform writes and no extra program permutation:
+     uPitA = (x, rim y, z, radius)   uPitB = (on, depth, 0, 0)          */
+const pitA = new THREE.Vector4(0, 0, 0, 1);
+const pitB = new THREE.Vector4(0, 1, 0, 0);
+
 const sharedUniforms = {
   uLightPos: { value: lightPos },
   uLightCol: { value: lightCol },
+  uPitA: { value: pitA },
+  uPitB: { value: pitB },
 };
+
+/** Declare (or, with r = 0, clear) the run-time nest cavity. */
+export function setNestPit(x, topY, z, r, depth) {
+  pitA.set(x, topY, z, Math.max(r, 0.001));
+  pitB.set(r > 0 ? 1 : 0, Math.max(depth, 0.001), 0, 0);
+}
+
+/** CPU twin of pitDark() below — main.js commutes its fog with it. */
+export function pitFactorAt(x, y, z) {
+  if (pitB.x < 0.5) return 0;
+  const ss = (t) => { const c = Math.min(1, Math.max(0, t)); return c * c * (3 - 2 * c); };
+  const hd = Math.hypot(x - pitA.x, z - pitA.z);
+  const inside = 1 - ss((hd - pitA.w * 0.9) / (pitA.w * 0.8));
+  const depth = Math.min(1, Math.max(0, (pitA.y - y) / pitB.y));
+  return inside * ss((depth - 0.04) / 0.46);
+}
 
 /** Selects the LIGHT_SLOTS lights nearest to `p` (usually the camera). */
 export function updateLocalLights(p) {
@@ -97,10 +129,20 @@ float nestNoise(vec2 p) {
   float c = nestHash2(i + vec2(0.0, 1.0)), d = nestHash2(i + vec2(1.0, 1.0));
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
+uniform vec4 uPitA;   // (x, rim y, z, radius) of the run-time-dug nest
+uniform vec4 uPitB;   // (on, depth, -, -)
+float nestPitDark(vec3 w) {
+  if (uPitB.x < 0.5) return 1.0;
+  float hd = length(w.xz - uPitA.xz);
+  float inside = 1.0 - smoothstep(uPitA.w * 0.9, uPitA.w * 1.7, hd);
+  float dep = clamp((uPitA.y - w.y) / uPitB.y, 0.0, 1.0);
+  return mix(1.0, 0.10, inside * smoothstep(0.04, 0.50, dep));
+}
 float nestDaylight(vec3 w) {
-  if (w.z >= ${TUNNEL_MOUTH.toFixed(1)}) return 0.82 + 0.18 * nestNoise(w.xz * 0.015);
+  float pit = nestPitDark(w);
+  if (w.z >= ${TUNNEL_MOUTH.toFixed(1)}) return (0.82 + 0.18 * nestNoise(w.xz * 0.015)) * pit;
   float t = clamp((w.z - (${TUNNEL_BACK.toFixed(1)})) / (${(TUNNEL_MOUTH - TUNNEL_BACK).toFixed(1)}), 0.0, 1.0);
-  return 0.12 + 0.88 * pow(t, 1.6);
+  return (0.12 + 0.88 * pow(t, 1.6)) * pit;
 }
 `;
 
@@ -122,8 +164,17 @@ export function applyNestShading(material) {
 
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', 'varying vec3 vNestWorld;\n#include <common>')
-      .replace('#include <project_vertex>',
-        '#include <project_vertex>\n  vNestWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      /* instanceMatrix by hand: Three's <project_vertex> applies it to its
+         own mvPosition and leaves `transformed` in the instance's local
+         space, so modelMatrix alone puts every instance of an InstancedMesh
+         at the same world position — which would light a hundred resource
+         nodes as if they were all piled on the world origin. */
+      .replace('#include <project_vertex>', `#include <project_vertex>
+  vec4 nestLocal = vec4(transformed, 1.0);
+  #ifdef USE_INSTANCING
+    nestLocal = instanceMatrix * nestLocal;
+  #endif
+  vNestWorld = (modelMatrix * nestLocal).xyz;`);
 
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', GLSL_COMMON + '\n#include <common>')
