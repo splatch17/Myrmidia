@@ -12,7 +12,7 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-02
+## État au 2026-09-03
 
 **Branche de travail :** `feature/threejs-migration` (rien n'est encore allé
 sur `main`).
@@ -22,33 +22,32 @@ par raw.githack depuis la branche).
 
 ### Ce qui tourne aujourd'hui
 
-Le jeu s'ouvre **dehors, sur la reine fondatrice seule**, sans nid. Elle
-marche sur une carte écrite à la main (relief, rivière à l'ouest, montagnes au
-loin), et le sol lui répond en permanence : « Site : bon (71/100) » ou
-« Site : impossible — trop près de l'eau ».
+**Le prologue a une boucle, plus seulement un décor.** La reine apparaît seule
+sur la prairie au crépuscule. Elle récolte (maintien de E, ça prend du temps,
+elle **porte** visiblement ce qu'elle a pris), rapporte, dépose — et le premier
+dépôt fixe le site de la colonie. Au seuil atteint, sur un sol creusable, elle
+fonde : la première chambre est creusée **à l'exécution**, à l'endroit choisi.
 
 | Domaine | État |
 |---|---|
-| Carte de surface | Écrite à la main, 398×250 jouables, 552×322 maillés. Aucun aléatoire : chaque relief est une ligne numérotée dans `RELIEF` (terrain.js) |
+| Carte de surface | Écrite à la main, 398×250 jouables, 552×322 maillés, zéro aléatoire |
 | Rivière | Bord ouest, plan d'eau ondulé, berge de sable, Fresnel vers le ciel |
-| Horizon | Deux rideaux de crêtes qui suivent la caméra en x/z, 768 tris |
-| Nid souterrain | Galerie + 3 salles (granary / brood / midden), accessibles |
-| Textures | 7 albédos procéduraux, projection triplanaire (pas d'UV) — 427 Ko de VRAM pour les 6 branchées ; `seed` (64², ~22 Ko) livrée, pas encore branchée |
-| Éclairage | Hémisphère commutée par zone, soleil non commuté, plancher ambiant 0.30 sous terre, ombre 0.107 u/texel qui suit la caméra |
-| Avatar | Reine fondatrice (2.2× une ouvrière), gaster à deux segments qui respire, IK 6 pattes |
-| HUD | 2 lignes de texte brut (qualité du site + invite contextuelle). Pas encore de DA |
-| Perf | 145k tris, 10 programmes, pire image libre 0.73 ms sur ANGLE/D3D11 |
+| Horizon | Deux rideaux de crêtes qui suivent la caméra en x/z |
+| Herbe | 1600 brins, largeur par instance, quille de normale + vrille, pointe qui atteint zéro |
+| Ressources | 3 espèces semées une fois, denses près de l'arbre et dans le creux, aucune dans l'eau |
+| Récolte | Approche → maintien → portage visible → dépôt. Réserve affichée |
+| Fondation | `foundNest()` creuse la 1re chambre au point choisi. L'ancien nid devient l'état « déjà fondé » |
+| Qualité de site | **Les 5 facteurs lisent des données réelles** — le « ? » a disparu du HUD |
+| Ciel | Deux rigs (prologue crépusculaire / colonie fondée) commutés par un scalaire `founded` |
+| Textures | 6 albédos triplanaires + `seed`. `lawn-soil` corrigé, ne vire plus au rouille |
+| Perf | ~153k tris, 13 draw calls, 0 erreur console |
 
 ### Ce qui n'existe pas encore
 
-- **Aucune boucle de jeu.** Pas de récolte, pas de ressources, pas de
-  fondation : on peut juger un site, pas le choisir.
-- Le nid est **construit au démarrage**, pas à l'endroit choisi par le joueur.
 - Pas de mode macro (le nid en coupe, vue de côté).
 - Pas de post-process (bloom, contours).
-- `shadeAt()` et les nœuds de ressources n'existent pas côté monde : deux des
-  cinq facteurs du score de site sont encore des approximations, marquées
-  d'un « ? » dans le HUD plutôt que maquillées.
+- Pas de repop des ressources, pas d'ouvrières, pas de ponte.
+- La bascule visuelle prologue → colonie fondée est câblée mais **jamais vue**.
 
 ---
 
@@ -56,43 +55,36 @@ loin), et le sol lui répond en permanence : « Site : bon (71/100) » ou
 
 | # | Défaut | Gravité |
 |---|---|---|
-| ~~1~~ | ~~La texture `lawn-soil` vire au rouille sur les zones sans mousse~~ — **corrigé** (`f5f9c5a`), vérifié en rejouant les 13 vues : pixels de sol au-delà de R:G 2,10, 4,21 % → 0,25 % au pied du monticule | Fait |
-| 2 | Les brins d'herbe sont larges et raides de près, plus « lames » que végétaux — **spec chiffrée prête** : `design/herbe-brins.md`, à câbler dans `world/grass.js` | DA fait, géométrie à faire |
-| 3 | Vue depuis la bouche du tunnel : la pelouse au-delà reste sous le brouillard du nid (un seul scalaire d'ambiance pour toute la scène) | Connu, structurel |
-| 4 | `movement.js` clampe encore sur une boîte `LAWN_BOUNDS` au lieu d'appeler `containSurface()` — la marge ouest tombe à ~3 unités de la ligne d'eau au pire du méandre | Petit |
-| 5 | Le point d'apparition (20, 110) n'a pas été rejoué depuis que le relief existe — il devrait ressembler à un lieu d'atterrissage, et surtout **pas** être le meilleur sol de la carte | Design |
-
----
+| 1 | **La fondation n'a jamais été vue.** Les captures s'arrêtent à « Réserve : 3/5 » — l'agent a été coupé avant. Le code est là, le moment ne l'est pas | **Bloquant pour la livraison** |
+| 2 | Le rig du prologue livré par la DA (brouillard 40/300, expo 1.02) noyait tout le champ proche. Retouché à l'intégration (95/420, expo 1.12) — la DA doit trancher, sur une capture à hauteur de fourmi | À arbitrer |
+| 3 | La reine reste sombre, presque en silhouette, sur un sol brun. Le soleil rasant du prologue la prend de dos une bonne partie du temps | DA |
+| 4 | `grass.js` a `castShadow = false`. Une pelouse dont les brins ne s'ombrent ni entre eux ni sur le sol reste des décalcomanies quel que soit leur profil | Rendu, prochain grand pas |
+| 5 | Les rayons de grimpe et de collision des tiges ont été divisés par ~2,1 avec l'affinement des brins. Correct en théorie, jamais jugé sur capture | À vérifier |
+| 6 | Le tramage de dissolution proche caméra est très visible sur certains brins | Petit |
+| 7 | Points 4 à 7 de `design/herbe-brins.md` non câblés (courbure, dégradé, pointes sèches, contre-jour, SEGS=9) | Reste à faire |
 
 ## Prochaines étapes
 
 Par ordre de dépendance, pas d'envie.
 
-1. **#29 — boucle de récolte.** Premières ressources ramassables + compteur.
-   C'est le préalable annoncé à la fondation : « c'est une fois qu'on aura
-   collecté les premières ressources qu'on commencera la création de la
-   fourmilière ».
-2. **#11 / #12 — génération du nid à l'exécution**, à l'endroit choisi, avec
-   une chambre de reine qui commence vide et se remplit. Conséquence directe
-   de l'arbitrage §0 : le nid actuel, construit au démarrage, devient l'état
-   « déjà fondé ».
-3. **#33 — fonder la colonie.** L'action qui relie 1 et 2.
-4. **#28 — post-process léger** (bloom sur les émissifs, contours sur les
-   créatures uniquement, ombres adoucies). Cible : 60 fps sur GPU intégré.
-5. **#34 — mode macro**, le nid en coupe vue de côté (fourmilière d'élevage),
-   pas une carte de territoire.
-6. Défauts 2, 4, 5 ci-dessus, à glisser entre deux tickets. Pour le 2 les
-   nombres sont écrits (`design/herbe-brins.md` §9), il ne reste que le
-   câblage.
-7. **Ombres portées de l'herbe.** `grass.js` a `castShadow = false` : c'est le
-   plus gros « tell décalcomanie » qui restera une fois le défaut 2 corrigé.
-   Demande un `customDepthMaterial` répliquant le déplacement de
-   `begin_vertex`.
-
----
+1. **Voir la fondation.** Rejouer la boucle jusqu'au bout et capturer le moment.
+   Tant qu'il n'est pas vu, il n'est pas livré.
+2. **L'ombre portée de l'herbe** (défaut 4) — `customDepthMaterial` répliquant
+   le déplacement de `begin_vertex`. C'est le plus gros gain de rendu restant.
+3. **#28 — post-process léger** : bloom sur les émissifs, contours sur les
+   créatures uniquement, ombres adoucies. Cible 60 fps sur GPU intégré.
+4. **#6 — la ponte**, et la chambre qui se peuple (`populateNest()` existe déjà).
+5. **#34 — mode macro**, le nid en coupe vue de côté.
+6. Défauts 2, 3, 5, 6, 7 ci-dessus.
 
 ## Comment on travaille
 
+- **Le contrat d'interface d'abord.** `design/api-monde-gameplay.md` fixe les
+  noms que `world/**` exporte et que `player/**` consomme, il est écrit avant
+  la distribution et aucun agent ne le modifie. Sans lui, au round 5, les deux
+  moitiés d'une même feature avaient été spécifiées séparément et ne se
+  parlaient pas — sans lever la moindre erreur. Au round 6 les deux agents ont
+  livré sous les mêmes noms sans se consulter.
 - **Trois agents, répertoires disjoints.** Atta → `world/**` + `main.js` +
   `core/**`. Cataglyphis → `player/**`. Cephalotes → `design/**` + le
   générateur de textures + `assets/textures/**`. Ils commitent en local et ne
@@ -119,10 +111,10 @@ Par ordre de dépendance, pas d'envie.
 
 | Tour | Livré | Commits |
 |---|---|---|
-| 5 | Carte de surface écrite à la main, rivière, horizon ; textures branchées ; reine fondatrice jouable ; lecture de la qualité du sol | `dea42af`, `a277ef3` |
-| 6 (DA) | `lawn-soil` v2 (fin du rouille) ; spec chiffrée des brins d'herbe ; langage visuel des ressources et de la fondation ; `seed_albedo` | `f5f9c5a` + ce round |
-| 5 (DA) | Ambiance du prologue (crépuscule, bascule à la fondation), bark v3, chitin v2, dégradés de ciel | `b45ed22`, `28eb5f5` |
-| 4 | Charte de stylisation + 6 textures procédurales ; module triplanaire ; collision avec le décor ; caméra recadrée sous terre | `7033614`, `4fec981`, `5a66a88` |
+| 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |
+| 5 | Carte de surface écrite à la main, rivière, horizon ; textures branchées ; reine fondatrice jouable ; lecture du sol | `dea42af`, `a277ef3` |
+| 5 (DA) | Ambiance du prologue, bark v3, chitin v2, dégradés de ciel | `b45ed22`, `28eb5f5` |
+| 4 | Charte de stylisation + 6 textures ; module triplanaire ; collision décor ; caméra sous terre | `7033614`, `4fec981`, `5a66a88` |
 | 3 | Ligne de vue dégagée dans l'herbe, caméra libérée sous terre | `a829cdc` |
 | 2 | Intérieur du nid + rig de lumières locales | `75f2ba9` |
 | 1 | Migration Three.js/Vite, escalade des tiges | `06c94cd` |
