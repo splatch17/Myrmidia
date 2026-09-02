@@ -23,9 +23,11 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
 
   const touchMove = { active: false, id: -1, ox: 0, oy: 0, dx: 0, dy: 0 };
   let dragPointer = -1, lastPX = 0, lastPY = 0;
-  // edge-triggered (not "is held"): climbing on/off and future harvest
-  // pickups should fire once per press, same as the old prototype's
-  // keydown-time tryInteract() call rather than a per-frame poll.
+  // Two readings of the same key, because the game now has two shapes of
+  // interaction (interaction.js): edge-triggered for the instant verbs
+  // (grab a stem, drop what you carry — one keydown, one call, however long
+  // the key stays down afterwards) and raw held-state for the ones that cost
+  // time and show it (harvesting, digging the first chamber).
   let interactPressed = false;
 
   function isMoveKey(codes) {
@@ -109,6 +111,9 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
     return v;
   }
 
+  /** Is the interact key physically down right now? (held actions) */
+  function isInteractHeld() { return !!keys.KeyE; }
+
   function dispose() {
     window.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('keyup', onKeyUp);
@@ -120,5 +125,5 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
     domElement.removeEventListener('wheel', onWheel);
   }
 
-  return { state, readMoveIntent, consumeInteract, dispose };
+  return { state, readMoveIntent, consumeInteract, isInteractHeld, dispose };
 }

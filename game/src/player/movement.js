@@ -1,7 +1,7 @@
 import { clamp, damp } from '../core/noise.js';
 import { nrm3, cross3 } from '../core/vecmath.js';
 import { dampAngle } from './mathUtil.js';
-import { containUnderground, groundY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '../world/index.js';
+import { containUnderground, containSurface, groundY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '../world/index.js';
 import { resolveDecorCollision } from './decorCollision.js';
 import { PLAYER_AVATAR, collideRadius, strideOf } from './avatar.js';
 
@@ -85,11 +85,24 @@ export function stepAnt(ant, wish, intent, dt) {
       ant.x += tx * slide; ant.z += tz * slide;
     }
   } else {
-    // margin from the lawn's edge: the old 15/12 was a worker's body plus
-    // slack, so it follows the avatar rather than staying a literal
-    const margin = Math.max(15, bodyR * 4);
-    ant.x = clamp(ant.x, LAWN_BOUNDS.x0 + margin, LAWN_BOUNDS.x1 - margin);
-    ant.z = Math.min(ant.z, LAWN_BOUNDS.z1 - margin * 0.8);
+    /* The west edge of the map is the river's meander, not a box (PROGRESS.md
+       defect #4). containSurface() is the world's own answer to "where may
+       she stand" — it follows riverEdgeAt(z) and clamps into LAWN_BOUNDS —
+       and the box clamp this replaces left as little as ~3 units of dry
+       ground at the worst of the meander, which for a body 3.3 units wide is
+       standing in the water.
+
+       Asked twice on purpose: once for her centre, once for her western
+       flank, so what stops at the waterline is her body rather than her
+       origin. That derives the margin from the world's own line instead of
+       re-deriving riverEdgeAt() here, which would be the same duplication in
+       a different place. */
+    const zq = clamp(ant.z, LAWN_BOUNDS.z0, LAWN_BOUNDS.z1);
+    ant.x = Math.max(containSurface(ant.x, zq)[0], containSurface(ant.x - bodyR, zq)[0] + bodyR);
+    // north and east have no water: the map's own box is the whole answer,
+    // held off by a body's width so she never stands on the meshed rim
+    ant.x = Math.min(ant.x, LAWN_BOUNDS.x1 - bodyR * 2);
+    ant.z = Math.min(ant.z, LAWN_BOUNDS.z1 - bodyR * 2);
   }
 
   ant.y = groundY(ant.x, ant.z);
