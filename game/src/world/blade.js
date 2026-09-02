@@ -16,7 +16,23 @@ import { nrm3, cross3, sub3 } from '../core/vecmath.js';
 // the shortest climbable blades are close to the ant's own body length
 // across. Shared between the grass mesh/footprints and the tree trunk taper
 // so the two can never drift apart.
-export function bladeBaseWidth(h) { return 1.7 + h * 0.028; }
+/* Full width of a blade at its base, in world units — design/herbe-brins.md
+   §2, and the single authority for it. The previous `1.7 + h*0.028` was
+   calibrated in #19 against the 11-unit WORKER; the avatar became a 2.2x
+   queen afterwards and the width never followed, so a tall blade stood 9.1
+   units across against a queen 7.0 wide at her widest. A blade wider than the
+   animal is why the field read as slats rather than as grass. The split is on
+   CLIMB_MIN_H = 42, the threshold that already exists: below it grass, above
+   it a stem that can be climbed. */
+export function bladeWidthFor(h) {
+  return h < 42
+    ? Math.min(Math.max(h / 40, 0.55), 1.45)
+    : Math.min(Math.max(2.10 + (h - 42) * 0.038, 2.10), 4.40);
+}
+
+/** Half width — what footprints[].w has always meant, and what climb.js and
+ *  decorCollision.js read. */
+export function bladeBaseWidth(h) { return bladeWidthFor(h) * 0.5; }
 
 export function bladeCurvePoint(g, t) {
   const dx = Math.cos(g.ang), dz = Math.sin(g.ang);

@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { rng, vnoise, lerp } from '../core/noise.js';
 import { antState } from '../core/antState.js';
-import { bladeBaseWidth } from './blade.js';
+import { bladeBaseWidth, bladeWidthFor } from './blade.js';
 import { groundY, waterDepthAt, LAWN_BOUNDS, TERRAIN_BOUNDS } from './terrain.js';
 
 /* ==========================================================================
@@ -64,7 +64,10 @@ const C_MOSS_B = new THREE.Color('#8FB055'), C_MOSS_TIP = new THREE.Color('#C6DC
  * shape as the old prototype's GRASS[] entries, so anything already written
  * against that shape ports over unchanged).
  */
-export function createGrassField({ count = 900, seed = 7 } = {}) {
+/* 1600 rather than 900: thinner blades without more of them is a bald lawn —
+   design/herbe-brins.md §3 asks for the two together, and they are one
+   change, not two. */
+export function createGrassField({ count = 1600, seed = 7 } = {}) {
   const R = rng(seed);
   const geometry = buildBladeGeometry();
 
@@ -73,6 +76,8 @@ export function createGrassField({ count = 900, seed = 7 } = {}) {
   const aAng = new Float32Array(count);
   const aPhase = new Float32Array(count);
   const aTip = new Float32Array(count * 3);
+  const aWidth = new Float32Array(count);
+  const aTwist = new Float32Array(count);
   const footprints = [];
 
   let i = 0;
@@ -89,7 +94,12 @@ export function createGrassField({ count = 900, seed = 7 } = {}) {
     const near = Math.abs(bx) < 16 && bz < 34;
     if (near && R() < 0.82) continue;
 
-    const h = 26 + R() * 74 * (0.5 + 0.5 * vnoise(bx * 0.01, bz * 0.01));
+    /* Two populations rather than one uniform range (§3): 22% climbable
+       stems well clear of CLIMB_MIN_H, 78% short grass that never reaches it.
+       The old single range straddled the threshold, so roughly half the field
+       was borderline-climbable at a height that read as neither. */
+    const patch = 0.72 + 0.28 * vnoise(bx * 0.01, bz * 0.01);
+    const h = R() < 0.22 ? 48 + R() * 60 * patch : (14 + R() * 26) * patch;
     const ang = R() * Math.PI * 2;
     const baseY = groundY(bx, bz);
     const tip = new THREE.Color(C_MOSS_B).lerp(C_MOSS_TIP, R());
@@ -99,7 +109,13 @@ export function createGrassField({ count = 900, seed = 7 } = {}) {
     aAng[i] = ang;
     aPhase[i] = R() * Math.PI * 2;
     aTip[i * 3] = tip.r; aTip[i * 3 + 1] = tip.g; aTip[i * 3 + 2] = tip.b;
+    aWidth[i] = bladeWidthFor(h);
+    aTwist[i] = (R() * 2 - 1) * 0.85;
 
+    // footprints[].w stays the HALF width, as it always was — climb.js and
+    // decorCollision.js read it. Their radii therefore shrink with the blade,
+    // which is correct for a stem half as thick and is a change of feel at
+    // contact: to be judged on a capture, not compensated for blind.
     footprints.push({ x: bx, z: bz, h, baseY, w: bladeBaseWidth(h), ang });
     i++;
   }
@@ -110,6 +126,8 @@ export function createGrassField({ count = 900, seed = 7 } = {}) {
   geometry.setAttribute('aAng', new THREE.InstancedBufferAttribute(aAng.subarray(0, actualCount), 1));
   geometry.setAttribute('aPhase', new THREE.InstancedBufferAttribute(aPhase.subarray(0, actualCount), 1));
   geometry.setAttribute('aTip', new THREE.InstancedBufferAttribute(aTip.subarray(0, actualCount * 3), 3));
+  geometry.setAttribute('aWidth', new THREE.InstancedBufferAttribute(aWidth.subarray(0, actualCount), 1));
+  geometry.setAttribute('aTwist', new THREE.InstancedBufferAttribute(aTwist.subarray(0, actualCount), 1));
 
   // bounds aren't representative of the real (shader-computed) positions —
   // frustum culling against a per-vertex bounding sphere would be wrong, so
@@ -158,6 +176,8 @@ export function createGrassField({ count = 900, seed = 7 } = {}) {
         attribute float aAng;
         attribute float aPhase;
         attribute vec3 aTip;
+        attribute float aWidth;
+        attribute float aTwist;
         uniform float uTime;
         uniform float uWind;
         uniform vec3 uAntPos;
@@ -174,14 +194,37 @@ export function createGrassField({ count = 900, seed = 7 } = {}) {
         vec3 perp = vec3(-dirZ, 0.0, dirX);
         float dBend = 0.52 * aH * gT;
         vec3 tangentDir = normalize(vec3(dirX * dBend, aH * (1.0 - 0.26 * gT), dirZ * dBend));
-        vec3 objectNormal = normalize(cross(tangentDir, perp));
+        vec3 n0 = normalize(cross(tangentDir, perp));
+
+        /* A twist along the blade (§5b). perp used to be fixed, so every
+           ribbon faced one direction over its whole length and the field read
+           as cards all hung the same way. One float per instance: some blades
+           now present their edge and some their face, and each one changes
+           along itself. */
+        float roll = aTwist * gT;
+        float cr = cos(roll), sr = sin(roll);
+        vec3 perpRolled = perp * cr + n0 * sr;
+        vec3 nRolled    = n0   * cr - perp * sr;
+
+        /* A keel in the NORMAL, not in the geometry (§5a). A real blade is
+           folded in a V across its section, and that fold is what gives it a
+           light side and a dark side. Tilting the normal across the ribbon
+           puts the two edges 63 degrees apart for zero extra vertices — the
+           geometric keel would have cost x2.6 on the field's triangles for a
+           silhouette gain visible only edge-on. */
+        vec3 objectNormal = normalize(nRolled - perpRolled * (aSide * 0.62));
       `)
       .replace('#include <begin_vertex>', `
         float bend = gT * gT * aH * 0.26;
-        float taperK = (1.0 - gT) * (1.0 - gT * 0.25);
-        float width = (1.7 + aH * 0.028) * taperK + 0.05;
+        /* Holds its width for the first 60% and then points, instead of
+           narrowing from the base (§2). It reaches exactly zero, so the old
+           + 0.05 goes: a tip cut off square is the loudest 'geometric' tell
+           in the set and it costs nothing to remove. The 0.02 floor only
+           avoids a degenerate normal exactly at the tip. */
+        float taperK = pow(1.0 - pow(gT, 2.6), 0.55);
+        float width = aWidth * 0.5 * taperK + 0.02;
         vec3 curvePos = aBase + vec3(dirX * bend, aH * gT * (1.0 - gT * 0.13), dirZ * bend);
-        vec3 transformed = curvePos + perp * (width * aSide);
+        vec3 transformed = curvePos + perpRolled * (width * aSide);
 
         // idle wind sway, phase-desynced per instance so the field doesn't
         // move as one rigid sheet
