@@ -296,6 +296,59 @@ function tri(dk, md, lt, t) {
 
 function darken(c, k) { return mixRGB(c, [0, 0, 0], k); }
 
+/**
+ * Domain warp whose amplitude is expressed as a fraction of one *cell* of
+ * the field being warped, rather than as a fraction of the whole tile.
+ *
+ * `cellFrac` is the peak displacement in cells: 0.20 means "no sample is
+ * ever pushed more than a fifth of a cell". warped() above takes its
+ * amplitude in uv, which silently means a completely different thing per
+ * field — 0.09 uv against an 11-cell field is half a cell of displacement,
+ * i.e. enough to dissolve the very shape the warp was meant to roughen.
+ * Same lesson as the round-4 deformation fix: an amplitude is only
+ * meaningful relative to the thing it deforms.
+ *
+ * Tiling survives for the same reason as warped(): the offset field is
+ * itself periodic with period 1.
+ */
+function warpedCells(field, cellX, cellY, cellFrac, seed) {
+  const wu = tileableNoise(9, 9, seed);
+  const wv = tileableNoise(9, 9, seed + 31);
+  return (u, v) => field(u + (wu(u, v) - 0.5) * 2 * cellFrac / cellX,
+                         v + (wv(u, v) - 0.5) * 2 * cellFrac / cellY);
+}
+
+/**
+ * Pull a colour toward the neutral of its own brightness along one common
+ * hue axis, keeping `keep` of the chroma it was painted with.
+ *
+ * WHY THIS EXISTS, AND WHY ONLY THE LAWN USES IT.
+ * world/texturing.js divides each sample by the texture's own *per-channel*
+ * mean, so the mean hue is removed but every pixel's departure from that
+ * mean is not: a pixel painted warmer than the texture average multiplies
+ * the vertex colour toward warm. On the ground quad the vertex colour is
+ * already a soil/moss decision (terrain.js mixes C_SOIL_A/B with C_MOSS_A/B
+ * by its own moss map), so a texture that *also* swings brown-to-green
+ * multiplies the two swings together. Measured on lawn-soil v1 against
+ * C_SOIL_A #86673B: R:G goes from 1.76 at the vertex colour to 3.56 at the
+ * worst texel — #81462f, terracotta. That is defect 1 of PROGRESS.md, and
+ * it is arithmetic, not taste.
+ *
+ * The division of labour that fixes it: the vertex colour owns hue, the
+ * texture owns value. Painting still happens with the soil/moss families
+ * (readable code, and the shapes need their own light), then the chroma is
+ * compressed at the end by a single documented number.
+ *
+ * Luminance is taken on the sRGB bytes rather than in linear light: it is a
+ * styling knob, and all that matters is that it is monotone in brightness
+ * and leaves the axis hue fixed.
+ */
+function chromaKeep(col, axis, keep) {
+  const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  const k = lum(col) / Math.max(lum(axis), 1e-3);
+  return mixRGB([axis[0] * k, axis[1] * k, axis[2] * k], col, keep);
+}
+
 // Material palettes, all derived from the root palette and the per-zone
 // charter in design/charte-stylisation.md. Three values per material
 // (see tri() above). Note how much *lighter* the "lit" values are than
@@ -427,20 +480,47 @@ function generateSky() {
 }
 
 // ---------------------------------------------------------------------
-// lawn-soil_albedo — the ground quad, 380x250 units, half of every
+// lawn-soil_albedo — the ground quad, 398x250 units, half of every
 // outdoor frame. Highest-value texture in the game by surface area.
 //
-// Built as overlapping tufts of moss growing *over* soil, soil showing
-// through in the gaps — not as a soil/moss noise blend, which is exactly
-// what currently makes the lawn read as flat olive mud. Tufts are warped
-// and large enough to merge into each other: separated circles read as
-// peas on mud (first attempt of this round did precisely that).
+// v2 — fixes defect 1 of PROGRESS.md ("vire au rouille sur les zones sans
+// mousse"). Three things changed, in order of how much they mattered:
+//
+//   1. THE TEXTURE NO LONGER CARRIES A SOIL/MOSS *HUE* SWING. It used to
+//      paint brown ground and green tufts at full chroma; terrain.js
+//      already makes exactly that decision per vertex, and the triplanar
+//      sampler multiplies the two together (see chromaKeep() above for the
+//      measurement: R:G 1.76 -> 3.56, i.e. #86673B soil rendering as
+//      #81462f terracotta). The shapes are still painted with the soil and
+//      moss families — they need their own light — and the chroma is then
+//      compressed onto one olive axis at the end. Vertex colour owns hue,
+//      texture owns value.
+//   2. THE BARE GROUND BETWEEN TUFTS IS PALE, NOT DARK. Its ramp position
+//      is biased into 0.42..0.95 instead of the full 0..1: the dark end
+//      was what drew a connected web, and a dark warm web is exactly what
+//      reads as cracked Martian clay from thirty units up.
+//   3. THE CONTACT LINE IS HALVED AND TUFTS SHARE A LARGE-SCALE VALUE.
+//      On the wide shots each tuft had its own dark ring and read as a
+//      cobble; groups of tufts now drift together on `broad`, so the
+//      surface reads as turf with lumps rather than as a pebble mosaic.
+//
+// Warp amplitudes are per cell now (warpedCells), not per tile: the small
+// blade field was being displaced by half its own cell width, which is the
+// round-4 deformation lesson repeating itself.
 // ---------------------------------------------------------------------
+
+// The single hue every lawn texel is painted on, and how much of the
+// painted chroma survives. 0.28 was picked against the measurement, not by
+// eye: it holds the worst-case R:G under 2.1 on bare soil (the vertex
+// colour's own value is 1.76) while leaving enough green in the tufts that
+// a close-up still reads as turf rather than as raked earth.
+const LAWN_AXIS = hexToRGB('#8C9455');
+const LAWN_CHROMA = 0.28;
 
 function generateLawnSoil() {
   const W = 128, H = 128;
-  const clump = warped(cellular(5, 5, 21), 0.13, 26);
-  const detail = warped(cellular(11, 11, 27), 0.09, 28);
+  const clump = warpedCells(cellular(5, 5, 21), 5, 5, 0.22, 26);
+  const detail = warpedCells(cellular(11, 11, 27), 11, 11, 0.16, 28);
   const broad = tileableNoise(3, 3, 22);
   const grain = tileableNoise(44, 44, 23);
   const fine = tileableNoise(96, 96, 24);
@@ -448,40 +528,42 @@ function generateLawnSoil() {
 
   writeTexture('lawn-soil', 'albedo', W, H, (u, v) => {
     let col = tri(SOIL_DK, SOIL_MD, SOIL_LT,
-      smoothstep(clamp01(broad(u, v) * 0.6 + grain(u, v) * 0.4)));
+      0.42 + 0.53 * smoothstep(clamp01(broad(u, v) * 0.55 + grain(u, v) * 0.45)));
 
-    // big tufts: r ~0.55-0.75 in cell units against a cell of 1, so they
-    // overlap and cover most of the surface. Widened from 0.46-0.68 after
-    // seeing the texture in engine for the first time: the bare soil left
-    // between tufts formed a continuous dark brown web that read as cracked
-    // dry mud rather than as turf. The soil/moss coverage ratio is
-    // scale-invariant, so this is the right knob whatever worldPerTile ends
-    // up being.
+    // big tufts: r ~0.58-0.78 in cell units against a cell of 1, so they
+    // overlap and cover most of the surface. Separated circles read as peas
+    // on mud (first attempt of round 4 did precisely that). The soil/moss
+    // coverage ratio is scale-invariant, so this is the right knob whatever
+    // worldPerTile ends up being.
     const c = clump(u, v);
-    const r = 0.55 + 0.20 * c.id;
+    const r = 0.62 + 0.20 * c.id;
     if (c.d < r) {
       const lit = facetLight(c.dx, c.dy);
       const g = tri(MOSS_DK, MOSS_MD, MOSS_LT,
-        clamp01(0.46 + lit * 0.26 + (c.id - 0.5) * 0.20 + (fine(u * 2, v * 2) - 0.5) * 0.22));
-      col = mixRGB(col, g, smoothstep(clamp01((1 - c.d / r) / 0.30)) * 0.95);
+        clamp01(0.50 + lit * 0.18 + (c.id - 0.5) * 0.18
+                + (broad(u, v) - 0.5) * 0.30       // neighbouring tufts drift together
+                + (fine(u * 2, v * 2) - 0.5) * 0.20));
+      col = mixRGB(col, g, smoothstep(clamp01((1 - c.d / r) / 0.34)) * 0.95);
       // dark contact line just inside the tuft's shadowed edge only — a
       // ring all the way round reads as a bubble, not as a plant sitting
-      // in soil
-      const rim = (1 - Math.abs(c.d - r * 0.90) / (r * 0.18)) * clamp01(0.55 - lit);
-      if (rim > 0) col = mixRGB(col, darken(SOIL_DK, 0.30), smoothstep(clamp01(rim)) * 0.34);
+      // in soil. Narrowed and halved from v1 (0.18/0.34 -> 0.14/0.18): at
+      // full strength every tuft outlined itself and the lawn became
+      // cobblestone at any distance.
+      const rim = (1 - Math.abs(c.d - r * 0.92) / (r * 0.14)) * clamp01(0.50 - lit);
+      if (rim > 0) col = mixRGB(col, darken(SOIL_DK, 0.20), smoothstep(clamp01(rim)) * 0.12);
     }
 
     // small blades catching the light on top of the tufts
     const d2 = detail(u, v);
-    if (d2.d < 0.30) {
-      const k = smoothstep(clamp01(1 - d2.d / 0.30));
-      col = mixRGB(col, MOSS_LT, k * 0.26 * clamp01(facetLight(d2.dx, d2.dy) + 0.4));
+    if (d2.d < 0.42) {
+      const k = smoothstep(clamp01(1 - d2.d / 0.42));
+      col = mixRGB(col, MOSS_LT, k * 0.34 * clamp01(facetLight(d2.dx, d2.dy) + 0.4));
     }
 
     const gr = grit(u, v);
     if (gr > 0) col = mixRGB(col, SOIL_LT, gr * 0.40);
-    const n = (fine(u, v) - 0.5) * 10;
-    return [col[0] + n, col[1] + n, col[2] + n];
+    const n = (fine(u, v) - 0.5) * 8;
+    return chromaKeep([col[0] + n, col[1] + n, col[2] + n], LAWN_AXIS, LAWN_CHROMA);
   });
 }
 
