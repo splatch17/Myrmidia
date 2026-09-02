@@ -6,8 +6,9 @@ Fichier de reprise. À lire en premier au début d'une session, à mettre à jou
 
 Les décisions de design vivent dans `design/boucle-de-jeu.md` (§0 = les
 arbitrages actés, qui l'emportent sur le reste du document). La direction
-artistique vit dans `design/charte-stylisation.md` et
-`design/ambiance-prologue.md`. Ce fichier-ci ne les recopie pas.
+artistique vit dans `design/charte-stylisation.md`,
+`design/ambiance-prologue.md`, `design/herbe-brins.md` et
+`design/ressources-et-fondation.md`. Ce fichier-ci ne les recopie pas.
 
 ---
 
@@ -32,7 +33,7 @@ loin), et le sol lui répond en permanence : « Site : bon (71/100) » ou
 | Rivière | Bord ouest, plan d'eau ondulé, berge de sable, Fresnel vers le ciel |
 | Horizon | Deux rideaux de crêtes qui suivent la caméra en x/z, 768 tris |
 | Nid souterrain | Galerie + 3 salles (granary / brood / midden), accessibles |
-| Textures | 6 albédos procéduraux, projection triplanaire (pas d'UV) — 427 Ko en tout |
+| Textures | 7 albédos procéduraux, projection triplanaire (pas d'UV) — 427 Ko de VRAM pour les 6 branchées ; `seed` (64², ~22 Ko) livrée, pas encore branchée |
 | Éclairage | Hémisphère commutée par zone, soleil non commuté, plancher ambiant 0.30 sous terre, ombre 0.107 u/texel qui suit la caméra |
 | Avatar | Reine fondatrice (2.2× une ouvrière), gaster à deux segments qui respire, IK 6 pattes |
 | HUD | 2 lignes de texte brut (qualité du site + invite contextuelle). Pas encore de DA |
@@ -55,8 +56,8 @@ loin), et le sol lui répond en permanence : « Site : bon (71/100) » ou
 
 | # | Défaut | Gravité |
 |---|---|---|
-| 1 | La texture `lawn-soil` vire au rouille sur les zones sans mousse — plus martien que prairie | DA, à repasser |
-| 2 | Les brins d'herbe sont larges et raides de près, plus « lames » que végétaux | DA + géométrie |
+| ~~1~~ | ~~La texture `lawn-soil` vire au rouille sur les zones sans mousse~~ — **corrigé** (`f5f9c5a`), vérifié en rejouant les 13 vues : pixels de sol au-delà de R:G 2,10, 4,21 % → 0,25 % au pied du monticule | Fait |
+| 2 | Les brins d'herbe sont larges et raides de près, plus « lames » que végétaux — **spec chiffrée prête** : `design/herbe-brins.md`, à câbler dans `world/grass.js` | DA fait, géométrie à faire |
 | 3 | Vue depuis la bouche du tunnel : la pelouse au-delà reste sous le brouillard du nid (un seul scalaire d'ambiance pour toute la scène) | Connu, structurel |
 | 4 | `movement.js` clampe encore sur une boîte `LAWN_BOUNDS` au lieu d'appeler `containSurface()` — la marge ouest tombe à ~3 unités de la ligne d'eau au pire du méandre | Petit |
 | 5 | Le point d'apparition (20, 110) n'a pas été rejoué depuis que le relief existe — il devrait ressembler à un lieu d'atterrissage, et surtout **pas** être le meilleur sol de la carte | Design |
@@ -80,7 +81,13 @@ Par ordre de dépendance, pas d'envie.
    créatures uniquement, ombres adoucies). Cible : 60 fps sur GPU intégré.
 5. **#34 — mode macro**, le nid en coupe vue de côté (fourmilière d'élevage),
    pas une carte de territoire.
-6. Défauts 1, 2, 4, 5 ci-dessus, à glisser entre deux tickets.
+6. Défauts 2, 4, 5 ci-dessus, à glisser entre deux tickets. Pour le 2 les
+   nombres sont écrits (`design/herbe-brins.md` §9), il ne reste que le
+   câblage.
+7. **Ombres portées de l'herbe.** `grass.js` a `castShadow = false` : c'est le
+   plus gros « tell décalcomanie » qui restera une fois le défaut 2 corrigé.
+   Demande un `customDepthMaterial` répliquant le déplacement de
+   `begin_vertex`.
 
 ---
 
@@ -113,6 +120,7 @@ Par ordre de dépendance, pas d'envie.
 | Tour | Livré | Commits |
 |---|---|---|
 | 5 | Carte de surface écrite à la main, rivière, horizon ; textures branchées ; reine fondatrice jouable ; lecture de la qualité du sol | `dea42af`, `a277ef3` |
+| 6 (DA) | `lawn-soil` v2 (fin du rouille) ; spec chiffrée des brins d'herbe ; langage visuel des ressources et de la fondation ; `seed_albedo` | `f5f9c5a` + ce round |
 | 5 (DA) | Ambiance du prologue (crépuscule, bascule à la fondation), bark v3, chitin v2, dégradés de ciel | `b45ed22`, `28eb5f5` |
 | 4 | Charte de stylisation + 6 textures procédurales ; module triplanaire ; collision avec le décor ; caméra recadrée sous terre | `7033614`, `4fec981`, `5a66a88` |
 | 3 | Ligne de vue dégagée dans l'herbe, caméra libérée sous terre | `a829cdc` |

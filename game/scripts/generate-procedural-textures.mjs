@@ -363,6 +363,7 @@ const MOSS_DK = hexToRGB('#47632A'), MOSS_MD = hexToRGB('#83A845'), MOSS_LT = he
 const CHIT_DK = hexToRGB('#5E3B15'), CHIT_MD = hexToRGB('#A9702A'), CHIT_LT = hexToRGB('#E5B75F');
 const CHIT_HI = hexToRGB('#F6DCA2');
 const SPORE_DK = hexToRGB('#4E2F6B'), SPORE_MD = hexToRGB('#9A63C4'), SPORE_LT = hexToRGB('#D9AEEE');
+const SEED_DK = hexToRGB('#6E5426'), SEED_MD = hexToRGB('#A8864A'), SEED_LT = hexToRGB('#D8BE86');
 const WART_HI = hexToRGB('#F3E6FF');
 
 // ---------------------------------------------------------------------
@@ -840,6 +841,69 @@ function generateTunnelDirt() {
   });
 }
 
+// ---------------------------------------------------------------------
+// seed_albedo — the harvestable seed (design/ressources-et-fondation.md),
+// and the same coat on the granary's stored seeds underground.
+//
+// 64x64, not 128. A seed is ~4.5 units long and takes worldPerTile 6, so
+// it never shows more than three quarters of a tile: half the resolution
+// of a wall material is already more texel density per screen pixel than
+// the ground quad gets. pipeline-textures.md section 2 asks that any move
+// off 128 be a deliberate per-material choice — this is one, and it is
+// what keeps the texture budget flat while adding a seventh material.
+//
+// ISOTROPIC ON PURPOSE. The obvious painting for a seed is longitudinal
+// grooves, and it is the wrong one here: texturing.js projects
+// triplanarly, so a directional pattern on a small ovoid shows its stripes
+// running three different ways across the same object. The groove belongs
+// to the geometry (a crease in the lathe), the coat belongs to the
+// texture. What the texture carries is what a seed coat actually looks
+// like up close: faint testa cells, a hard polished sheen, and dark
+// speckles.
+//
+// No chromaKeep() here, unlike lawn-soil: a seed's vertex colour is one
+// flat value chosen by whoever places it, not a soil/moss map, so there is
+// no second hue swing for this one to multiply with.
+// ---------------------------------------------------------------------
+
+function generateSeed() {
+  const W = 64, H = 64;
+  const broad = tileableNoise(3, 3, 61);
+  const testa = warpedCells(cellular(5, 5, 62), 5, 5, 0.20, 63);
+  const fine = tileableNoise(26, 26, 64);
+  const speck = fleckMask(8, 65, 0.14, 0.34);
+
+  writeTexture('seed', 'albedo', W, H, (u, v) => {
+    // Hard coat: a wide, slow value drift, biased pale. A seed reads
+    // against dark soil, and it is the value contrast that lets the player
+    // find one at ant height in grass.
+    let col = tri(SEED_DK, SEED_MD, SEED_LT,
+      0.30 + 0.66 * smoothstep(clamp01(broad(u, v) * 0.78 + fine(u, v) * 0.22)));
+
+    // Testa cells: shallow domes, lit lip one side, contact line the other
+    // — same two strokes as every other shape in this set. The lit lip is
+    // deliberately strong: it is what makes the coat read as *hard*, which
+    // is the whole difference between a seed and a crumb of soil.
+    const c = testa(u, v);
+    if (c.d < 0.50) {
+      const k = smoothstep(clamp01(1 - c.d / 0.50));
+      const lit = facetLight(c.dx, c.dy);
+      col = mixRGB(col, SEED_LT, k * clamp01(lit - 0.05) * 0.62);
+      col = mixRGB(col, darken(SEED_DK, 0.20), k * clamp01(-lit - 0.05) * 0.50);
+    }
+    // and the fissure network between them: a seed coat is cracked, not
+    // tiled. Wide and soft rather than a one-pixel line — at 64 square a
+    // hard edge reads as an ink scratch.
+    if (c.edge < 0.16) col = mixRGB(col, darken(SEED_DK, 0.34), smoothstep(1 - c.edge / 0.16) * 0.42);
+
+    const sp = speck(u, v);
+    if (sp > 0) col = mixRGB(col, darken(SEED_DK, 0.46), sp * 0.62);
+
+    const n = (fine(u, v) - 0.5) * 5;
+    return [col[0] + n, col[1] + n, col[2] + n];
+  });
+}
+
 console.log('Generating procedural textures ->', TEXTURES_DIR);
 generateRamps();
 generateSky();
@@ -849,4 +913,5 @@ generateStone();
 generateChitin();
 generateMushroomCap();
 generateBark();
+generateSeed();
 console.log('Done.');
