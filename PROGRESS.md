@@ -55,6 +55,8 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 | Ciel | Deux rigs (prologue crépusculaire / colonie fondée) commutés par un scalaire `founded` |
 | Textures | 6 albédos triplanaires + `seed`. `lawn-soil` corrigé, ne vire plus au rouille |
 | Contours | Coque inversée sur les créatures, ~1,3 px constant à l'écran, ardoise dehors / noir chaud dedans |
+| Lisibilité | Panneau de commandes (H), jauge de maintien, **anneau au sol sous la cible de E** (miel = possible, rouge = refusé) |
+| Nid pré-construit | **Désactivé** (`SHOW_PREBUILT_NEST = false` dans `world/index.js`). Il n'avait plus de rôle depuis que la colonie se creuse à l'exécution |
 | Perf | 145k tris, 18 programmes, 427 Ko VRAM textures, pire médiane 6,3 ms à hauteur de fourmi, 0 erreur console |
 
 ### Ce qui n'existe pas encore
@@ -71,24 +73,27 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 | # | Défaut | Gravité |
 |---|---|---|
 | 1 | **La fondation n'a jamais été vue.** Les captures s'arrêtent à « Réserve : 3/5 ». Le code est là et compile, le moment ne l'est pas | **Bloquant** |
-| 2 | La reine reste sombre de corps. Le contour la détache mais sa chitine est à la même valeur que le sol — il manque une mesure et un chiffre de DA sur `avatar.js` `colors` | DA |
-| 3 | Le tramage de dissolution proche caméra est très visible sur les brins traversés | Petit mais voyant |
-| 4 | `RIG_PROLOGUE` a été retouché trois fois à l'intégration (brouillard, puis remplissage, puis soleil). Chaque valeur est annotée contre celle de `ambiance-prologue.md`. **La DA n'a jamais arbitré** | À arbitrer |
-| 5 | Les rayons de grimpe et de collision des tiges ont été divisés par ~2,1 avec l'affinement des brins. Jamais jugé sur capture | À vérifier |
-| 6 | Points 4 à 7 de `design/herbe-brins.md` non câblés (courbure, dégradé, pointes sèches, contre-jour, `SEGS = 9`) | Reste à faire |
-| 7 | Pas de bloom sur les émissifs — 3e volet de #28, non commencé | Reste à faire |
-| 8 | `sky_gradient-prologue` et `sky_gradient-lawn` existent en PNG mais `world/sun.js` utilise encore des couleurs plates marquées `PLACEHOLDER` | Petit |
+| 2 | La bouche de l'ancien tunnel montre le ciel au travers quand le nid est réactivé : le tube élargi a son plafond à y=24, la couture de `terrain.js` a été taillée pour y=11 | Bloque la réactivation |
+| 3 | La reine reste sombre de corps. Le contour la détache mais sa chitine est à la même valeur que le sol | DA |
+| 4 | Le tramage de dissolution proche caméra est très visible sur les brins traversés | Petit mais voyant |
+| 5 | `RIG_PROLOGUE` a été retouché quatre fois à l'intégration. Chaque valeur est annotée contre celle de `ambiance-prologue.md`. **La DA n'a jamais arbitré** | À arbitrer |
+| 6 | Rayons de grimpe et de collision des tiges divisés par ~2,1 avec l'affinement des brins. Jamais jugé sur capture | À vérifier |
+| 7 | Points 4 à 7 de `design/herbe-brins.md` non câblés | Reste à faire |
+| 8 | Pas de bloom sur les émissifs — 3e volet de #28 | Reste à faire |
 
 ## Prochaines étapes
 
 1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
    capturer le moment. Tant qu'il n'est pas vu, il n'est pas livré.
-2. **#6 — la ponte**, et la bascule crépuscule → jour qui se pose **à la
-   première ponte, pas au premier coup de pelle** (`design/ressources-et-fondation.md`).
-   `populateNest()` et `setFoundedMix()` existent déjà, il n'y a qu'à s'en servir.
-3. **La lisibilité de la reine** (défaut 2) — mesurer, puis chiffrer.
-4. **Bloom sélectif** sur les émissifs (défaut 7), dernier volet de #28.
-5. Points 4 à 7 de la spec des brins (défaut 6).
+2. **#6 — la ponte**, et la bascule crépuscule → jour **à la première ponte,
+   pas au premier coup de pelle** (`design/ressources-et-fondation.md`).
+   `populateNest()` et `setFoundedMix()` existent, il n'y a qu'à s'en servir.
+3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
+   petit nid mort à trouver : entrée effondrée avec du relief, champignons
+   toujours luminescents (le champignon survit à la colonie). Corrige aussi le
+   défaut 2 au passage, puisque la bouche devient un éboulis et non un trou.
+4. **Lisibilité de la reine** (défaut 3) — mesurer, puis chiffrer.
+5. Bloom sélectif (défaut 8), points 4-7 de la spec des brins (défaut 7).
 6. **#34 — mode macro**, le nid en coupe vue de côté.
 
 ## Où sont les choses
@@ -125,10 +130,15 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 5. **Une normale substituée dans le vertex shader** (l'eau) ne survit pas à une
    orientation de face inversée : `faceDirection` la retourne. C'est ce qui
    éclairait le dessous de la rivière.
-6. **Un chiffre de DA écrit pour une échelle humaine** appliqué à l'échelle de
-   la fourmi. Le brouillard du prologue (40 unités = 2 longueurs de corps) et
-   la largeur des brins (calibrée sur l'ouvrière, jamais suivie quand l'avatar
-   est devenu une reine 2,2×) sont le même bug deux fois.
+6. **Un chiffre calibré sur une échelle, laissé derrière quand l'échelle
+   change.** C'est le bug le plus fréquent du projet, rencontré **trois fois** :
+   le brouillard du prologue (40 unités = 2 longueurs de corps), la largeur des
+   brins (9,1 contre une reine de 7,0), et l'alésage du nid (couloir de 3,3
+   pour une reine de 3,3 — infranchissable). Aucun ne lève d'erreur, aucun ne
+   se voit sans mesurer. **Réflexe : quand une constante décrit une taille, se
+   demander contre quel corps elle a été écrite.** L'avatar est passé de
+   l'ouvrière (rayon 1,5) à la reine (3,3, `scale` 2,2) au tour 6, et tout ce
+   qui n'a pas suivi est un défaut latent.
 
 ---
 
@@ -172,6 +182,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
 | 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |
 | 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |
 | 5 | Carte de surface écrite à la main, rivière, horizon ; textures branchées ; reine fondatrice jouable ; lecture du sol | `dea42af`, `a277ef3` |
