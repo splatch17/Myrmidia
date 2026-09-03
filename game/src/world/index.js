@@ -95,18 +95,45 @@ export function createWorld() {
   const group = new THREE.Group();
   group.name = 'world';
 
+  /* THE PRE-BUILT NEST IS OFF.
+
+     It was the whole game once: the player started in the queen's chamber and
+     walked out. Since design/boucle-de-jeu.md 0 it is not — the colony is dug
+     at run time where the player chooses (world/founding.js), and this gallery
+     has had no role in play for two rounds. What it had instead was a scale
+     problem: every bore in underground.js was cut for the 1.5-radius worker,
+     and the player is now a 3.3-radius queen. NEST_BORE fixes the bores (the
+     run-time nest needs it too, it shares the same builder), but widening the
+     tube also lifts its ceiling to y=24 at the mouth, where the terrain seam
+     was cut to hide a ceiling at y=11 — so the mouth now shows sky through
+     itself.
+
+     Rather than chase that seam for a space nobody enters, the geometry is
+     simply not added. Nothing is deleted: buildUnderground and every room,
+     light and prop it builds are exactly what foundNest() calls, so this code
+     is more used than it has ever been, just not here.
+
+     The plan for it, which the player asked for: bring it back as an ABANDONED
+     colony — a small dead nest to find on the map, entrance collapsed and
+     given relief, fungus still glowing because fungus outlives colonies. That
+     is world-building, and it wants its own pass rather than being smuggled
+     into this one. Flip the flag to see the old state. */
+  const SHOW_PREBUILT_NEST = false;
+
   const underground = buildUnderground();
-  group.add(underground.group);
+  if (SHOW_PREBUILT_NEST) group.add(underground.group);
 
   // Door/mouth lamps join the same local-light pool as every prop lamp below
   // (see world/lighting.js: only the nearest LIGHT_SLOTS reach the shader).
   for (const d of underground.doorLights) addLocalLight(d.p, d.c);
 
   const decor = buildNestDecor(underground.rooms);
-  group.add(decor.group);
+  if (SHOW_PREBUILT_NEST) group.add(decor.group);
 
+  // the seated queen belonged to that nest: the player IS the queen now, and
+  // two of her on the map is the kind of thing a prologue cannot survive
   const queen = buildQueen();
-  group.add(queen.group);
+  if (SHOW_PREBUILT_NEST) group.add(queen.group);
 
   const lawn = buildLawn();
   group.add(lawn);

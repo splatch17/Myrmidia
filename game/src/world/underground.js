@@ -29,10 +29,32 @@ import { texturedSurfaceMaterial, dirtAlbedo } from './texturing.js';
    — it already resolves the branch-vs-main-tube geometry for you.
    ========================================================================== */
 
+/* HOW WIDE A PASSAGE IS, IN ANTS.
+
+   Every bore in this file was authored against the worker of
+   design/prototypes/sortie-fourmiliere.html: body radius 1.5, gallery 7.2, so
+   the tube was 4.8 body-radii across and a side corridor 2.2. Then #32 made
+   the player a founding queen at 2.2x that body, and the bores never followed.
+   The result is not tight, it is impossible: a branch corridor is 3.3 and she
+   is 3.3, so the granary, brood and midden cannot be entered at all, and in
+   the main gallery her gaster fills the frame with the camera clipped into
+   her back.
+
+   This is the same defect as the grass blades being wider than the queen and
+   the prologue fog starting two body-lengths out: a number calibrated against
+   one scale, left behind when the scale changed. So it gets the same fix — a
+   single multiplier, applied to the dimensions that are measured in ants, and
+   to nothing else.
+
+   LENGTHS ARE NOT SCALED. Only bores. A gallery that is long is a gallery; a
+   gallery that is narrow is a wall. Scaling z as well would have moved every
+   room, every wall hole and every prop, for no gain the player can see. */
+export const NEST_BORE = 2.2;     // = FOUNDING_QUEEN.scale, and that is the reason
+
 export const TUNNEL_BACK = -166;  // back wall of the queen's chamber
 export const TUNNEL_MOUTH = 0;    // where the gallery opens onto the lawn
-export const TUNNEL_R = 7.2;
-export const TUNNEL_RISE = 4.0;   // tube centre height, so the floor lands near y=0
+export const TUNNEL_R = 7.2 * NEST_BORE;
+export const TUNNEL_RISE = 4.0 * NEST_BORE;   // tube centre height, so the floor lands near y=0
 
 export const CH_Z = -132, CH_R = 32;  // the chamber is a bulge in the same tube
 export const START = [-9, -140];
@@ -306,11 +328,16 @@ export function buildUnderground() {
 
   // Side rooms first (as in the old file) so their WALL_HOLES exist before
   // the main tube ring loop below decides which quads to skip.
-  const granary = buildBranch('granary', Math.PI, -70, 3.3, 9, 13, 10, 30, 4001, 1.0,
+  /* corridorR and roomR carry NEST_BORE; the z positions, corridor lengths and
+     room lengths do not — see the note on the constant. The rooms grow more
+     modestly than the corridors (x1.5 against x2.2) because they were already
+     generous for a worker and the brief is explicit that the nest is not meant
+     to be big; what was blocking was the doorway, not the room. */
+  const granary = buildBranch('granary', Math.PI, -70, 3.3 * NEST_BORE, 9, 13 * 1.5, 10, 30, 4001, 1.0,
     (proud) => granaryColor(proud), [0.55, 0.40, 0.20]);
-  const brood = buildBranch('brood', 0, -120, 4.2, 8, 17, 13, 34, 5117, 1.0,
+  const brood = buildBranch('brood', 0, -120, 4.2 * NEST_BORE, 8, 17 * 1.5, 13, 34, 5117, 1.0,
     (proud) => broodColor(proud), [0.68, 0.50, 0.25]);
-  const midden = buildBranch('midden', 0, -40, 2.9, 7, 10, 8, 26, 6229, 0.46,
+  const midden = buildBranch('midden', 0, -40, 2.9 * NEST_BORE, 7, 10 * 1.5, 8, 26, 6229, 0.46,
     (proud) => middenColor(proud), [0.30, 0.44, 0.28]);
 
   group.add(new THREE.Mesh(granary.geometry, roomMaterial()));
