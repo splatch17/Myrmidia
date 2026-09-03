@@ -44,10 +44,10 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 | Domaine | État |
 |---|---|
-| Carte de surface | Écrite à la main, 398×250 jouables, 552×322 maillés, zéro aléatoire |
+| Carte de surface | Écrite à la main, **608×460 jouables**, 770×540 maillés, zéro aléatoire |
 | Rivière | Bord ouest, plan d'eau ondulé, berge de sable, Fresnel vers le ciel |
 | Horizon | Deux rideaux de crêtes qui suivent la caméra en x/z |
-| Herbe | 1600 brins, largeur par instance, quille de normale + vrille, **ombre portée** (même fonction GLSL pour la passe visible et la passe de profondeur) |
+| Herbe | 3400 brins, largeur par instance, quille de normale + vrille, **ombre portée** (même fonction GLSL pour la passe visible et la passe de profondeur) |
 | Ressources | 3 espèces semées une fois, denses près de l'arbre et dans le creux, aucune dans l'eau |
 | Récolte | Approche → maintien → portage visible → dépôt. Réserve affichée |
 | Fondation | `foundNest()` creuse la 1re chambre au point choisi. L'ancien nid devient l'état « déjà fondé » |
@@ -55,7 +55,8 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 | Ciel | Deux rigs (prologue crépusculaire / colonie fondée) commutés par un scalaire `founded` |
 | Textures | 6 albédos triplanaires + `seed`. `lawn-soil` corrigé, ne vire plus au rouille |
 | Contours | Coque inversée sur les créatures, ~1,3 px constant à l'écran, ardoise dehors / noir chaud dedans |
-| Lisibilité | Panneau de commandes (H), jauge de maintien, **anneau au sol sous la cible de E** (miel = possible, rouge = refusé) |
+| Lisibilité | Panneau de commandes (H), jauge de maintien, anneau au sol sous la cible de E (décal doux additif, arc qui tourne) |
+| Réglages | **P** ouvre les graphismes : 1 résolution, 2 ombres, 3 herbe, 4 textures. Compteur d'images en bas à droite. Persisté en `localStorage` |
 | Nid pré-construit | **Désactivé** (`SHOW_PREBUILT_NEST = false` dans `world/index.js`). Il n'avait plus de rôle depuis que la colonie se creuse à l'exécution |
 | Perf | 145k tris, 18 programmes, 427 Ko VRAM textures, pire médiane 6,3 ms à hauteur de fourmi, 0 erreur console |
 
@@ -72,29 +73,31 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 | # | Défaut | Gravité |
 |---|---|---|
-| 1 | **La fondation n'a jamais été vue.** Les captures s'arrêtent à « Réserve : 3/5 ». Le code est là et compile, le moment ne l'est pas | **Bloquant** |
-| 2 | La bouche de l'ancien tunnel montre le ciel au travers quand le nid est réactivé : le tube élargi a son plafond à y=24, la couture de `terrain.js` a été taillée pour y=11 | Bloque la réactivation |
-| 3 | La reine reste sombre de corps. Le contour la détache mais sa chitine est à la même valeur que le sol | DA |
-| 4 | Le tramage de dissolution proche caméra est très visible sur les brins traversés | Petit mais voyant |
-| 5 | `RIG_PROLOGUE` a été retouché quatre fois à l'intégration. Chaque valeur est annotée contre celle de `ambiance-prologue.md`. **La DA n'a jamais arbitré** | À arbitrer |
-| 6 | Rayons de grimpe et de collision des tiges divisés par ~2,1 avec l'affinement des brins. Jamais jugé sur capture | À vérifier |
-| 7 | Points 4 à 7 de `design/herbe-brins.md` non câblés | Reste à faire |
-| 8 | Pas de bloom sur les émissifs — 3e volet de #28 | Reste à faire |
+| 1 | **La fondation n'a jamais été vue.** Les captures s'arrêtent à « Réserve : 3/5 » | **Bloquant** |
+| 2 | Le **shadow map coûte 83 % de l'image** (1,24 ms avec, 0,21 sans, à `devicePixelRatio` 1). C'est le premier poste d'optimisation, et le panneau P permet enfin de le mesurer sur la vraie machine | Perf, prioritaire |
+| 3 | La bouche de l'ancien tunnel montre le ciel quand le nid est réactivé : tube élargi à y=24, couture de `terrain.js` taillée pour y=11 | Bloque la réactivation |
+| 4 | La reine reste sombre de corps ; le contour la détache mais sa chitine est à la valeur du sol | DA |
+| 5 | Le tramage de dissolution proche caméra est très visible sur les brins traversés | Petit mais voyant |
+| 6 | `RIG_PROLOGUE` retouché quatre fois à l'intégration, chaque valeur annotée contre `ambiance-prologue.md`. **La DA n'a jamais arbitré** | À arbitrer |
+| 7 | Rayons de grimpe/collision des tiges divisés par ~2,1. Jamais jugé sur capture | À vérifier |
+| 8 | Points 4 à 7 de `design/herbe-brins.md` non câblés ; pas de bloom sur les émissifs | Reste à faire |
+| 9 | La moitié est/nord de la carte n'a **ni arbre ni point d'eau** — seulement du relief. Elle se traverse, elle ne se visite pas encore | Contenu |
 
 ## Prochaines étapes
 
-1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
-   capturer le moment. Tant qu'il n'est pas vu, il n'est pas livré.
-2. **#6 — la ponte**, et la bascule crépuscule → jour **à la première ponte,
-   pas au premier coup de pelle** (`design/ressources-et-fondation.md`).
-   `populateNest()` et `setFoundedMix()` existent, il n'y a qu'à s'en servir.
-3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
-   petit nid mort à trouver : entrée effondrée avec du relief, champignons
-   toujours luminescents (le champignon survit à la colonie). Corrige aussi le
-   défaut 2 au passage, puisque la bouche devient un éboulis et non un trou.
-4. **Lisibilité de la reine** (défaut 3) — mesurer, puis chiffrer.
-5. Bloom sélectif (défaut 8), points 4-7 de la spec des brins (défaut 7).
-6. **#34 — mode macro**, le nid en coupe vue de côté.
+1. **Voir la fondation** (défaut 1). Tant que le moment n'est pas capturé, il
+   n'est pas livré. Trois tours qu'il traîne.
+2. **#6 — la ponte**, et la bascule crépuscule → jour **à la première ponte**
+   (`design/ressources-et-fondation.md`). `populateNest()` et `setFoundedMix()`
+   existent, il n'y a qu'à s'en servir.
+3. **Peupler la moitié est** (défaut 9) : un second arbre, une mare, un
+   affleurement rocheux. Sans ça l'agrandissement est de la distance, pas du
+   contenu.
+4. **Optimiser l'ombre** (défaut 2) : cascade ou carte plus petite pour l'herbe.
+   Attendre le retour du panneau P sur la vraie machine avant de choisir.
+5. **La colonie abandonnée** — remettre le nid pré-construit comme petit nid
+   mort à trouver, entrée effondrée. Corrige le défaut 3 au passage.
+6. Lisibilité de la reine (4), bloom et spec des brins (8).
 
 ## Où sont les choses
 
@@ -182,6 +185,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 9 | Panneau de réglages graphiques + compteur d'images, anneau de cible refait en décal doux, carte ×2,7 avec 7 nouveaux reliefs écrits à la main | `25086bc` |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
 | 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |
 | 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |
