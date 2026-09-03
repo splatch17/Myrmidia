@@ -9,6 +9,7 @@ import {
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
 import { setOutlineZone } from './core/outline.js';
+import { createQualityPanel } from './core/quality.js';
 
 // Entry point for the Three.js/Vite migration (see design docs for the full
 // vision). Atta's world (underground gallery + side rooms, lawn, grass, tree
@@ -172,6 +173,7 @@ function frame() {
 
   applyEnvironment();
   renderer.render(scene, camera);
+  quality.update(dt);
 }
 
 /* How much of the view is "inside the nest": 1 deep in the gallery, 0 out on
@@ -250,6 +252,10 @@ function applyEnvironment() {
   setOutlineZone(outside);
   trackSun(camera);
 }
+
+/* After the world and the player exist: it walks the scene to find the grass
+   and the textured materials it toggles. */
+const quality = createQualityPanel({ renderer, sun, scene });
 
 renderer.setAnimationLoop(frame);
 // named and exposed so a verification driver can stop the loop, time a burst

@@ -142,10 +142,17 @@ void grassShape(out vec3 pos, out vec3 nrm) {
 }
 `;
 
-/* 1600 rather than 900: thinner blades without more of them is a bald lawn —
-   design/herbe-brins.md §3 asks for the two together, and they are one
-   change, not two. */
-export function createGrassField({ count = 1600, seed = 7 } = {}) {
+/* 1600 rather than 900 when the blades got thinner: thinner without more of
+   them is a bald lawn — design/herbe-brins.md §3 asks for the two together and
+   they are one change, not two.
+
+   3400 since the map grew to 2.7x its area (round 9). Scaled with the area
+   rather than kept flat, because a constant count over a bigger map is the
+   same bald lawn by another route — but scaled sub-linearly (2.1x for 2.7x the
+   ground) because the player reported the build lagging, and because the far
+   half of the map is walked through, not lived in. If it is still too much,
+   core/quality.js thins the field to 35% live, without a rebuild. */
+export function createGrassField({ count = 3400, seed = 7 } = {}) {
   const R = rng(seed);
   const geometry = buildBladeGeometry();
 

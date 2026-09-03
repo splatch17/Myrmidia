@@ -37,13 +37,13 @@ export { TUNNEL_MOUTH };
    east and north ones well inside ground that is still rising, so the
    invisible part of the boundary is always somewhere the terrain already
    told the player not to go. */
-export const LAWN_BOUNDS = { x0: -208, x1: 190, z0: 0, z1: 250 };
+export const LAWN_BOUNDS = { x0: -208, x1: 400, z0: 0, z1: 460 };
 
 /* What actually gets built as mesh: wider than the playable area on every
    side, so the map never ends in a visible cliff edge. West it runs across
    the river to the far shore; east and north it keeps climbing into the
    ridges that close the view. */
-export const TERRAIN_BOUNDS = { x0: -300, x1: 252, z0: 0, z1: 322 };
+export const TERRAIN_BOUNDS = { x0: -300, x1: 470, z0: 0, z1: 540 };
 
 export const WATER_Y = -4.5;         // the river's surface height
 
@@ -131,15 +131,44 @@ const RELIEF = [
   // hollow behind the knoll, a shaded pocket
   { x: 24, z: 128, r: 44, amp: -8 },
 
+  /* ---- the far half of the map (round 9) --------------------------------
+     The map grew from 398x250 playable to 608x460, north and east — the river
+     holds the west edge and moving it would have re-cut every shoreline. What
+     the enlargement is FOR: the first version could be crossed in under a
+     minute, so choosing where to found was a choice between two hills you
+     could see at once. Distance is what makes a site choice a decision.
+
+     Everything below is authored the same way as the near half: a named
+     feature, a radius, a height. Nothing is generated. */
+
+  // the long ridge, running north-east: the first thing visible from the
+  // spawn that is far enough away to be a destination rather than a landmark
+  { x: 236, z: 300, r: 118, amp: 26 },
+  { x: 300, z: 214, r: 88, amp: 18 },
+
+  // the north meadow, deliberately flat and open — the counterweight to the
+  // bowl. Good founding ground for a player who wants space over shelter, and
+  // far enough from water that siteQuality will say so.
+  { x: 40, z: 330, r: 120, amp: -5 },
+  { x: 96, z: 386, r: 70, amp: 4 },
+
+  // the eastern hollow, deep and narrow: shelter, but a long walk from the
+  // river, so it reads well on soil and badly on water
+  { x: 340, z: 118, r: 76, amp: -16 },
+  { x: 340, z: 118, r: 26, amp: 5 },
+
+  // a second knoll far east, to give the eastern half its own horizon line
+  { x: 384, z: 328, r: 92, amp: 21 },
+
   // the north rim: the map closes into rising ground rather than into a
   // clamp. Broad and far enough out that the playable area only feels it as
   // a gentle climb.
-  { x: -40, z: 300, r: 150, amp: 34 },
-  { x: 130, z: 296, r: 140, amp: 30 },
+  { x: -40, z: 520, r: 190, amp: 38 },
+  { x: 190, z: 512, r: 175, amp: 34 },
 
   // the east rim, same job
-  { x: 250, z: 120, r: 130, amp: 30 },
-  { x: 218, z: 232, r: 100, amp: 22 },
+  { x: 468, z: 190, r: 165, amp: 34 },
+  { x: 440, z: 420, r: 130, amp: 26 },
 ];
 
 /* The unbroken part of the surface: authored features + two octaves of
