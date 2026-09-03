@@ -29,6 +29,8 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
   // the key stays down afterwards) and raw held-state for the ones that cost
   // time and show it (harvesting, digging the first chamber).
   let interactPressed = false;
+  // H toggles the controls panel — same edge-triggered treatment as E
+  let helpPressed = false;
 
   function isMoveKey(codes) {
     for (let i = 0; i < codes.length; i++) if (keys[codes[i]]) return true;
@@ -38,6 +40,7 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
   function onKeyDown(e) {
     keys[e.code] = true;
     if (e.code === 'KeyE') interactPressed = true;
+    if (e.code === 'KeyH') helpPressed = true;
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].indexOf(e.code) >= 0) e.preventDefault();
   }
   function onKeyUp(e) { keys[e.code] = false; }
@@ -111,6 +114,13 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
     return v;
   }
 
+  /** Consumes a pending H press, same contract as consumeInteract(). */
+  function consumeHelp() {
+    const v = helpPressed;
+    helpPressed = false;
+    return v;
+  }
+
   /** Is the interact key physically down right now? (held actions) */
   function isInteractHeld() { return !!keys.KeyE; }
 
@@ -125,5 +135,5 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
     domElement.removeEventListener('wheel', onWheel);
   }
 
-  return { state, readMoveIntent, consumeInteract, isInteractHeld, dispose };
+  return { state, readMoveIntent, consumeInteract, consumeHelp, isInteractHeld, dispose };
 }

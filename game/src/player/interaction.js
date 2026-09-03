@@ -1,5 +1,6 @@
 import { collideRadius, PLAYER_AVATAR } from './avatar.js';
-import { nearestClimbable, tryInteract, climbPromptText } from './climb.js';
+import { nearestClimbable, tryInteract, climbPromptText, GRASS } from './climb.js';
+import { TREE } from '../world/index.js';
 import { createHarvest, FOUND_STOCK, CACHE_RADIUS } from './harvest.js';
 import { KIND_LABEL, nodesAreProvisional } from './resources.js';
 import { canFound, found, refusalText, isFounded, provisional as foundingProvisional, FOUND_SECONDS, nestOrigin, bearingWord } from './founding.js';
@@ -180,8 +181,53 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   function inventoryText() { return harvest.inventoryLine(); }
   function message() { return lastMessage; }
 
+  /** 0..1 while a held action is running, null when none is. The HUD draws a
+   *  bar from it — the percentage was already in the prompt text, and a
+   *  number that has to be read is not the same as a bar that is seen. */
+  function holdProgress(act) {
+    if (act.kind === 'harvest' && harvest.state.progress > 0) return harvest.state.progress;
+    if (act.kind === 'found' && foundProgress > 0) return foundProgress;
+    return null;
+  }
+
+  /**
+   * Where E is pointing, for the ground ring — {x, z, radius, blocked}, or
+   * null. Resolved from the same `act` the prompt describes, so the ring and
+   * the sentence can never disagree about what is being talked about.
+   */
+  function targetMark(ant, act) {
+    switch (act.kind) {
+      case 'harvest':
+        return { x: act.node.x, z: act.node.z, radius: Math.max(act.node.r, 6), blocked: false };
+      case 'found': {
+        const c = harvest.state.cache;
+        return c ? { x: c.x, z: c.z, radius: 11, blocked: !act.ok } : null;
+      }
+      case 'drop': {
+        const c = harvest.state.cache;
+        // before the first drop there is no pile: the ring goes under the
+        // queen, because *here* is exactly what the action means
+        return { x: c ? c.x : ant.x, z: c ? c.z : ant.z, radius: c ? 11 : 7, blocked: false };
+      }
+      case 'return': {
+        const c = harvest.state.cache;
+        return c ? { x: c.x, z: c.z, radius: 11, blocked: false } : null;
+      }
+      case 'climb': {
+        const t = act.climbTarget;
+        if (!t) return null;
+        if (t.kind === 'tree') return { x: TREE.x, z: TREE.z, radius: TREE.w + 5, blocked: false };
+        const g = GRASS[t.i];
+        return g ? { x: g.x, z: g.z, radius: 5, blocked: false } : null;
+      }
+      default:
+        return null;
+    }
+  }
+
   return {
     harvest, update, resolve, promptText, objectiveText, inventoryText, message,
+    holdProgress, targetMark,
     isHold: (act) => !!HOLD_KINDS[act.kind],
     endFrame: () => harvest.endFrame(),
   };

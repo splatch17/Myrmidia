@@ -128,6 +128,7 @@ window.__ant = player.ant;
 window.__rooms = world.rooms;
 window.__camera = camera;
 window.__scene = scene;
+window.__nodes = RESOURCE_NODES;
 window.__world = world;
 window.__contain = containUnderground;
 window.__profileR = profileR;

@@ -16,6 +16,7 @@ import { createProps } from './props.js';
 import { resourceNodes } from './resources.js';
 import { nestOrigin, canFound, refusalText } from './founding.js';
 import { createHud } from './hud.js';
+import { createTargetMarker } from './marker.js';
 import { dampAngle } from './mathUtil.js';
 
 /**
@@ -91,6 +92,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   input.state.camYaw = SPAWN_YAW;
   const cameraRig = createCameraRig(camera);
   const hud = createHud();
+  const marker = createTargetMarker(scene);
   const interaction = createInteraction({ profile });
   // Props (carried item, the pile, stand-in resource markers) are built here,
   // before main.js's one-shot scene.traverse() applies the nest shading — see
@@ -136,6 +138,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        the ladder's decision, not this file's. Run before movement, so a climb
        entered this frame is walked this frame (the order the old prototype's
        frame() used). */
+    if (input.consumeHelp()) hud.toggleControls();
     const act = interaction.update(ant, input.consumeInteract(), input.isInteractHeld(), dt);
 
     if (ant.climb) {
@@ -161,6 +164,14 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     hud.setObjective(interaction.objectiveText(ant));
     hud.setStock(interaction.inventoryText());
     hud.setEvent(interaction.message());
+    hud.setHold(interaction.holdProgress(act));
+    /* The ring reads the same `act` the prompt does, so what is circled and
+       what is named can never be two different things. */
+    const mark = interaction.targetMark(ant, act);
+    marker.show(mark, mark ? mark.radius : 0, mark ? mark.blocked : false, elapsed);
+    // the help panel closes itself the first time she actually picks something
+    // up: by then it has done its job, and a panel still up after that is noise
+    if (interaction.harvest.state.carrying) hud.closeControls();
     interaction.endFrame();
 
     // the camera drifts back behind the ant while it walks, so the pair
@@ -201,6 +212,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   function dispose() {
     input.dispose();
     hud.dispose();
+    marker.dispose();
     props.dispose();
   }
 
