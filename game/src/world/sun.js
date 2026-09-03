@@ -43,19 +43,37 @@ import { nrm3 } from '../core/vecmath.js';
    one reads as air. Everything else is untouched.
 
    If the art direction wants the milk back, the lever is here and it is four
-   numbers; but it should be judged on an ant-height capture, not a wide. */
+   numbers; but it should be judged on an ant-height capture, not a wide.
+
+   Second pass, after the grass started casting shadows: with a sun at 18.5
+   degrees, 1600 blades throw long shadows across most of the ground, and the
+   scene lost most of what the first pass had given back. The hemisphere fill
+   is what a shadow falls back to, so that is the term that was raised —
+   design/charte-stylisation.md 1c: a shadow is a colour, not an absence. The
+   sun is untouched, so the *contrast* between lit and shadowed ground is the
+   same; only the floor moved.
+
+   Third pass, and this one was measured rather than judged. Reading the
+   drawing buffer down a vertical strip through the queen, the entire playable
+   frame sat between luminance 1 and 62 out of 255 — the whole image inside
+   the bottom twelve percent of the range, with the queen and the ground she
+   stands on both around 10-20 and therefore indistinguishable. The shadow
+   ratio was fine; the absolute level was not. Twilight is a colour, not an
+   underexposure, and the spec's numbers had been read as the second. Sun,
+   exposure and fill all raised together so the hue and the lit/shadow ratio
+   hold while the picture leaves the mud. */
 export const RIG_PROLOGUE = {
   sunDir: nrm3([-300, 120, 195]),   // elevation 18.5 deg, azimuth from -x/+z
   sunColor: 0xe8b98c,
-  sunIntensity: 2.25,               // spec 1.9
+  sunIntensity: 5.4,                // spec 1.9 — see the note on grazing light
   hemiSky: 0x6e7fa8,
   hemiGround: 0x4a4530,
-  hemiIntensity: 0.78,              // spec 0.62
+  hemiIntensity: 1.15,              // spec 0.62 — see the shadow note below
   fog: 0x7d7488,                    // spec 0x8b8399
   fogNear: 95,                      // spec 40
   fogFar: 420,                      // spec 300
   sky: 0x9a93a8,                    // PLACEHOLDER for sky_gradient-prologue
-  exposure: 1.12,                   // spec 1.02
+  exposure: 1.30,                   // spec 1.02
 };
 
 export const RIG_FOUNDED = {

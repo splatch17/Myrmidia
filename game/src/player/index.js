@@ -2,6 +2,7 @@ import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
 import { groundY, distanceToWater } from '../world/index.js';
 import { PLAYER_AVATAR, collideRadius } from './avatar.js';
+import { buildOutlineHull } from '../core/outline.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
 import { buildAntMesh } from './antMesh.js';
 import { createInput } from './input.js';
@@ -77,6 +78,11 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   const legState = makeLegState(profile);
   const { group, updatePose } = buildAntMesh(profile);
   scene.add(group);
+  /* The outline is built from the finished mesh rather than inside
+     antMesh.js, so the rendering trick and the anatomy stay separable: a
+     second creature gets an outline by being passed through here, not by
+     having one baked into how it is modelled. */
+  scene.add(buildOutlineHull(group));
 
   const input = createInput(domElement, profile);
   // the boom starts behind her, not behind +Z: camYaw defaults to 0 in

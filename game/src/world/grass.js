@@ -64,6 +64,84 @@ const C_MOSS_B = new THREE.Color('#8FB055'), C_MOSS_TIP = new THREE.Color('#C6DC
  * shape as the old prototype's GRASS[] entries, so anything already written
  * against that shape ports over unchanged).
  */
+/* The blade's geometry, as one function, because it now has TWO consumers:
+   the visible material and the shadow depth pass. A blade that casts the
+   shadow of a straight, unbent, unswayed ribbon is worse than one that casts
+   none — the shadow contradicts the picture. So the displacement is written
+   once and both passes call it. Anything added below (a new wind term, a new
+   bend) reaches the shadow for free, which is the whole point of the split.
+
+   `phase` is the only reason this takes gT rather than reading aT directly:
+   nothing. It takes gT for readability at the call sites. */
+const GRASS_SHAPE = /* glsl */`
+attribute float aT;
+attribute float aSide;
+attribute vec3 aBase;
+attribute float aH;
+attribute float aAng;
+attribute float aPhase;
+attribute vec3 aTip;
+attribute float aWidth;
+attribute float aTwist;
+uniform float uTime;
+uniform float uWind;
+uniform vec3 uAntPos;
+uniform float uAntRadius;
+uniform vec3 uBaseColor;
+
+/* Fills pos with the displaced vertex, nrm with its normal, in object
+   space. Both passes call this; only the visible one uses nrm. */
+void grassShape(out vec3 pos, out vec3 nrm) {
+  float gT = aT;
+  float dirX = cos(aAng), dirZ = sin(aAng);
+  vec3 perp = vec3(-dirZ, 0.0, dirX);
+  float dBend = 0.52 * aH * gT;
+  vec3 tangentDir = normalize(vec3(dirX * dBend, aH * (1.0 - 0.26 * gT), dirZ * dBend));
+  vec3 n0 = normalize(cross(tangentDir, perp));
+
+  /* A twist along the blade (herbe-brins 5b). perp used to be fixed, so every
+     ribbon faced one direction over its whole length and the field read as
+     cards all hung the same way. One float per instance: some blades now
+     present their edge and some their face, and each changes along itself. */
+  float roll = aTwist * gT;
+  float cr = cos(roll), sr = sin(roll);
+  vec3 perpRolled = perp * cr + n0 * sr;
+  vec3 nRolled    = n0   * cr - perp * sr;
+
+  /* A keel in the NORMAL, not in the geometry (5a). A real blade is folded in
+     a V across its section, and that fold is what gives it a light side and a
+     dark side. Tilting the normal across the ribbon puts the two edges 63
+     degrees apart for zero extra vertices. */
+  nrm = normalize(nRolled - perpRolled * (aSide * 0.62));
+
+  float bend = gT * gT * aH * 0.26;
+  /* Holds its width for the first 60% and then points, instead of narrowing
+     from the base (2). It reaches exactly zero, so the old + 0.05 goes: a tip
+     cut off square is the loudest geometric tell in the set. The 0.02 floor
+     only avoids a degenerate normal exactly at the tip. */
+  float taperK = pow(1.0 - pow(gT, 2.6), 0.55);
+  float width = aWidth * 0.5 * taperK + 0.02;
+  vec3 curvePos = aBase + vec3(dirX * bend, aH * gT * (1.0 - gT * 0.13), dirZ * bend);
+  pos = curvePos + perpRolled * (width * aSide);
+
+  // idle wind sway, phase-desynced per instance so the field doesn't move as
+  // one rigid sheet
+  float ph = aBase.x * 0.07 + aBase.z * 0.05 + aPhase;
+  float amp = gT * gT * uWind;
+  pos.x += sin(uTime * 1.35 + ph) * amp + sin(uTime * 3.1 + ph * 2.3) * amp * 0.3;
+  pos.z += cos(uTime * 1.05 + ph * 1.4) * amp * 0.75;
+
+  // contact bend: push away from the ant, stronger near the tip and within
+  // uAntRadius -- see core/antState.js for the contract
+  vec2 toBlade = pos.xz - uAntPos.xz;
+  float bladeDist = length(toBlade);
+  float influence = clamp(1.0 - bladeDist / max(uAntRadius, 0.001), 0.0, 1.0);
+  influence = influence * influence * gT;
+  vec2 pushDir = bladeDist > 0.0001 ? toBlade / bladeDist : vec2(1.0, 0.0);
+  pos.xz += pushDir * influence * aH * 0.22;
+}
+`;
+
 /* 1600 rather than 900: thinner blades without more of them is a bald lawn —
    design/herbe-brins.md §3 asks for the two together, and they are one
    change, not two. */
@@ -168,81 +246,21 @@ export function createGrassField({ count = 1600, seed = 7 } = {}) {
     Object.assign(shader.uniforms, uniforms);
 
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `
-        attribute float aT;
-        attribute float aSide;
-        attribute vec3 aBase;
-        attribute float aH;
-        attribute float aAng;
-        attribute float aPhase;
-        attribute vec3 aTip;
-        attribute float aWidth;
-        attribute float aTwist;
-        uniform float uTime;
-        uniform float uWind;
-        uniform vec3 uAntPos;
-        uniform float uAntRadius;
-        uniform vec3 uBaseColor;
+      .replace('#include <common>', GRASS_SHAPE + `
         varying vec3 vGrassColor;
         varying float vGrassDist;
         varying vec3 vGrassRay; // x: distance along the camera->ant ray, y: perpendicular distance from it, z: camera->ant distance
         #include <common>
       `)
       .replace('#include <beginnormal_vertex>', `
-        float gT = aT;
-        float dirX = cos(aAng), dirZ = sin(aAng);
-        vec3 perp = vec3(-dirZ, 0.0, dirX);
-        float dBend = 0.52 * aH * gT;
-        vec3 tangentDir = normalize(vec3(dirX * dBend, aH * (1.0 - 0.26 * gT), dirZ * dBend));
-        vec3 n0 = normalize(cross(tangentDir, perp));
-
-        /* A twist along the blade (§5b). perp used to be fixed, so every
-           ribbon faced one direction over its whole length and the field read
-           as cards all hung the same way. One float per instance: some blades
-           now present their edge and some their face, and each one changes
-           along itself. */
-        float roll = aTwist * gT;
-        float cr = cos(roll), sr = sin(roll);
-        vec3 perpRolled = perp * cr + n0 * sr;
-        vec3 nRolled    = n0   * cr - perp * sr;
-
-        /* A keel in the NORMAL, not in the geometry (§5a). A real blade is
-           folded in a V across its section, and that fold is what gives it a
-           light side and a dark side. Tilting the normal across the ribbon
-           puts the two edges 63 degrees apart for zero extra vertices — the
-           geometric keel would have cost x2.6 on the field's triangles for a
-           silhouette gain visible only edge-on. */
-        vec3 objectNormal = normalize(nRolled - perpRolled * (aSide * 0.62));
+        vec3 gPos, gNrm;
+        grassShape(gPos, gNrm);
+        vec3 objectNormal = gNrm;
       `)
       .replace('#include <begin_vertex>', `
-        float bend = gT * gT * aH * 0.26;
-        /* Holds its width for the first 60% and then points, instead of
-           narrowing from the base (§2). It reaches exactly zero, so the old
-           + 0.05 goes: a tip cut off square is the loudest 'geometric' tell
-           in the set and it costs nothing to remove. The 0.02 floor only
-           avoids a degenerate normal exactly at the tip. */
-        float taperK = pow(1.0 - pow(gT, 2.6), 0.55);
-        float width = aWidth * 0.5 * taperK + 0.02;
-        vec3 curvePos = aBase + vec3(dirX * bend, aH * gT * (1.0 - gT * 0.13), dirZ * bend);
-        vec3 transformed = curvePos + perpRolled * (width * aSide);
+        vec3 transformed = gPos;
 
-        // idle wind sway, phase-desynced per instance so the field doesn't
-        // move as one rigid sheet
-        float ph = aBase.x * 0.07 + aBase.z * 0.05 + aPhase;
-        float amp = gT * gT * uWind;
-        transformed.x += sin(uTime * 1.35 + ph) * amp + sin(uTime * 3.1 + ph * 2.3) * amp * 0.3;
-        transformed.z += cos(uTime * 1.05 + ph * 1.4) * amp * 0.75;
-
-        // contact bend: push away from the ant, stronger near the tip and
-        // within uAntRadius -- see core/antState.js for the contract
-        vec2 toBlade = transformed.xz - uAntPos.xz;
-        float bladeDist = length(toBlade);
-        float influence = clamp(1.0 - bladeDist / max(uAntRadius, 0.001), 0.0, 1.0);
-        influence = influence * influence * gT;
-        vec2 pushDir = bladeDist > 0.0001 ? toBlade / bladeDist : vec2(1.0, 0.0);
-        transformed.xz += pushDir * influence * aH * 0.22;
-
-        vGrassColor = mix(uBaseColor, aTip, gT) * (0.52 + 0.48 * gT);
+        vGrassColor = mix(uBaseColor, aTip, aT) * (0.52 + 0.48 * aT);
         vec3 grassWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;
         vGrassDist = distance(grassWorld, cameraPosition);
         // where this blade sits relative to the line of sight from the
@@ -309,9 +327,34 @@ export function createGrassField({ count = 1600, seed = 7 } = {}) {
       `);
   };
 
+  /* The shadow pass draws the same bent blade, by calling the same function.
+     Until now grass had castShadow = false, and a lawn whose blades shade
+     neither each other nor the ground stays a decal however good its profile
+     is. The cost of getting it wrong is worse than none at all: Three would
+     otherwise rasterise the *undisplaced* placeholder ribbon (a flat 1x1 card
+     at the origin, see buildBladeGeometry), so every blade would cast the
+     shadow of something that is not on screen. Hence GRASS_SHAPE. */
+  const depthMaterial = new THREE.MeshDepthMaterial({
+    depthPacking: THREE.RGBADepthPacking,
+    side: THREE.DoubleSide,
+  });
+  depthMaterial.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', GRASS_SHAPE + '\n#include <common>')
+      .replace('#include <begin_vertex>', `
+        vec3 gPos, gNrm;
+        grassShape(gPos, gNrm);
+        vec3 transformed = gPos;
+      `);
+  };
+  depthMaterial.customProgramCacheKey = () => 'grass-depth';
+
   const mesh = new THREE.InstancedMesh(geometry, material, actualCount);
   mesh.name = 'grass';
-  mesh.castShadow = false; // deferred: no custom shadow depth material for the bent shape yet
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.customDepthMaterial = depthMaterial;
   const identity = new THREE.Matrix4();
   for (let k = 0; k < actualCount; k++) mesh.setMatrixAt(k, identity);
   mesh.instanceMatrix.needsUpdate = true;

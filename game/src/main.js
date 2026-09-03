@@ -8,6 +8,7 @@ import {
 } from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
+import { setOutlineZone } from './core/outline.js';
 
 // Entry point for the Three.js/Vite migration (see design docs for the full
 // vision). Atta's world (underground gallery + side rooms, lawn, grass, tree
@@ -245,6 +246,7 @@ function applyEnvironment() {
   hemi.color.copy(HEMI_IN.sky).lerp(outSky, outside);
   hemi.groundColor.copy(HEMI_IN.ground).lerp(outGround, outside);
   hemi.intensity = lerp(HEMI_IN.intensity, lerp(P.hemiIntensity, F.hemiIntensity, f), outside);
+  setOutlineZone(outside);
   trackSun(camera);
 }
 
