@@ -47,14 +47,15 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 | Carte de surface | Écrite à la main, 398×250 jouables, 552×322 maillés, zéro aléatoire |
 | Rivière | Bord ouest, plan d'eau ondulé, berge de sable, Fresnel vers le ciel |
 | Horizon | Deux rideaux de crêtes qui suivent la caméra en x/z |
-| Herbe | 1600 brins, largeur par instance, quille de normale + vrille, pointe qui atteint zéro |
+| Herbe | 1600 brins, largeur par instance, quille de normale + vrille, **ombre portée** (même fonction GLSL pour la passe visible et la passe de profondeur) |
 | Ressources | 3 espèces semées une fois, denses près de l'arbre et dans le creux, aucune dans l'eau |
 | Récolte | Approche → maintien → portage visible → dépôt. Réserve affichée |
 | Fondation | `foundNest()` creuse la 1re chambre au point choisi. L'ancien nid devient l'état « déjà fondé » |
 | Qualité de site | **Les 5 facteurs lisent des données réelles** — le « ? » a disparu du HUD |
 | Ciel | Deux rigs (prologue crépusculaire / colonie fondée) commutés par un scalaire `founded` |
 | Textures | 6 albédos triplanaires + `seed`. `lawn-soil` corrigé, ne vire plus au rouille |
-| Perf | ~153k tris, 13 draw calls, 0 erreur console |
+| Contours | Coque inversée sur les créatures, ~1,3 px constant à l'écran, ardoise dehors / noir chaud dedans |
+| Perf | 145k tris, 18 programmes, 427 Ko VRAM textures, pire médiane 6,3 ms à hauteur de fourmi, 0 erreur console |
 
 ### Ce qui n'existe pas encore
 
@@ -69,27 +70,26 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 | # | Défaut | Gravité |
 |---|---|---|
-| 1 | **La fondation n'a jamais été vue.** Les captures s'arrêtent à « Réserve : 3/5 » — l'agent a été coupé avant. Le code est là, le moment ne l'est pas | **Bloquant pour la livraison** |
-| 2 | Le rig du prologue livré par la DA (brouillard 40/300, expo 1.02) noyait tout le champ proche. Retouché à l'intégration (95/420, expo 1.12) — la DA doit trancher, sur une capture à hauteur de fourmi | À arbitrer |
-| 3 | La reine reste sombre, presque en silhouette, sur un sol brun. Le soleil rasant du prologue la prend de dos une bonne partie du temps | DA |
-| 4 | `grass.js` a `castShadow = false`. Une pelouse dont les brins ne s'ombrent ni entre eux ni sur le sol reste des décalcomanies quel que soit leur profil | Rendu, prochain grand pas |
-| 5 | Les rayons de grimpe et de collision des tiges ont été divisés par ~2,1 avec l'affinement des brins. Correct en théorie, jamais jugé sur capture | À vérifier |
-| 6 | Le tramage de dissolution proche caméra est très visible sur certains brins | Petit |
-| 7 | Points 4 à 7 de `design/herbe-brins.md` non câblés (courbure, dégradé, pointes sèches, contre-jour, SEGS=9) | Reste à faire |
+| 1 | **La fondation n'a jamais été vue.** Les captures s'arrêtent à « Réserve : 3/5 ». Le code est là et compile, le moment ne l'est pas | **Bloquant** |
+| 2 | La reine reste sombre de corps. Le contour la détache mais sa chitine est à la même valeur que le sol — il manque une mesure et un chiffre de DA sur `avatar.js` `colors` | DA |
+| 3 | Le tramage de dissolution proche caméra est très visible sur les brins traversés | Petit mais voyant |
+| 4 | `RIG_PROLOGUE` a été retouché trois fois à l'intégration (brouillard, puis remplissage, puis soleil). Chaque valeur est annotée contre celle de `ambiance-prologue.md`. **La DA n'a jamais arbitré** | À arbitrer |
+| 5 | Les rayons de grimpe et de collision des tiges ont été divisés par ~2,1 avec l'affinement des brins. Jamais jugé sur capture | À vérifier |
+| 6 | Points 4 à 7 de `design/herbe-brins.md` non câblés (courbure, dégradé, pointes sèches, contre-jour, `SEGS = 9`) | Reste à faire |
+| 7 | Pas de bloom sur les émissifs — 3e volet de #28, non commencé | Reste à faire |
+| 8 | `sky_gradient-prologue` et `sky_gradient-lawn` existent en PNG mais `world/sun.js` utilise encore des couleurs plates marquées `PLACEHOLDER` | Petit |
 
 ## Prochaines étapes
 
-Par ordre de dépendance, pas d'envie.
-
-1. **Voir la fondation.** Rejouer la boucle jusqu'au bout et capturer le moment.
-   Tant qu'il n'est pas vu, il n'est pas livré.
-2. **L'ombre portée de l'herbe** (défaut 4) — `customDepthMaterial` répliquant
-   le déplacement de `begin_vertex`. C'est le plus gros gain de rendu restant.
-3. **#28 — post-process léger** : bloom sur les émissifs, contours sur les
-   créatures uniquement, ombres adoucies. Cible 60 fps sur GPU intégré.
-4. **#6 — la ponte**, et la chambre qui se peuple (`populateNest()` existe déjà).
-5. **#34 — mode macro**, le nid en coupe vue de côté.
-6. Défauts 2, 3, 5, 6, 7 ci-dessus.
+1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
+   capturer le moment. Tant qu'il n'est pas vu, il n'est pas livré.
+2. **#6 — la ponte**, et la bascule crépuscule → jour qui se pose **à la
+   première ponte, pas au premier coup de pelle** (`design/ressources-et-fondation.md`).
+   `populateNest()` et `setFoundedMix()` existent déjà, il n'y a qu'à s'en servir.
+3. **La lisibilité de la reine** (défaut 2) — mesurer, puis chiffrer.
+4. **Bloom sélectif** sur les émissifs (défaut 7), dernier volet de #28.
+5. Points 4 à 7 de la spec des brins (défaut 6).
+6. **#34 — mode macro**, le nid en coupe vue de côté.
 
 ## Où sont les choses
 
@@ -156,9 +156,15 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
   `tex.colorSpace = THREE.SRGBColorSpace`. L'oubli ne lève aucune erreur, il
   délave simplement le rendu. Les rampes toon et les cartes `_orm`/`_normal`
   restent en `NoColorSpace`.
-- Deux agents ont été coupés net par la limite de session au moment d'écrire
-  leur harnais de vérification, aux tours 4 et 5. Leur travail était sur le
-  disque : **inventorier `git status` avant de refaire quoi que ce soit.**
+- **Les agents tombent, et de deux façons différentes.** Tours 4, 5 et 6 :
+  coupés par la limite de session, systématiquement au moment d'écrire leur
+  harnais — mais leur implémentation était **sur le disque**, et la récupérer a
+  toujours été moins cher que la refaire. Tour 7 : les trois ont calé sur le
+  watchdog (600 s sans progrès) **sans produire une ligne**, et le travail a été
+  fait ici. Donc, dans l'ordre : `git status` d'abord ; si rien n'a été produit,
+  ne pas relancer le même agent, faire le travail.
+- Aux agents : **écrire et lancer le harnais tôt**, pas à la fin. C'est
+  exactement ce qui n'a jamais été atteint trois tours de suite.
 
 ---
 
@@ -166,6 +172,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |
 | 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |
 | 5 | Carte de surface écrite à la main, rivière, horizon ; textures branchées ; reine fondatrice jouable ; lecture du sol | `dea42af`, `a277ef3` |
 | 5 (DA) | Ambiance du prologue, bark v3, chitin v2, dégradés de ciel | `b45ed22`, `28eb5f5` |
