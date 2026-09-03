@@ -15,9 +15,9 @@ artistique vit dans `design/charte-stylisation.md`,
 ## État au 2026-09-03
 
 **Branche de travail :** `feature/threejs-migration`.
-**Pull request :** [#23](https://github.com/splatch17/Myrmidia/pull/23), ouverte
-contre `main`, mergeable. **Pas encore mergée** — le merge a été refusé par le
-classificateur d'auto-mode, il faut l'autoriser ou cliquer sur GitHub.
+**`main` :** la [PR #23](https://github.com/splatch17/Myrmidia/pull/23) est
+**mergée** (`0f1a28a`, 2026-09-03). Le moteur est sur `main`, le lien de test du
+README pointe dessus. Le travail continue sur la branche et repassera par une PR.
 **Stack :** Three.js 0.169 + Vite 5, projet npm à la racine `game/`.
 **Lien de test :** voir le tableau du `README.md` (build `game/dist/`, servi
 par raw.githack depuis la branche).
