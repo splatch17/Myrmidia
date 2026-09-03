@@ -2,6 +2,21 @@
 
 Premier jet étayé de la vision gameplay du README (section « Boucle de jeu »). C'est une proposition de conception, pas un design figé — chaque section signale ce qui reste à trancher. Objectif : servir de base aux tickets GitHub d'implémentation d'une beta.
 
+## 0. Arbitrages actés (2026-09-01)
+
+Ce document était un premier jet ; le porteur du projet a depuis tranché la direction. Ce qui suit n'est plus une proposition, c'est le cadre dans lequel les sections suivantes doivent être lues. Là où une section plus bas contredit ce tableau, c'est ce tableau qui gagne.
+
+| Sujet | Décision |
+|---|---|
+| Point de départ | La partie commence **reine seule, à la surface, sans fourmilière**. Le nid pré-construit actuel n'est plus l'écran de départ : il devient l'état « déjà fondé », atteint en jeu. |
+| Monde de surface | **Carte fixe, faite à la main**, bornée. Relief, herbes, arbres, rivière sur certains bords, montagnes au loin pour la profondeur. Pas de génération procédurale de terrain — on veut pouvoir placer une intention au mètre près, comme WoW. |
+| Choix du site de fondation | **Libre, mais le terrain compte.** Creusable presque partout sauf roche et bord de rivière ; le sol, l'ombre, la proximité des ressources et de l'eau font la qualité du site. Le joueur décide, le terrain le récompense ou le punit, et un retour à l'écran lui dit ce que vaut l'endroit où il se tient. Une carte où tous les sites se valent viderait l'exploration de son enjeu. |
+| Mode macro | **Le nid en coupe, vue de côté**, façon fourmilière d'élevage : creuser une salle, affecter les ouvrières, voir le couvain grandir. Pas de carte stratégique du territoire pour l'instant — la croissance du nid doit rester *visible*, c'est le cœur du fantasme. |
+| Échelle du chantier | Le nid n'a pas vocation à être énorme à ce stade. L'objectif immédiat est de **sentir la boucle**, pas de meubler un donjon. |
+| Ordre de développement | Le cœur du gameplay se conçoit **en parallèle** de l'implémentation, en s'ajustant à ce que les mesures et les captures montrent réellement — pas figé d'avance. Les premières actions/sorts sont ajoutés en cours de route pour donner un aperçu jouable. |
+
+Conséquence directe sur le code existant : la génération du nid doit passer **à l'exécution, à l'endroit choisi par le joueur** (#11), et la chambre de la reine doit exister en version vide qui se peuple (#12) — deux tickets déjà ouverts qui cessent d'être « plus tard » pour devenir la colonne vertébrale.
+
 ## 1. Prologue — la fondation
 
 La partie commence avec le joueur seul, incarnant **la reine**, avant toute fourmilière. Elle doit :

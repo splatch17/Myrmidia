@@ -709,8 +709,13 @@ function buildWorld() {
      hole in the gallery wall (WALL_HOLES) and a containment region
      (ROOM_BRANCHES, read by containUnderground() near the frame loop) so the
      room is both visible and walkable. th0 is 0 or PI, i.e. a clean +-X
-     branch, which keeps the corridor math a straight line. */
-  function buildBranch(th0, z0, corridorR, corridorLen, roomR, roomLen, angSegs, seed, cavityMul, wallColorFn) {
+     branch, which keeps the corridor math a straight line. doorLightCol, if
+     given, seeds one extra ALL_LIGHTS entry right at the mouth (see #17):
+     the room's own lamps sit deep enough inside that nothing signals from
+     the main gallery that an opening exists at all — this one is placed a
+     step into the corridor, dead-centre of the punched hole, specifically
+     so it's visible looking down the tube rather than only once turned in. */
+  function buildBranch(th0, z0, corridorR, corridorLen, roomR, roomLen, angSegs, seed, cavityMul, wallColorFn, doorLightCol) {
     var mouth = wallPoint(th0, z0, 0);
     var origin = [mouth[0], mouth[1], mouth[2]];
     var dir = nrm3([Math.cos(th0), 0, 0.0001]);
@@ -740,6 +745,10 @@ function buildWorld() {
     }
 
     WALL_HOLES.push({ th: th0, z: z0, rTh: Math.max(0.16, corridorR * 1.8 / profileR(z0)), rZ: corridorR * 1.7 });
+    if (doorLightCol) {
+      var doorLx = origin[0] + dir[0] * 1.2, doorLz = origin[2] + dir[2] * 1.2;
+      ALL_LIGHTS.push({ p: [doorLx, undergroundFloor(doorLx, doorLz) + 2.1, doorLz], c: doorLightCol });
+    }
 
     var SLu = 1.5, rows = [];
     for (var u = 0; u <= uMax + 0.0001; u += SLu) {
@@ -776,12 +785,12 @@ function buildWorld() {
   var granaryB = buildBranch(Math.PI, -70, 3.3, 9, 13, 10, 30, 4001, 1.0, function (proud, wx, wy, wz) {
     var c = mixc(C_WALL_B, C_WALL_A, proud * 0.8 + 0.12);
     return mixc(c, C_SOIL_A, 0.28 + proud * 0.18);
-  });
+  }, [0.55, 0.40, 0.20]);
   // brood chambers: warm extension of the queen's chamber — right side, deep by the chamber
   var broodB = buildBranch(0, -120, 4.2, 8, 17, 13, 34, 5117, 1.0, function (proud, wx, wy, wz) {
     var c = mixc(C_WALL_B, C_WALL_A, proud * 0.75 + 0.15);
     return mixc(c, C_SOIL_A, 0.55);
-  });
+  }, [0.68, 0.50, 0.25]);
   // midden: cramped, third register — right side, nearer the mouth, dimmed via cavityMul.
   // cavityMul pushed darker (0.62 -> 0.46, Cephalotes) so the midden reads as the sharpest
   // "sombre et inquiétant" anchor point on the site, ahead of a future prologue scene that
@@ -790,7 +799,11 @@ function buildWorld() {
   var middenB = buildBranch(0, -40, 2.9, 7, 10, 8, 26, 6229, 0.46, function (proud, wx, wy, wz) {
     var c = mixc(C_WALL_B, C_WALL_A, proud * 0.6 + 0.08);
     return mixc(c, C_MOLD, 0.3 + proud * 0.3);
-  });
+  },
+  // door light: sick green-grey, brighter than the room's own MOLD_LIGHT below
+  // (0.24,0.36,0.24) so it still reads as a doorway at gallery range -- the
+  // "avoid me" tone is the point either way
+  [0.30, 0.44, 0.28]);
 
   var ANG = 44, SL = 1.7;
   var slices = [];
@@ -1211,7 +1224,7 @@ function buildWorld() {
     var baseY = groundY(bx, bz);
     var dx = Math.cos(ang), dz = Math.sin(ang);
     var sx = -dz, sz = dx;
-    var w0 = 0.55 + h * 0.011;
+    var w0 = bladeBaseWidth(h);
     var prevL = -1, prevR = -1;
     for (var s = 0; s <= segs; s++) {
       var t = s / segs;
@@ -1240,7 +1253,7 @@ function buildWorld() {
     blade(bx, bz, h, bladeAng, taper, C_MOSS_A, tip);
     // ang kept alongside the footprint so the climb mechanic can walk the same
     // curve the mesh was built from (see bladeCurvePoint), without re-deriving it
-    GRASS.push({ x: bx, z: bz, h: h, baseY: groundY(bx, bz), w: 0.55 + h * 0.011, ang: bladeAng });
+    GRASS.push({ x: bx, z: bz, h: h, baseY: groundY(bx, bz), w: bladeBaseWidth(h), ang: bladeAng });
   }
 
   /* ---- a fallen leaf, leaning as a ramp: the traversal pillar, staged ---- */
@@ -1356,13 +1369,17 @@ function segMat(a, b, radius, o) {
    an ant onto it (grab range, dismount, standing on branches) is a separate
    ticket for Cataglyphis; TREES is kept apart from GRASS on purpose so nothing
    here silently changes GRASS-based systems (climb, camera occlusion). */
-var TREE = { x: -85, z: 95, h: 210, ang: Math.PI / 2, w: 15 };
+// #19: grown again on top of #14's widening -- h 210->340, w (base radius)
+// 15->22 -- still well inside the lawn's rendered footprint (GX/GZ bounds in
+// buildWorld) with the decorative canopy's reach re-verified below, see the
+// diagnostic harness notes in the agent file for the exact numbers checked.
+var TREE = { x: -85, z: 95, h: 340, ang: Math.PI / 2, w: 22 };
 TREE.baseY = groundY(TREE.x, TREE.z);
 var TREES = [TREE];
 
 var C_BARK_A = mixc(C_WALL_A, C_ROOT, 0.3), C_BARK_B = mixc(C_WALL_B, C_ROOT, 0.55);
 var TREE_TRUNK_T = 0.8;   // where the bare trunk hands off to branches/canopy
-var TREE_TIP_R = 4.2;     // trunk radius at TREE_TRUNK_T, shared by both LOD levels so
+var TREE_TIP_R = 6.2;     // trunk radius at TREE_TRUNK_T, shared by both LOD levels so
                            // the taper (and anything measuring it, e.g. the walkable
                            // branch below) doesn't depend on which mesh is bound
 
@@ -1407,12 +1424,14 @@ function treeTrunkRadius(t) {
    and doesn't shift the decorative branches' RNG draws that follow it in
    buildTree(). Aimed to arc back over the lawn toward lower z (the tunnel
    mouth/hub) rather than deeper into the lawn, for the requested view. ---- */
+// #19: scaled up alongside the trunk (TREE.w 15->22) so the branch still
+// reads as proportioned to the bark it forks off of, not a twig on a giant.
 var TREE_WALK_SPLIT_T = TREE_TRUNK_T * 0.55;   // forks off partway up the bare trunk
 var TREE_WALK_ANG      = Math.PI * 1.511;      // around the trunk: aimed back toward -z
-var TREE_WALK_LEN       = 92;                  // horizontal reach of the branch
-var TREE_WALK_RISE      = 34;                  // vertical climb over that reach, eased near the tip
-var TREE_WALK_BASE_R    = 6.5;                 // where it leaves the trunk: wide enough for two ants abreast
-var TREE_WALK_TIP_R     = 3.4;                 // still a full platform at the far end
+var TREE_WALK_LEN       = 98;                  // horizontal reach of the branch
+var TREE_WALK_RISE      = 36;                  // vertical climb over that reach, eased near the tip
+var TREE_WALK_BASE_R    = 9.6;                 // where it leaves the trunk: wide enough for two ants abreast
+var TREE_WALK_TIP_R     = 5.0;                 // still a full platform at the far end
 
 var treeWalkFork = treeRingFrame(TREE_WALK_SPLIT_T);
 var treeWalkSide = nrm3(add3(scl3(treeWalkFork.x, Math.cos(TREE_WALK_ANG)), scl3(treeWalkFork.z, Math.sin(TREE_WALK_ANG))));
@@ -1453,7 +1472,10 @@ function buildTree(near) {
   var M = newMesh();
   var R = rng(near ? 481001 : 481002);
   var tmpM = m4();
-  var rings = near ? 20 : 4, angSegs = near ? 12 : 6;
+  // near angSegs bumped 12->16 for #19: the base radius grew 15->22, and the
+  // old facet count started showing as flats on a trunk this much wider up
+  // close. Far stays at 6 -- untouched, it's the whole point of the LOD split.
+  var rings = near ? 20 : 4, angSegs = near ? 16 : 6;
   var baseR = TREE.w, tipR = TREE_TIP_R;
 
   var rows = [];
@@ -1503,7 +1525,9 @@ function buildTree(near) {
      the mesh always matches the walkable centerline exactly. No noise on the
      far LOD, fewer rings on both. No foliage anywhere near it on purpose —
      it's the requested viewpoint, kept clear of anything that could block it. */
-  var wRings = near ? 10 : 3, wSegs = near ? 8 : 5;
+  // wSegs (near) bumped 8->10 for #19, same reasoning as angSegs above:
+  // TREE_WALK_BASE_R grew 6.5->9.6, keep the near facets from flattening.
+  var wRings = near ? 10 : 3, wSegs = near ? 10 : 5;
   var wRows = [];
   for (var wi = 0; wi <= wRings; wi++) {
     var wu = wi / wRings;
@@ -1553,22 +1577,30 @@ function buildTree(near) {
       var side2 = nrm3(add3(scl3(fr2.x, Math.cos(outAng)), scl3(fr2.z, Math.sin(outAng))));
       var dir2 = nrm3(add3(scl3(side2, 0.7), [0, 0.7, 0]));
       var start2 = add3(fr2.p, scl3(side2, lerp(baseR, tipR, bt / TREE_TRUNK_T) * 0.7));
-      var branchLen = 30 + R() * 22;
+      // #19: bumped again from 30-52/2.6-3.7 to match the wider trunk, but kept
+      // shy of a straight proportional (~1.5x) scale-up -- reach*0.7071
+      // (dir2 is a 45-degree up/out mix) plus the foliage blob radius below
+      // has to stay inside the lawn's rendered footprint (buildWorld's
+      // GX0/GX1=-190/190) even in the worst case, i.e. one of the 5 branches
+      // pointing straight out along -x with every R() draw maxed -- checked
+      // by scanning the actual generated mesh's bounding box, see the agent
+      // file note for the numbers.
+      var branchLen = 34 + R() * 22;
       var end2 = add3(start2, scl3(dir2, branchLen));
-      var branchR = 2.6 + R() * 1.1;   // scaled up from the old fixed 1.7-2.5 to match the thicker trunk
+      var branchR = 3.4 + R() * 1.4;
       segMat(start2, end2, branchR, tmpM);
       bake(M, cylPrim, tmpM, function (x, y, z) {
         return [C_BARK_A[0] * 0.9, C_BARK_A[1] * 0.9, C_BARK_A[2] * 0.9, daylight(x, y, z) * 0.72];
       });
-      foliageBlob(end2, 24 + R() * 12, R());
-      foliageBlob(add3(start2, scl3(sub3(end2, start2), 0.55)), 18 + R() * 8, R());
+      foliageBlob(end2, 30 + R() * 13, R());
+      foliageBlob(add3(start2, scl3(sub3(end2, start2), 0.55)), 22 + R() * 9, R());
     }
-    foliageBlob(add3(treeCenterAt(TREE_TRUNK_T), [0, 12, 0]), 28, 0.5);
+    foliageBlob(add3(treeCenterAt(TREE_TRUNK_T), [0, 12, 0]), 34, 0.5);
   } else {
     // far: the fanned crown collapses to two flat-tinted blobs covering
     // roughly the same envelope as the near version, at a fraction of the cost
-    foliageBlob(add3(treeCenterAt(TREE_TRUNK_T), [-14, 14, 6]), 46, 0.5);
-    foliageBlob(add3(treeCenterAt(TREE_TRUNK_T), [18, 22, -8]), 40, 0.5);
+    foliageBlob(add3(treeCenterAt(TREE_TRUNK_T), [-14, 14, 6]), 55, 0.5);
+    foliageBlob(add3(treeCenterAt(TREE_TRUNK_T), [18, 22, -8]), 48, 0.5);
   }
 
   computeNormals(M);
@@ -2048,14 +2080,23 @@ var CLIMB_RADIUS = 4.5;    // how close to a blade's base an ant must be to grab
 var CLIMB_SPEED  = 20;     // arc-length units per second while climbing
 var CLIMB_MAX_T  = 0.93;   // stop short of the tip, where the blade gets too thin to stand on
 
-// measured from the bark, not the trunk's centre: the trunk is TREE.w (15)
-// units across at the base, so a centre-relative radius like CLIMB_RADIUS
-// above would have the ant brushing the bark long before it's "in range".
+// measured from the bark, not the trunk's centre: a centre-relative radius
+// like CLIMB_RADIUS above would have the ant brushing the bark long before
+// it's "in range" -- see TREE.w/treeTrunkRadius for the actual bark distance.
 var TREE_CLIMB_RADIUS = 6;
 // how close to the ground (as a fraction of the trunk's t) pressing E while
 // climbing the tree actually dismounts -- see tryInteract() for why higher
 // up (including the whole branch) the only way down is to walk backward.
 var TREE_DISMOUNT_T = 0.05;
+
+/* #19: grass used to read as a thread an ant balances on rather than a stalk
+   it climbs -- the base radius grew from a near-flat 0.55+h*0.011 (diameter
+   ~1.8-3.4 across the whole height range) to this, so even the shortest
+   climbable blades (CLIMB_MIN_H=42) are close to the ant's own body length
+   (~9.6 units, gaster to mandible tip) across. Shared between buildWorld()'s
+   blade() (mesh) and the GRASS[] entry (climb/collision) so the two can
+   never drift apart -- see both call sites. */
+function bladeBaseWidth(h) { return 1.7 + h * 0.028; }
 
 function bladeCurvePoint(g, t) {
   var dx = Math.cos(g.ang), dz = Math.sin(g.ang);
@@ -2187,7 +2228,11 @@ function updateLegs(a, legState, dt) {
 var keys = {};
 /* camYaw is absolute, never an offset from the ant's facing: an offset would
    make the ant chase a target that moves with it, and it would spin forever. */
-var camYaw = 0, wantPitch = -0.19, camDist = 24;
+// Default pulled back from 24 to 36 (#18): a WoW-style MMO framing wants the
+// character small in frame outdoors, not filling it. The narrow-tunnel
+// tightening below (Math.max(13.5, room * 1.5)) is untouched by this, so
+// nothing changes underground in the gallery itself.
+var camYaw = 0, wantPitch = -0.19, camDist = 36;
 
 function dampAngle(a, b, rate, dt) {
   var d = ((b - a + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
@@ -2251,7 +2296,9 @@ function endPointer(e) {
 canvas.addEventListener('pointerup', endPointer);
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('wheel', function (e) {
-  camDist = clamp(camDist + e.deltaY * 0.03, 9, 60);
+  // widened from [9,60] alongside the default (#18) so there's real room to
+  // pull out further than the new default, not just up to it
+  camDist = clamp(camDist + e.deltaY * 0.03, 10, 85);
   e.preventDefault();
 }, { passive: false });
 
@@ -2266,8 +2313,11 @@ var camEye = [-16, 12, -176], camAim = [-16, 4, -158];
 
 /* Tree LOD: near under TREE_LOD_ON, far past TREE_LOD_OFF, with a gap
    between the two so crossing the boundary while walking doesn't flicker
-   between the two meshes every frame. */
-var TREE_LOD_ON = 130, TREE_LOD_OFF = 170;
+   between the two meshes every frame. Pushed out for #19 in rough proportion
+   to the tree's own growth (trunk radius ratio 22/15) so the detailed mesh
+   still covers the same relative viewing distance on the bigger silhouette --
+   a threshold change only, doesn't touch either mesh's triangle count. */
+var TREE_LOD_ON = 190, TREE_LOD_OFF = 250;
 var treeLodNear = true;
 
 var camBtn = document.getElementById('camtoggle');
