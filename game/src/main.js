@@ -16,7 +16,7 @@ import { attachSpatialIndex, status as spatialStatus } from './player/spatial.js
 
 // Entry point for the Three.js/Vite migration (see design docs for the full
 // vision). Atta's world (underground gallery + side rooms, lawn, grass, tree
-// — see world/index.js) plus Cataglyphis's player controller (movement,
+// , see world/index.js) plus Cataglyphis's player controller (movement,
 // camera, IK legs, underground/lawn collision — see player/index.js) are
 // wired in below. Nothing here is final art; NPCs/harvest loop/HUD are a
 // later pass (see the agent notes for what's in vs. out of scope this round).
