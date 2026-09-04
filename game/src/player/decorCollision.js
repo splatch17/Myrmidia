@@ -3,6 +3,7 @@ import { clamp } from '../core/noise.js';
 import { bladeCurvePoint } from '../world/blade.js';
 import { GRASS, CLIMB_MIN_H } from './climb.js';
 import { PLAYER_AVATAR, collideRadius } from './avatar.js';
+import { queryDisc, KIND } from './spatial.js';
 
 /* ==========================================================================
    Decor non-penetration (#4/#16): the ant stops at rocks, mushroom caps,
@@ -157,26 +158,84 @@ export function mushroomRadii(antR = collideRadius(PLAYER_AVATAR)) {
   return mushroomR;
 }
 
+/* ---- collider lists, flattened once -------------------------------------
+   {x, z, r} triples rather than the source records, built lazily on first
+   use and cached: the per-collider decisions above (which caps collide at
+   all, which blades are stiff enough) do not change while the game runs, so
+   re-deciding them 3400 times a frame *per ant* was work that only got
+   worse with #36. Flat lists are also the shape a spatial index wants
+   (#35, spatial.js) — this is what gets handed to it as the candidate set.
+
+   Keyed on the source array's length so a world rebuild (or a nest dug at
+   run time, which adds caps) invalidates them rather than being missed. */
+let stemList = null, stemsFor = -1;
+function stems() {
+  if (!stemList || stemsFor !== GRASS.length) {
+    stemsFor = GRASS.length;
+    stemList = [];
+    for (let j = 0; j < GRASS.length; j++) {
+      const g = GRASS[j];
+      if (g.h >= CLIMB_MIN_H) stemList.push({ x: g.x, z: g.z, r: grassCollideR(g) });
+    }
+    stemList.push({ x: TREE_BASE[0], z: TREE_BASE[2], r: TREE_COLLIDE_R });
+  }
+  return stemList;
+}
+
+let capList = null, capsFor = -1;
+function caps() {
+  const radii = mushroomRadii();
+  if (!capList || capsFor !== MUSHROOMS.length) {
+    capsFor = MUSHROOMS.length;
+    capList = [];
+    for (let k = 0; k < MUSHROOMS.length; k++) {
+      if (radii[k] > 0) capList.push({ x: MUSHROOMS[k].x, z: MUSHROOMS[k].z, r: radii[k] });
+    }
+  }
+  return capList;
+}
+
+let rockList = null, rocksFor = -1;
+function rocks() {
+  if (!rockList || rocksFor !== ROCKS.length) {
+    rocksFor = ROCKS.length;
+    rockList = ROCKS.map((o) => ({ x: o.x, z: o.z, r: o.r }));
+  }
+  return rockList;
+}
+
+/* The widest thing in any list, so the disc query asks for a radius that
+   cannot miss a collider whose *edge* reaches the ant. Recomputed with the
+   list it describes. */
+function maxRadius(list) {
+  let m = 0;
+  for (let i = 0; i < list.length; i++) if (list[i].r > m) m = list[i].r;
+  return m;
+}
+
 /* Every collider that could be touching (x, z), handed one at a time to
    `fn(cx, cz, r)`. Split by region rather than iterating everything: the
    fungus gardens are all underground (z < -14) and the pebbles/grass/tree
    are all out on the lawn (z > 6), so each frame only ever walks the list it
    can actually be touching. One iterator, so the resolver and the
-   verification probe can never disagree about a radius. */
-function forEachCollider(x, z, fn) {
+   verification probe can never disagree about a radius.
+
+   Routed through spatial.js: with no index attached it walks the same lists
+   in the same order as before (the fallback is the complete set, not a
+   cheaper guess), and when #35 lands the same call returns only the nearby
+   candidates without a line changing here. `reach` is the query radius —
+   the ant's own body plus the widest collider in the list, so nothing whose
+   edge touches the ant can be culled by a correct index. */
+function forEachCollider(x, z, fn, antR = 0) {
+  const emit = (o) => fn(o.x, o.z, o.r);
   if (z < TUNNEL_MOUTH + 6) {
-    const radii = mushroomRadii();
-    for (let k = 0; k < MUSHROOMS.length; k++) {
-      if (radii[k] > 0) fn(MUSHROOMS[k].x, MUSHROOMS[k].z, radii[k]);
-    }
+    const list = caps();
+    queryDisc(KIND.MUSHROOMS, x, z, antR + maxRadius(list), list, emit);
   }
   if (z > TUNNEL_MOUTH - 6) {
-    for (let i = 0; i < ROCKS.length; i++) fn(ROCKS[i].x, ROCKS[i].z, ROCKS[i].r);
-    for (let j = 0; j < GRASS.length; j++) {
-      const g = GRASS[j];
-      if (g.h >= CLIMB_MIN_H) fn(g.x, g.z, grassCollideR(g));
-    }
-    fn(TREE_BASE[0], TREE_BASE[2], TREE_COLLIDE_R);
+    const rl = rocks(), sl = stems();
+    queryDisc(KIND.ROCKS, x, z, antR + maxRadius(rl), rl, emit);
+    queryDisc(KIND.GRASS, x, z, antR + maxRadius(sl), sl, emit);
   }
 }
 
@@ -190,7 +249,7 @@ export function deepestPenetration(x, z, antR = 0) {
   forEachCollider(x, z, (cx, cz, r) => {
     const pen = r + antR - Math.hypot(x - cx, z - cz);
     if (pen > worst) worst = pen;
-  });
+  }, antR);
   return worst;
 }
 
@@ -211,7 +270,7 @@ function collectDecorPush(ant) {
     push.x += (dx / d) * pen;
     push.z += (dz / d) * pen;
     push.n++;
-  });
+  }, antR);
   return push;
 }
 

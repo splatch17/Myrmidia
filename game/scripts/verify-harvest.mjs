@@ -38,7 +38,7 @@ const outDir = process.argv[2] || path.join(gameDir, '_harvest-shots');
 fs.mkdirSync(outDir, { recursive: true });
 
 const PORT = 4177;
-const URL = `http://localhost:${PORT}/`;
+const URL = `http://localhost:${PORT}/${process.env.MYR_URLQ ? "?" + process.env.MYR_URLQ : ""}`;
 
 // Where the harness decides to found: uphill on the knoll, ~18 units from the
 // nearest node, clear of every decor collider and on ground the site readout

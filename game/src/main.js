@@ -5,11 +5,14 @@ import {
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, setFoundedMix, foundedMix,
   nestOrigin, canFoundAt, foundNest, populateNest, sealNest, getFoundedNest,
   pitFactorAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
+  MUSHROOMS, ROCKS, TERRAIN_BOUNDS,
 } from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
 import { setOutlineZone } from './core/outline.js';
 import { createQualityPanel } from './core/quality.js';
+import { indexWorld, worldQuery } from './core/worldIndexBridge.js';
+import { attachSpatialIndex, status as spatialStatus } from './player/spatial.js';
 
 // Entry point for the Three.js/Vite migration (see design docs for the full
 // vision). Atta's world (underground gallery + side rooms, lawn, grass, tree
@@ -255,6 +258,25 @@ function applyEnvironment() {
 
 /* After the world and the player exist: it walks the scene to find the grass
    and the textured materials it toggles. */
+/* Fill the shared spatial index and hand it to player/**, before the first
+   frame — every proximity query in the game runs through it, and the fallback
+   it would otherwise use is the linear scan this whole change exists to
+   remove (design/etat-des-lieux.md 2b). */
+const indexStats = indexWorld({
+  grassFootprints: world.grassFootprints,
+  mushrooms: MUSHROOMS,
+  rocks: ROCKS,
+  bounds: { x0: TERRAIN_BOUNDS.x0, x1: TERRAIN_BOUNDS.x1, z0: TERRAIN_BOUNDS.z0, z1: TERRAIN_BOUNDS.z1 },
+});
+/* ?nospatial=1 detaches the index and puts every proximity query back on its
+   linear scan. This is not a setting — it is the A/B that has to exist for a
+   change whose entire acceptance criterion is "identical behaviour, less CPU".
+   Without it, a silent difference in what the index answers looks exactly like
+   a gameplay bug introduced somewhere else. */
+const NO_SPATIAL = typeof location !== 'undefined' && /[?&]nospatial=1/.test(location.search);
+if (!NO_SPATIAL) attachSpatialIndex(worldQuery, 'world');
+window.__spatial = () => ({ ...spatialStatus(), ...indexStats });
+
 const quality = createQualityPanel({ renderer, sun, scene });
 
 renderer.setAnimationLoop(frame);

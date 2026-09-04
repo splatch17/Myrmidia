@@ -198,7 +198,12 @@ export function createGrassField({ count = 1800, seed = 7 } = {}) {
     // decorCollision.js read it. Their radii therefore shrink with the blade,
     // which is correct for a stem half as thick and is a change of feel at
     // contact: to be judged on a capture, not compensated for blind.
-    footprints.push({ x: bx, z: bz, h, baseY, w: bladeBaseWidth(h), ang });
+    /* `i` is the blade's own index in this array, carried on the record so a
+       query that hands back the footprint can say WHICH blade it is without
+       the caller searching for it (player/climb.js's ant.climb.i is an index
+       into this array). Every consumer builds the field from the same seed
+       and count, so the index means the same thing in all of them. */
+    footprints.push({ i, x: bx, z: bz, h, baseY, w: bladeBaseWidth(h), ang });
     i++;
   }
   const actualCount = i;

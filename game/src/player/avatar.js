@@ -135,3 +135,12 @@ export const PLAYER_AVATAR = FOUNDING_QUEEN;
 export function legLengths(p) { return [p.legLen[0] * p.scale, p.legLen[1] * p.scale]; }
 export function strideOf(p) { return p.stride * p.scale; }
 export function collideRadius(p) { return p.bodyR * p.scale; }
+
+/* Profiles by id, so an entity's *state* can name its body with a string
+   instead of holding a reference to this table (#36). The profile is a
+   definition, not state: two ants of the same caste share one entry and
+   nothing about it changes at run time, which is exactly why a saved entity
+   should carry `profileId` and resolve it on load rather than serialise a
+   copy of the body plan. */
+export const PROFILES = { worker: WORKER, queen: FOUNDING_QUEEN };
+export function profileById(id) { return PROFILES[id] || WORKER; }
