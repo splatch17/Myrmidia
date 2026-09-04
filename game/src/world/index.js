@@ -162,7 +162,7 @@ export function createWorld() {
   initFounding(dug);
 
   function update(dt, elapsed, camera) {
-    grass.update(dt, elapsed);
+    grass.update(dt, elapsed, camera);
     updateFounding(dt);
     queen.update(elapsed);
     water.update(elapsed);
@@ -177,6 +177,10 @@ export function createWorld() {
     group,
     update,
     grassFootprints: grass.footprints,
+    // the field itself, so core/quality.js can drive its shadow-casting
+    // range (see grass.js's uCast* uniforms — that range is the frame's
+    // single biggest lever) without walking the scene graph for it
+    grass,
     resources: resources.nodes,
     rooms: underground.rooms,
     doorLights: underground.doorLights,

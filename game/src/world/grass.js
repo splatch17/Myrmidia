@@ -245,6 +245,37 @@ export function createGrassField({ count = 3400, seed = 7 } = {}) {
     // cheap constant term is enough to read as that, and it doubles as the
     // guarantee that a blade is never a silhouette the player can't see past.
     uTransl: { value: 0.16 },
+
+    /* SHADOW CASTING RANGE — the single biggest frame cost in the game, and
+       the reason this pair of uniforms exists.
+
+       Measured on the target machine (Intel Iris Xe, ANGLE/D3D11, 1280x720,
+       scripts/verify-round10.mjs, GPU timer queries rather than wall clock):
+       an 8.0 ms frame, of which 5.35 ms was the shadow map. Splitting that
+       bill by freezing the depth pass while still sampling the map gave
+       4.0 ms depth pass / 1.3 ms lookup — and turning grass casting off
+       alone took the depth pass from 4.0 ms to 0.66 ms. So 3.4 ms of an
+       8 ms frame, 42% of everything, was 3400 grass blades rasterising into
+       a 2048^2 depth target. The lookup filter was not the problem (PCF hard
+       measured the same as PCFSoft), and the map resolution was only a lever
+       because it scales that same grass fill.
+
+       The fix has to keep the round-7 win (grass that shades itself and the
+       ground) while paying less for it. Shrinking the shadow BOX would not
+       have worked: fewer blades fall inside it, but each one then covers
+       proportionally more texels, and the total fill is unchanged. What
+       actually reduces fill is drawing fewer blades into the map — so the
+       depth pass keeps only the blades near where the shadow is looked at,
+       and clips the rest out at the vertex stage, before rasterisation.
+
+       Two centres, not one: the ant (that is where the player is looking at
+       the ground, and where a blade's shadow is read at its real size) and
+       the camera (which can be a long way from her on a 58-unit boom, and
+       which is also the only centre a free-flown verification view has).
+       A blade inside either disc casts. */
+    uCastA: { value: new THREE.Vector3(0, 0, 0) },
+    uCastB: { value: new THREE.Vector3(0, 0, 0) },
+    uCastRadius: { value: 46 },
   };
 
   const material = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, side: THREE.DoubleSide });
@@ -348,11 +379,32 @@ export function createGrassField({ count = 3400, seed = 7 } = {}) {
   depthMaterial.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', GRASS_SHAPE + '\n#include <common>')
+      .replace('#include <common>', GRASS_SHAPE + `
+        uniform vec3 uCastA;
+        uniform vec3 uCastB;
+        uniform float uCastRadius;
+        #include <common>
+      `)
       .replace('#include <begin_vertex>', `
         vec3 gPos, gNrm;
         grassShape(gPos, gNrm);
         vec3 transformed = gPos;
+      `)
+      /* Out-of-range blades are killed AFTER projection, by pushing the
+         vertex outside the clip volume on every axis, rather than by
+         collapsing it to a point. A degenerate triangle still enters
+         rasterisation; a fully clipped one does not, and clipping is where
+         the fragments this whole change is about get saved. Tested against
+         aBase (the blade's root, one value per instance) so all 14 vertices
+         of a blade always agree — a per-vertex test would tear blades in
+         half at the boundary. See the uCast* uniforms for the measurement. */
+      .replace('#include <project_vertex>', `
+        #include <project_vertex>
+        {
+          float dA = distance(aBase.xz, uCastA.xz);
+          float dB = distance(aBase.xz, uCastB.xz);
+          if (min(dA, dB) > uCastRadius) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        }
       `);
   };
   depthMaterial.customProgramCacheKey = () => 'grass-depth';
@@ -366,11 +418,16 @@ export function createGrassField({ count = 3400, seed = 7 } = {}) {
   for (let k = 0; k < actualCount; k++) mesh.setMatrixAt(k, identity);
   mesh.instanceMatrix.needsUpdate = true;
 
-  function update(dt, elapsed) {
+  function update(dt, elapsed, camera) {
     uniforms.uTime.value = elapsed;
     uniforms.uAntPos.value.copy(antState.position);
     uniforms.uAntRadius.value = antState.radius;
+    uniforms.uCastA.value.copy(antState.position);
+    if (camera) uniforms.uCastB.value.copy(camera.position);
   }
 
-  return { mesh, footprints, update };
+  /** Shadow-casting range in world units, for core/quality.js. */
+  function setCastRadius(r) { uniforms.uCastRadius.value = r; }
+
+  return { mesh, footprints, update, setCastRadius };
 }

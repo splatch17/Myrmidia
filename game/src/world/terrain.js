@@ -76,9 +76,88 @@ export function riverEdgeAt(z) {
   return RIVER.edgeX + 2.0 * Math.sin(z * 0.021) + 1.0 * Math.sin(z * 0.047 + 1.3);
 }
 
-/** Signed distance from the near waterline, positive on dry land. */
+/* ---- the pond ----------------------------------------------------------- */
+
+/* Still water in the eastern hollow. The far half of the map was relief and
+   nothing else — it was crossed, never visited — and standing water is the
+   cheapest reason to walk somewhere in a game about a colony: it is one of
+   the five things siteQuality.js weighs, so a pond does not just decorate the
+   east, it changes what the east is WORTH.
+
+   Placed in the hollow rather than on the north meadow because water collects
+   in hollows, and because it makes the longest walk on the map end in the one
+   site that is both sheltered and watered — distance paid back in quality,
+   which is the argument round 9 made for enlarging the map in the first place.
+
+   Centre and radius are not invented: the hollow's own -7.2 contour was
+   measured (scripts/_probe-pond.mjs) and runs 25-37 units out from (330,110),
+   so a 31-unit waterline sits inside the existing basin and the profile below
+   only has to pin the shoreline, not dig a crater. */
+export const POND = {
+  x: 332, z: 112,
+  r: 31,              // radius of the waterline itself
+  y: -7.2,            // surface height (the river's WATER_Y is a different body)
+  depth: 3.6,         // bed below the surface at the centre
+  bedRun: 24,         // how far in the bed reaches full depth
+  bankTop: -5.0,      // ground height at the top of the bank
+  bankRun: 14,        // how far out the bank climbs out of the water
+  blendRun: 20,       // how far out general relief takes over
+};
+
+/** Signed distance from the pond's waterline, positive on dry land. */
+function pondEdgeDist(x, z) {
+  return Math.hypot(x - POND.x, z - POND.z) - POND.r;
+}
+
+/* Same construction as riverBedY: s measured from the waterline, positive
+   into the water, s = 0 exactly POND.y — which is what pins the shoreline to
+   the circle above whatever the hollow's relief is doing underneath. */
+function pondBedY(s) {
+  if (s <= 0) return POND.y + (POND.bankTop - POND.y) * smooth01(-s / POND.bankRun);
+  return POND.y - POND.depth * smooth01(s / POND.bedRun);
+}
+
+/* ---- water queries ------------------------------------------------------ */
+
+/** Signed distance from the nearest waterline, positive on dry land. */
 export function distanceToWater(x, z) {
-  return x - riverEdgeAt(z);
+  return Math.min(x - riverEdgeAt(z), pondEdgeDist(x, z));
+}
+
+/* Which body of water covers (x, z), or null on dry land.
+
+   THIS GATE IS THE BUG FIX. waterDepthAt() used to be `WATER_Y - groundY(x,z)`
+   with no footprint at all, i.e. "anything lower than the river's surface is
+   under the river" — across the whole map. That was harmless while the map
+   was one slope down to a river, and became silently wrong the moment round 9
+   authored hollows: the bowl at (88,168) sits at y=-9.98, so it reported 5.5
+   units of water on it. Consequences, none of which raised an error:
+   soilAt().kind was 'water' there, sampleTerrain().diggable was false, so
+   founding.js refused the bowl with reason 'water' — the very site RELIEF
+   calls "the best founding ground on the map" — resources.js seeded nothing
+   in it, and grass.js skipped it, which is why the hollows are bald. 6.7% of
+   the playable map was affected, and it was exactly the interesting 6.7%.
+   Measured before and after with scripts/_probe-water.mjs. */
+function waterBodyAt(x, z) {
+  if (z < TUNNEL_MOUTH) return null;
+  if (x - riverEdgeAt(z) < 0) return RIVER;
+  if (pondEdgeDist(x, z) < 0) return POND;
+  return null;
+}
+
+/** Surface height of the water body at (x, z); null on dry land. */
+export function waterSurfaceAt(x, z) {
+  const body = waterBodyAt(x, z);
+  if (!body) return null;
+  return body === POND ? POND.y : WATER_Y;
+}
+
+/* Surface height of the NEAREST body, whether or not (x, z) is in it. What a
+   shoreline needs: the silt band and the submerged tint on the lawn mesh are
+   painted on dry vertices too, and painting them against the wrong body's
+   height is how a bank ends up not meeting its own water. */
+function nearestWaterSurface(x, z) {
+  return pondEdgeDist(x, z) < x - riverEdgeAt(z) ? POND.y : WATER_Y;
 }
 
 /* Height of the ground as the river alone would shape it. s is measured from
@@ -197,7 +276,18 @@ export function groundY(x, z) {
 
   const dw = x - riverEdgeAt(z);
   const rw = 1 - smooth01(dw / RIVER.blendRun);
-  const h = rw > 0 ? lerp(generalRelief(x, z), riverBedY(-dw), rw) : generalRelief(x, z);
+  let h = rw > 0 ? lerp(generalRelief(x, z), riverBedY(-dw), rw) : generalRelief(x, z);
+
+  /* The pond, folded in the same way the river is: its own profile takes over
+     near its waterline so the shoreline lands exactly on POND.y, and hands
+     back to the authored hollow further out. Applied after the river because
+     the two never overlap (opposite ends of the map) and the pond is the more
+     local feature of the two. */
+  const dp = pondEdgeDist(x, z);
+  if (dp < POND.blendRun) {
+    const pw = 1 - smooth01(dp / POND.blendRun);
+    if (pw > 0) h = lerp(h, pondBedY(-dp), pw);
+  }
 
   /* The mouth seam. Weighted by distance in x as well as z: the old blend was
      z-only, which would now drag the whole width of the map — river included
@@ -226,10 +316,10 @@ export function groundSlope(x, z) {
   return Math.hypot(dx, dz);
 }
 
-/** How deep the water is at (x, z); 0 on dry land. */
+/** How deep the water is at (x, z); 0 on dry land. See waterBodyAt(). */
 export function waterDepthAt(x, z) {
-  if (z < TUNNEL_MOUTH) return 0;
-  return Math.max(0, WATER_Y - groundY(x, z));
+  const surface = waterSurfaceAt(x, z);
+  return surface === null ? 0 : Math.max(0, surface - groundY(x, z));
 }
 
 const SOIL_ROCK_SLOPE = 0.62;   // above this the ant is on bare rock, not soil
@@ -339,7 +429,11 @@ export function buildLawn() {
       const dw = distanceToWater(gx, gz);
       if (dw < 30) {
         c = mixColor(c, C_SAND, smooth01((30 - dw) / 26));
-        if (gy < WATER_Y + 0.6) c = mixColor(c, C_BED, smooth01((WATER_Y + 0.6 - gy) / 3.5));
+        // against the NEAREST body's surface, not the river's: the pond sits
+        // 2.7 units higher, and painting its bed from WATER_Y would have left
+        // the silt band floating above its own shoreline
+        const surf = nearestWaterSurface(gx, gz);
+        if (gy < surf + 0.6) c = mixColor(c, C_BED, smooth01((surf + 0.6 - gy) / 3.5));
       }
       // steep faces lose their moss: bare ground reads the rims and the bank
       const slope = groundSlope(gx, gz);
@@ -461,13 +555,50 @@ export function buildWater() {
   };
   material.customProgramCacheKey = () => 'water-ripple';
 
-  const mesh = new THREE.Mesh(M.toBufferGeometry(), material);
-  mesh.name = 'water';
-  mesh.receiveShadow = false;   // a shadow map on a moving translucent sheet
-                                // buys nothing and costs a second pass on the
-                                // largest quad in the scene
+  /* The pond is a second sheet on the SAME material — same ripple, same
+     Fresnel, same program — rather than its own. Two bodies of water that
+     catch the light differently would read as two different substances, and
+     one extra draw call is cheaper than a second shader. It is a separate
+     geometry only because a disc and a river ribbon cannot share vertices. */
+  const P = new MeshBuilder();
+  const pRings = 6, pSegs = 26;
+  const pOver = 0.9;      // overshoot past the waterline, so the bank hides
+                          // the sheet's edge instead of the sheet ending in air
+  const pCentre = P.addVertex(POND.x, POND.y, POND.z, deep.toArray());
+  const pRows = [];
+  for (let r = 1; r <= pRings; r++) {
+    const rad = (POND.r + pOver) * (r / pRings);
+    const row = [];
+    for (let s = 0; s < pSegs; s++) {
+      const th = 2 * Math.PI * s / pSegs;
+      const px = POND.x + Math.cos(th) * rad, pz = POND.z + Math.sin(th) * rad;
+      const d = clamp((POND.y - groundY(px, pz)) / 4, 0, 1);
+      row.push(P.addVertex(px, POND.y, pz, mixColor(surface, deep, d).toArray()));
+    }
+    pRows.push(row);
+  }
+  for (let s = 0; s < pSegs; s++) {
+    const s2 = (s + 1) % pSegs;
+    // same winding rule as the river above: front face UP, because the vertex
+    // shader substitutes the wave's +Y normal and a flipped face would light
+    // the underside
+    P.addTri(pCentre, pRows[0][s2], pRows[0][s]);
+    for (let r = 0; r < pRings - 1; r++) {
+      P.addQuad(pRows[r][s], pRows[r][s2], pRows[r + 1][s2], pRows[r + 1][s]);
+    }
+  }
+
+  const group = new THREE.Group();
+  group.name = 'water';
+  for (const geo of [M.toBufferGeometry(), P.toBufferGeometry()]) {
+    const m = new THREE.Mesh(geo, material);
+    m.receiveShadow = false;   // a shadow map on a moving translucent sheet
+                               // buys nothing and costs a second pass on the
+                               // largest quad in the scene
+    group.add(m);
+  }
   return {
-    mesh,
+    mesh: group,
     update(elapsed) { uniforms.uWaveTime.value = elapsed; },
   };
 }
