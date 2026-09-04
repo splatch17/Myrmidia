@@ -28,6 +28,17 @@ import { PLAYER_AVATAR, legLengths, strideOf } from './avatar.js';
    needs to touch THREE objects.
    ========================================================================== */
 
+/* The surface she is standing on. Normally the terrain — but the founding
+   chamber is a hole world/terrain.js knows nothing about (groundY() there
+   still answers "the lawn", thirty units overhead), so an ant inside it sets
+   `floorY` and every part of the body/legs uses that instead. One field, read
+   in the three places that would otherwise sample the height field, rather
+   than a second pose path: the gait, the IK and the ride height are exactly
+   the ones used outdoors. */
+export function floorUnder(a, x, z) {
+  return a.floorY === null || a.floorY === undefined ? groundY(x, z) : a.floorY;
+}
+
 export function makeAnt(x, y, z, profile = PLAYER_AVATAR) {
   return {
     x, y, z,
@@ -35,6 +46,7 @@ export function makeAnt(x, y, z, profile = PLAYER_AVATAR) {
     speed: 0,
     travel: 0,    // distance walked, drives the gait
     bob: 0,
+    floorY: null, // set to a height while she stands on a floor that is not the terrain (the founding chamber) — see floorUnder()
     climb: null,  // null on the ground; {kind:'grass',i,t} or {kind:'tree',seg,t|u} while climbing — see climb.js
     legsInit: false,
     profile,
@@ -65,7 +77,7 @@ export function antBasis(a) {
     // flat face.
     return { side: cb.width, up: cb.normal, fwd: cb.tangent };
   }
-  const gn = groundNormal(a.x, a.z);
+  const gn = a.floorY === null || a.floorY === undefined ? groundNormal(a.x, a.z) : [0, 1, 0];
   const up = nrm3([gn[0] * 0.7, 1, gn[2] * 0.7]);
   const fRaw = [Math.sin(a.yaw), 0, Math.cos(a.yaw)];
   const side = nrm3(cross3(up, fRaw));
@@ -84,7 +96,7 @@ export function antMatrix(a) {
   const ride = 1.05 * s + a.bob;
   const p = a.climb
     ? add3([a.x, a.y, a.z], scl3(b.up, ride))
-    : [a.x, groundY(a.x, a.z) + ride, a.z];
+    : [a.x, floorUnder(a, a.x, a.z) + ride, a.z];
   return { side: scl3(b.side, s), up: scl3(b.up, s), fwd: scl3(b.fwd, s), p, basis: b, scale: s };
 }
 
@@ -123,7 +135,7 @@ export function updateLegs(a, legState, dt) {
   for (let i = 0; i < p_.legs.length; i++) {
     const L = p_.legs[i], S = legState[i];
     const restW = localToWorld(mat, L.rest);
-    if (!climbing) restW[1] = groundY(restW[0], restW[2]);
+    if (!climbing) restW[1] = floorUnder(a, restW[0], restW[2]);
 
     if (!a.legsInit) { S.planted = restW.slice(); S.from = restW.slice(); S.to = restW.slice(); }
 
@@ -136,7 +148,7 @@ export function updateLegs(a, legState, dt) {
       // speed reference scales too: "full stride reach" means the same
       // fraction of top speed for a queen as for a worker
       const ahead = add3(restW, scl3(b.fwd, stride * 0.38 * clamp(a.speed / (16 * s), 0, 1.4)));
-      if (!climbing) ahead[1] = groundY(ahead[0], ahead[2]);
+      if (!climbing) ahead[1] = floorUnder(a, ahead[0], ahead[2]);
       S.to = ahead;
     }
     if (p < 0.5 && S.prevP >= 0.5) {

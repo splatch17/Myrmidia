@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clamp, damp, lerp } from '../core/noise.js';
 import { profileR, groundY, getRoomBranches, QUEEN, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R } from '../world/index.js';
+import { floorUnder } from './legs.js';
 // wallPoint()/riseAt() are exported by world/underground.js but not re-exported
 // by the world barrel; imported directly rather than editing world/* (Atta's
 // files) this round. Asking for them on the barrel is in the round report.
@@ -298,7 +299,7 @@ export function desiredCamera(ant, camYaw, wantPitch, camDist) {
   // would look straight through it back down to the lawn
   const head = ant.climb
     ? [ant.x, ant.y + 2.0 * s, ant.z]
-    : [ant.x, groundY(ant.x, ant.z) + 2.6 * s, ant.z];
+    : [ant.x, floorUnder(ant, ant.x, ant.z) + 2.6 * s, ant.z];
   const inTunnel = ant.z < TUNNEL_MOUTH - 2;
   const cav = inTunnel ? cavityAt(ant) : null;
   const room = inTunnel ? currentRoomRadius(ant.x, ant.z) : TUNNEL_R;
@@ -327,10 +328,19 @@ export function createCameraRig(camera) {
   // camAim, camera itself re-targets afterwards, once the ant has moved.
   const rig = { eye: null, aim: null };
 
-  function update(ant, camYaw, wantPitch, camDist, dt) {
-    const want = desiredCamera(ant, camYaw, wantPitch, camDist);
-    if (!rig.eye) { rig.eye = want.eye.slice(); rig.aim = want.aim.slice(); }
-    const rate = 6.5;
+  /* `shot` (optional) is a {eye, aim, cut} the caller has composed itself —
+     the founding sequence (player/laying.js), which puts the camera down a
+     shaft and inside a chamber the containment below knows nothing about
+     (that code answers for the *pre-built* gallery; a run-time nest is a hole
+     in the lawn, and containCameraEye would helpfully push the eye back up to
+     the meadow, leaving the shot pointed at the underside of the grass). A
+     scripted shot is therefore taken as final: damped like any other so the
+     hand-off in and out is smooth, but never re-clamped. `cut` snaps instead
+     of damping, for the two places the sequence changes vantage point. */
+  function update(ant, camYaw, wantPitch, camDist, dt, shot) {
+    const want = shot || desiredCamera(ant, camYaw, wantPitch, camDist);
+    if (!rig.eye || (shot && shot.cut)) { rig.eye = want.eye.slice(); rig.aim = want.aim.slice(); }
+    const rate = shot ? 5.0 : 6.5;
     for (let c = 0; c < 3; c++) {
       rig.eye[c] = damp(rig.eye[c], want.eye[c], rate, dt);
       rig.aim[c] = damp(rig.aim[c], want.aim[c], rate * 1.4, dt);
@@ -339,7 +349,7 @@ export function createCameraRig(camera) {
     // legal eyes isn't itself guaranteed to be legal once rooms have real
     // (doorway-pinched, non-convex) shapes — this is what keeps the eye out
     // of geometry while turning, not just once movement settles.
-    containCameraEye(rig.eye, ant);
+    if (!shot) containCameraEye(rig.eye, ant);
     camera.position.set(rig.eye[0], rig.eye[1], rig.eye[2]);
     camera.lookAt(new THREE.Vector3(rig.aim[0], rig.aim[1], rig.aim[2]));
   }

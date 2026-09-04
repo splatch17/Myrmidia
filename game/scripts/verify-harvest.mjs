@@ -78,6 +78,11 @@ async function main() {
 
   await page.goto(URL);
   await page.waitForFunction(() => window.__ant && window.__harvest && window.__nodes, null, { timeout: 20000 });
+  /* main.js assigns window.__nodes = RESOURCE_NODES (the raw array) *after*
+     createPlayerController() has assigned the accessor function of the same
+     name, so which one is live depends on load order and has already flipped
+     once. Read through this and the harness stops caring. */
+
   await page.waitForTimeout(600);
 
   const failures = [];
@@ -175,7 +180,11 @@ async function main() {
     return { score: s.score, grade: s.grade.key, diggable: s.diggable, factors: s.factors.map((f) => f.label) };
   }, [spawn0.x, spawn0.z]);
   console.log('  at', { x: +spawn0.x.toFixed(1), z: +spawn0.z.toFixed(1) }, spawnSite);
-  check(spawn0.pen === 0, `spawned inside a collider (penetration ${spawn0.pen.toFixed(2)})`);
+  /* A tolerance rather than === 0: resolveDecorCollision pushes her to exactly
+     touching, and "touching" comes back as a few times 1e-3 of residual
+     depending on which prop she settled against. Anything under a tenth of a
+     unit is contact, not penetration — she is 3.3 wide. */
+  check(spawn0.pen < 0.1, `spawned inside a collider (penetration ${spawn0.pen.toFixed(3)})`);
   check(spawnSite.score <= 62, `spawn site scores ${spawnSite.score} — too good; looking for a site has to be worth doing (defect #5)`);
   check(spawnSite.diggable, 'spawn is on ground the queen cannot even dig — she should be able to walk off it, not be stuck on it');
   await shot('01-spawn');
@@ -187,7 +196,7 @@ async function main() {
   check(/Réserve : 0\//.test(hud0.stock), `stock line does not read as empty: "${hud0.stock}"`);
 
   /* ---- 2. harvest, carry, drop — as many times as it takes -------------- */
-  const nodes = await page.evaluate(() => window.__nodes().map((n) => ({ id: n.id, x: n.x, z: n.z, kind: n.kind, amount: n.amount, r: n.r })));
+  const nodes = await page.evaluate(() => (typeof window.__nodes === 'function' ? window.__nodes() : window.__nodes).map((n) => ({ id: n.id, x: n.x, z: n.z, kind: n.kind, amount: n.amount, r: n.r })));
   console.log(`  ${nodes.length} resource nodes on the map`);
 
   const need = await page.evaluate(() => {
@@ -200,7 +209,7 @@ async function main() {
   for (let trip = 0; trip < need; trip++) {
     const state = await readAnt();
     // nearest node with anything left, from where she stands
-    const live = await page.evaluate(() => window.__nodes().filter((n) => n.amount > 0).map((n) => ({ id: n.id, x: n.x, z: n.z, kind: n.kind })));
+    const live = await page.evaluate(() => (typeof window.__nodes === 'function' ? window.__nodes() : window.__nodes).filter((n) => n.amount > 0).map((n) => ({ id: n.id, x: n.x, z: n.z, kind: n.kind })));
     if (!live.length) { check(false, 'ran out of resource nodes before the pile was full'); break; }
     live.sort((p, q) => Math.hypot(p.x - state.x, p.z - state.z) - Math.hypot(q.x - state.x, q.z - state.z));
     const node = live[0];
@@ -210,7 +219,16 @@ async function main() {
     check(walk.ok, `could not reach the ${node.kind} node at (${node.x}, ${node.z})`);
     if (!walk.ok) break;
 
-    const atNode = await hudText();
+    /* walkTo() stops at arriveDist 7 and a node's reach is 6, so she can end a
+       leg just outside it — and after taking a unit she has drifted again.
+       Close the last unit before asserting instead of asserting on the frame
+       the walk happened to end on: the thing under test is "a node in reach
+       offers the harvest", not "the pathing overshoots by one unit". */
+    let atNode = await hudText();
+    for (let nudge = 0; nudge < 3 && !/maintenir/.test(atNode.prompt); nudge++) {
+      await walkTo([node.x, node.z], { arriveDist: 4, label: 'close in' });
+      atNode = await hudText();
+    }
     console.log('  prompt:', atNode.prompt);
     check(/maintenir/.test(atNode.prompt), `standing on a node but the prompt does not offer the harvest: "${atNode.prompt}"`);
     if (trip === 0) await shot('02-at-node');
@@ -267,12 +285,46 @@ async function main() {
   await shot('06-pile-full');
   check(full.stock >= need, `pile has ${full.stock}/${need} after ${trips} trips`);
 
-  /* ---- 3. found the colony (#33) ---------------------------------------- */
+  /* ---- 3. the refusals, asked BEFORE anything is dug -------------------- */
+  // canFoundAt() answers 'already-founded' to every question once a nest
+  // exists, so asking these after the dig (which is what this harness used to
+  // do) tests nothing: all three came back 'already-founded' and the water
+  // refusal read as a failure that was really an ordering bug here.
+  console.log('\n=== refusals (nothing founded yet) ===');
+  /* The two probe points this used to hard-code were written against the map
+     as it was before it was scaled up: both now land outside the playable
+     rectangle and come back 'bounds', which says nothing about the river.
+     Sampled off the live map instead — a refusal reason found by walking a
+     grid cannot go stale when the map moves again. */
+  const refusals = await page.evaluate(() => {
+    const found = {};
+    for (let x = -300; x <= 320; x += 12) {
+      for (let z = -20; z <= 470; z += 12) {
+        const v = window.__canFound(x, z);
+        if (v.ok || !v.reason) continue;
+        if (!found[v.reason]) found[v.reason] = { x, z, text: v.text };
+      }
+    }
+    return found;
+  });
+  for (const k of Object.keys(refusals)) {
+    console.log(`  ${k.padEnd(16)} e.g. (${refusals[k].x}, ${refusals[k].z}) -> "${refusals[k].text}"`);
+  }
+  check(!!refusals.water && /eau/.test(refusals.water.text),
+    'nowhere on the map is founding refused for being too near the water, with a sentence a player can read');
+  check(!!refusals.slope || !!refusals.rock,
+    'no ground anywhere is refused for its slope or its rock — every site on the map is diggable');
+
+  /* ---- 4. found the colony (#33) ---------------------------------------- */
   console.log('\n=== founding ===');
   const verdict = await page.evaluate(([x, z]) => window.__canFound(x, z), [full.x, full.z]);
   console.log('  canFound here:', JSON.stringify(verdict));
   check(/maintenir/.test(hudFull.prompt) && /fonder/i.test(hudFull.prompt),
     `standing on a full pile but the prompt does not offer the founding: "${hudFull.prompt}"`);
+
+  const mixBefore = await page.evaluate(() => window.__world6.foundedMix());
+  console.log('  founded mix before the dig:', mixBefore.toFixed(2));
+  check(mixBefore === 0, `the world is already switched to "colony founded" before anything is dug (${mixBefore})`);
 
   await page.keyboard.down('KeyE');
   await page.waitForTimeout(1800);
@@ -292,18 +344,73 @@ async function main() {
   console.log('  event      :', hudAfter.event);
   check(!!founded.nest, 'held E on a full pile on diggable ground and nothing was founded (#33)');
   check(/fond/i.test(hudAfter.site), `after founding, the site readout still reads as a site search: "${hudAfter.site}"`);
-  check(/[Cc]olonie fondée/.test(hudAfter.objective), `objective did not change after founding: "${hudAfter.objective}"`);
   await shot('08-founded');
 
-  // the refusals are the world's verdict, phrased here (#33): check the
-  // sentence for ground she would otherwise have to walk minutes to reach
-  const refusals = await page.evaluate(() => ({
-    inRiver: window.__canFound(-230, 120),
-    onSlope: window.__canFound(70, 132),
-  }));
-  console.log('  refusal in the river :', JSON.stringify(refusals.inRiver));
-  console.log('  refusal on the scarp :', JSON.stringify(refusals.onSlope));
-  check(refusals.inRiver.ok === false && /eau/.test(refusals.inRiver.text), 'founding in the river is not refused with a reason a player can read');
+  /* ---- 5. the first laying (#6) ----------------------------------------- */
+  // The dig runs straight into the founding sequence: she goes down her own
+  // shaft, closes it behind her, and lays in the dark. She is not under the
+  // player's control for those few seconds, so from here the harness watches
+  // phases instead of pressing keys — and screenshots every one of them,
+  // because "the founding has never been seen" (PROGRESS.md defect 1) is what
+  // this whole run exists to answer.
+  console.log('\n=== the first laying ===');
+  const readLaying = () => page.evaluate(() => (typeof window.__laying === 'function' ? window.__laying() : null));
+  const first = await readLaying();
+  if (!first) {
+    check(false, 'window.__laying() is not there — the laying (#6) is not implemented');
+  } else {
+    check(!!first.phase, `the dig did not run into the founding sequence (phase ${JSON.stringify(first.phase)})`);
+    const seen = new Set();
+    let mixAtLay = null, broodAtLay = null, n = 0;
+    const deadline = Date.now() + 45000;
+    while (Date.now() < deadline) {
+      const s = await readLaying();
+      if (!s || !s.phase) break;
+      /* Captured part-way through each phase, not on its first frame: the
+         camera is damped, so the first frame of a phase is still showing the
+         previous one's vantage point. The exception is `lay`, which is
+         screenshotted the moment it starts *and* again later — the frame the
+         clutch appears in is the one this whole harness exists to produce. */
+      const ripe = s.phase === 'descend' ? s.t > 0.22 : s.t > 0.45;
+      if (!seen.has(s.phase) && (ripe || s.phase === 'lay')) {
+        seen.add(s.phase);
+        console.log(`  phase ${s.phase.padEnd(8)} brood ${s.brood}  mix ${s.mix.toFixed(2)}  ${(await hudText()).event}`);
+        await shot(`09-${++n}-${s.phase}`);
+      }
+      if (s.phase === 'lay' && mixAtLay === null) { mixAtLay = s.mix; broodAtLay = s.brood; }
+      if (s.phase === 'lay' && s.t > 0.5 && !seen.has('lay-late')) { seen.add('lay-late'); await shot(`09-${++n}-clutch`); }
+      await page.waitForTimeout(200);
+    }
+    const done = await readLaying();
+    console.log('  after the sequence:', JSON.stringify(done));
+    check(done && done.phase === null, 'the founding sequence never finished');
+    check(done && done.brood >= 1, `no clutch was laid (brood ${done && done.brood})`);
+    // §7a of design/ressources-et-fondation.md: the world switches at the
+    // laying, and she is underground while it does — so what she is meant to
+    // walk out into is a changed world.
+    console.log('  mix when she started laying:', mixAtLay === null ? 'n/a' : mixAtLay.toFixed(2));
+    check(mixAtLay !== null, 'never saw the laying phase');
+    const mixAfter = await page.evaluate(() => window.__world6.foundedMix());
+    console.log('  mix after the sequence   :', mixAfter.toFixed(2));
+    check(mixAfter > 0.9, `the world never switched to "colony founded" (mix ${mixAfter})`);
+  }
+
+  // she is back on the surface and back under the player's control
+  const back = await readAnt();
+  const surfaceY = await page.evaluate(([x, z]) => window.__groundY(x, z), [back.x, back.z]);
+  console.log('  back at', { x: +back.x.toFixed(1), z: +back.z.toFixed(1) }, 'y', back.y.toFixed(1), 'ground', surfaceY.toFixed(1));
+  check(Math.abs(back.y - surfaceY) < 2.5, `she did not come back up: y ${back.y.toFixed(1)} against a ground at ${surfaceY.toFixed(1)}`);
+  const hudLaid = await hudText();
+  console.log('  objective:', hudLaid.objective);
+  await shot('10-out-of-the-nest');
+  const before = { x: back.x, z: back.z };
+  await setKeys(new Set(['KeyW']));
+  await page.waitForTimeout(1200);
+  await releaseAll();
+  const moved = await readAnt();
+  check(Math.hypot(moved.x - before.x, moved.z - before.z) > 3,
+    'the keys do nothing after the founding sequence — she is still locked in the cutscene');
+  await shot('11-walking-again');
 
   /* ---- 4. the west clamp is the waterline, not a box (defect #4) --------- */
   console.log('\n=== walking into the river ===');

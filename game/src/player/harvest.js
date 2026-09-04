@@ -127,6 +127,26 @@ export function createHarvest() {
     return true;
   }
 
+  /**
+   * Take `n` units off the pile — what a clutch costs (laying.js). Empties the
+   * biggest heap first so a pile of one kind does not survive a spend that a
+   * mixed pile would not, and returns what was actually taken.
+   */
+  function spend(n) {
+    if (!state.cache) return 0;
+    let left = n, took = 0;
+    while (left > 0) {
+      const best = Object.entries(state.cache.items)
+        .filter(([, k]) => k > 0)
+        .sort((a, b) => b[1] - a[1])[0];
+      if (!best) break;
+      state.cache.items[best[0]] -= 1;
+      state.cache.total -= 1;
+      left -= 1; took += 1;
+    }
+    return took;
+  }
+
   /** Called once at the end of a frame: the one-frame event flags expire. */
   function endFrame() { state.justTook = null; state.justDropped = null; }
 
@@ -150,7 +170,7 @@ export function createHarvest() {
   }
 
   return {
-    state, target, hold, release, canDrop, drop, cacheDistance,
+    state, target, hold, release, canDrop, drop, cacheDistance, spend,
     stock, enough, stockDetail, inventoryLine, endFrame,
   };
 }

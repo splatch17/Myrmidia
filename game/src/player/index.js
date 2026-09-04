@@ -1,6 +1,6 @@
 import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
-import { groundY, distanceToWater } from '../world/index.js';
+import { groundY, distanceToWater, foundedMix } from '../world/index.js';
 import { PLAYER_AVATAR, collideRadius } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
@@ -141,7 +141,12 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     if (input.consumeHelp()) hud.toggleControls();
     const act = interaction.update(ant, input.consumeInteract(), input.isInteractHeld(), dt);
 
-    if (ant.climb) {
+    if (interaction.busy()) {
+      /* The founding sequence (laying.js, #6) is placing her along a path
+         through her own shaft: no steering, no containment, and no ground to
+         follow — it wrote ant.x/y/z and ant.floorY itself, inside
+         interaction.update() above. */
+    } else if (ant.climb) {
       // climbing: forward/back walks the ant along the blade/trunk's own
       // curve; left/right is unused (see climb.js/the old prototype)
       stepClimb(ant, clamp(intent.iy, -1, 1), dt);
@@ -178,10 +183,16 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // converges instead of chasing each other — suppressed while climbing,
     // same as the old prototype (ant.yaw never changes there, so chasing it
     // would just freeze camYaw wherever it happened to be on entry)
-    if (!input.state.dragging && !ant.climb && intent.mag > 0.02) {
+    if (!input.state.dragging && !ant.climb && !interaction.busy() && intent.mag > 0.02) {
       input.state.camYaw = dampAngle(input.state.camYaw, ant.yaw, 2.2, dt);
     }
-    cameraRig.update(ant, input.state.camYaw, input.state.wantPitch, input.state.camDist, dt);
+    /* The boom is handed back pointing the way she is facing as she steps out
+       of the hole: without this it still sits where it was when she walked
+       *in*, which after a sequence that turned her round is a shot of her
+       face from the far side of the spoil heap. */
+    if (interaction.laying.state.justEnded) input.state.camYaw = ant.yaw;
+    cameraRig.update(ant, input.state.camYaw, input.state.wantPitch, input.state.camDist, dt,
+      interaction.shot(ant));
   }
 
   // Debug/verification hooks (not gameplay, mirrors main.js's window.__ant):
@@ -207,6 +218,12 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // reach (#33), and the waterline the movement clamp now follows (#4)
     window.__canFound = (x, z) => { const v = canFound(x, z); return { ...v, text: refusalText(v.reason) }; };
     window.__toWater = distanceToWater;
+    // #6: the founding sequence is not driven by keys, so the harness watches
+    // its phases instead of pressing anything (scripts/verify-harvest.mjs)
+    window.__laying = () => {
+      const st = interaction.laying.state;
+      return { phase: st.phase, t: +st.t.toFixed(3), brood: st.brood, mix: foundedMix() };
+    };
   }
 
   function dispose() {
