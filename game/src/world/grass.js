@@ -142,17 +142,14 @@ void grassShape(out vec3 pos, out vec3 nrm) {
 }
 `;
 
-/* 1600 rather than 900 when the blades got thinner: thinner without more of
-   them is a bald lawn — design/herbe-brins.md §3 asks for the two together and
-   they are one change, not two.
-
-   3400 since the map grew to 2.7x its area (round 9). Scaled with the area
-   rather than kept flat, because a constant count over a bigger map is the
-   same bald lawn by another route — but scaled sub-linearly (2.1x for 2.7x the
-   ground) because the player reported the build lagging, and because the far
-   half of the map is walked through, not lived in. If it is still too much,
-   core/quality.js thins the field to 35% live, without a rebuild. */
-export function createGrassField({ count = 3400, seed = 7 } = {}) {
+/* 1800 since round 11, down from 3400. The player asked for clearly less grass
+   while the game itself is built, and they are right for a reason beyond frame
+   time: every proximity query in player/** is a linear scan over this array
+   (see design/etat-des-lieux.md §2b), so the blade count is a CPU tax on
+   walking, not only a GPU one. Halving it halves that tax today; the spatial
+   index is what removes it. Turn it back up once that lands — quality.js
+   already thins it live, and the field is seeded identically either way. */
+export function createGrassField({ count = 1800, seed = 7 } = {}) {
   const R = rng(seed);
   const geometry = buildBladeGeometry();
 
