@@ -332,6 +332,113 @@ export function foundNest(x, z) {
   return { ok: true };
 }
 
+
+/* ---- the first gallery (#39) --------------------------------------------
+   A tunnel driven horizontally out of the chamber, revealed in one piece when
+   the diggers finish. design/castes-et-micro-macro.md 1 settles that it
+   appears at once rather than growing: a gallery that advances by the metre
+   costs a rebuild every frame and reads as nothing at ant scale, where a gauge
+   filling and then a mouth opening reads immediately.
+
+   It runs level, not down. The shaft above it is already as steep as a
+   ground-following controller can survive (that is why the laying descent is
+   scripted at all, PROGRESS.md defect 7), and #40 has to make this one
+   walkable — so the one piece of geometry added here is the one piece that
+   does not make that problem worse.
+
+   The direction is derived from the nest's own axis rather than chosen: the
+   shaft leans one way, and driving the gallery along that lean is what makes
+   the pair read as one excavation instead of two holes that happen to meet. */
+const GALLERY_R = 5.0;      // wider than the shaft: this one is meant to be walked
+const GALLERY_LEN = 46;
+const GALLERY_SEGS = 26;
+const GALLERY_ANG = 20;
+
+function buildGallery(n, seed) {
+  const c = n.chamber;
+  // heading: the horizontal component of the shaft's own lean, normalised
+  const dx = n.axis.dir[0], dz = n.axis.dir[2];
+  const hl = Math.hypot(dx, dz) || 1;
+  const hx = dx / hl, hz = dz / hl;
+  // start inside the chamber wall so the two solids overlap and there is no
+  // seam to see through
+  const sx = c.x + hx * (ROOM_R * 0.55), sz = c.z + hz * (ROOM_R * 0.55);
+  const px = -hz, pz = hx;          // horizontal perpendicular
+
+  const M = new MeshBuilder();
+  const rows = [];
+  for (let i = 0; i <= GALLERY_SEGS; i++) {
+    const t = i / GALLERY_SEGS;
+    const u = t * GALLERY_LEN;
+    // a gentle meander so it does not read as a drainpipe
+    const bend = Math.sin(t * 2.4 + seed * 0.017) * 5.0 * t;
+    const cx = sx + hx * u + px * bend;
+    const cz = sz + hz * u + pz * bend;
+    // taper the far end shut: a tunnel that stops in a flat disc reads as
+    // unfinished, one that narrows reads as a face still being worked
+    const r = GALLERY_R * (1 - 0.45 * Math.pow(t, 3));
+    const row = [];
+    for (let a = 0; a < GALLERY_ANG; a++) {
+      const th = 2 * Math.PI * a / GALLERY_ANG;
+      const wob = 0.88 + 0.24 * vnoise(th * 1.7 + u * 0.09, u * 0.13 + seed);
+      const rr = r * wob;
+      const py = c.y + GALLERY_R * 0.55 + Math.sin(th) * rr;
+      row.push(M.addVertex(
+        cx + px * Math.cos(th) * rr,
+        Math.max(py, c.y + 0.15),
+        cz + pz * Math.cos(th) * rr,
+        /* Same recipe as the shaft's walls (buildShell above), so the two
+           read as one excavation: freshly turned earth, damper and darker
+           than the old weathered gallery. */
+        mixColor(C_WALL_B, C_WALL_A, clamp((wob - 0.84) / 0.34 + 0.45, 0, 1) * 0.8 + 0.10)
+          .lerp(C_SOIL_A, 0.22).multiplyScalar(0.86).toArray(),
+      ));
+    }
+    rows.push(row);
+  }
+  for (let i = 0; i < GALLERY_SEGS; i++) {
+    for (let a = 0; a < GALLERY_ANG; a++) {
+      const b = (a + 1) % GALLERY_ANG;
+      M.addQuad(rows[i][a], rows[i][b], rows[i + 1][b], rows[i + 1][a]);
+    }
+  }
+  return {
+    geometry: M.toBufferGeometry(),
+    end: { x: sx + hx * GALLERY_LEN, y: c.y, z: sz + hz * GALLERY_LEN },
+    heading: [hx, hz],
+    start: { x: sx, z: sz },
+  };
+}
+
+/** Is there a gallery yet, and where does it run? null before it is dug. */
+export function getGallery() { return nest && nest.gallery ? nest.gallery : null; }
+
+/**
+ * Open the first gallery. Idempotent — calling it twice is a no-op rather
+ * than a second tunnel, because the caller is a progress bar and progress
+ * bars overshoot.
+ */
+export function digGallery() {
+  if (!nest) return { ok: false, reason: 'no-nest' };
+  if (nest.gallery) return { ok: true, already: true };
+
+  const seed = Math.floor(Math.abs(nest.x) * 73 + Math.abs(nest.z) * 149) % 9973;
+  const g = buildGallery(nest, seed);
+  const mesh = new THREE.Mesh(g.geometry, applyNestShading(texturedSurfaceMaterial({
+    map: dirtAlbedo(), strength: 0.62, side: THREE.DoubleSide,
+  })));
+  mesh.name = 'first-gallery';
+  mesh.receiveShadow = true;
+  nest.group.add(mesh);
+
+  // one lamp at the far face, so the tunnel has somewhere to go rather than
+  // fading into black two body lengths in
+  addLocalLight([g.end.x, g.end.y + 3, g.end.z], WARM_MOUTH_LIGHT);
+
+  nest.gallery = { ...g, mesh };
+  return { ok: true };
+}
+
 /**
  * How inhabited the chamber is: `n` clutches laid, 0..MAX_BROOD. Each one
  * reveals its pile and lights its own warm lamp; the fourth also brings the

@@ -127,6 +127,35 @@ export const FOUNDING_QUEEN = {
   cam: { dist: 58, min: 16, max: 140 },
 };
 
+/* The digger (#38). A row in this table and not a file of its own — that is
+   design/castes-et-micro-macro.md 3's rule, and the reason is the micro mode
+   it is written for: when the player can take control of any ant, a caste that
+   is a class rather than a row means a second controller.
+
+   She reads as a digger at ant height, in grass, which is the only test that
+   matters here: darker chitin than a forager, and mandibles half again as
+   long and thick. Everything else is the worker's — same body plan, same
+   gait — because a colony whose castes share a silhouette vocabulary reads as
+   one species, and because inventing a second anatomy to say "digger" would
+   be solving the problem twice.
+
+   Slower and steadier than a forager: she is not running errands, she is
+   working a face. */
+const DIGGER_BODY = {
+  ...WORKER_BODY,
+  mandible: { root: [0.56, 1.40, 3.35], tip: [0.30, 1.14, 5.05], gape: 0.30, r: 0.23 },
+};
+
+export const DIGGER = {
+  ...WORKER,
+  id: 'digger',
+  label: 'creuseuse',
+  body: DIGGER_BODY,
+  colors: { chitinA: 0x6d4520, chitinB: 0x2f2010, limb: 0x4a2f16, mandible: 0xd8a24e, eye: 0x100c06 },
+  maxSpeed: 12,
+  turnRate: 7,
+};
+
 /** The body the player currently drives. #32: the game opens on the queen. */
 export const PLAYER_AVATAR = FOUNDING_QUEEN;
 
@@ -142,5 +171,5 @@ export function collideRadius(p) { return p.bodyR * p.scale; }
    nothing about it changes at run time, which is exactly why a saved entity
    should carry `profileId` and resolve it on load rather than serialise a
    copy of the body plan. */
-export const PROFILES = { worker: WORKER, queen: FOUNDING_QUEEN };
+export const PROFILES = { worker: WORKER, queen: FOUNDING_QUEEN, digger: DIGGER };
 export function profileById(id) { return PROFILES[id] || WORKER; }

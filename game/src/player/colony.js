@@ -1,5 +1,5 @@
-import { groundY, RESOURCE_NODES, harvestNode, nestOrigin } from '../world/index.js';
-import { WORKER, strideOf, collideRadius } from './avatar.js';
+import { groundY, RESOURCE_NODES, harvestNode, nestOrigin, digGallery, getGallery } from '../world/index.js';
+import { WORKER, DIGGER, profileById, strideOf, collideRadius } from './avatar.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
 import { dampAngle } from './mathUtil.js';
 
@@ -35,6 +35,14 @@ import { dampAngle } from './mathUtil.js';
 export const HATCH_SECONDS = 22;     // an egg becomes a worker
 export const WORKER_CARRY = 1;       // units per trip
 
+/* The first gallery, in digger-seconds (#39). One digger takes DIG_SECONDS;
+   two take half as long, and that has to be visible — the whole point of
+   letting the queen choose what she lays is that the choice shows. Sized so a
+   single digger is a long wait and three feel like a crew, which is what makes
+   laying a second one a real decision rather than an obvious one. */
+export const DIG_SECONDS = 75;
+const DIG_SITE_R = 10;               // how close to the mouth counts as at work
+
 const ARRIVE = 6;                    // how close counts as "there"
 const REPATH_EVERY = 0.6;            // seconds between target re-picks
 
@@ -59,30 +67,67 @@ function nearestLiveNode(x, z) {
 
 export function createColony() {
   const state = {
-    eggs: [],          // [{ id, age }]
+    eggs: [],          // [{ id, age, profileId }]
     workers: [],       // see spawnWorker()
     delivered: 0,      // units the colony has brought home on its own
+    dig: 0,            // digger-seconds worked on the first gallery
+    digging: 0,        // how many diggers were at the face this frame
+    galleryOpen: false,
   };
 
-  function spawnWorker(x, z) {
-    const ant = makeAnt(x, 0, z, WORKER);
+  function spawnWorker(x, z, profileId = 'worker') {
+    const profile = profileById(profileId);
+    const ant = makeAnt(x, 0, z, profile);
     ant.y = groundY(x, z);
     ant.yaw = Math.random() * Math.PI * 2;
     return {
       id: _nextId++,
-      profileId: 'worker',
-      profile: WORKER,
+      profileId,
+      profile,
       ant,
-      legState: makeLegState(WORKER),
+      legState: makeLegState(profile),
       carrying: null,      // node kind being carried, or null
       targetId: null,      // resource node id, when foraging
       repath: 0,
     };
   }
 
-  /** An egg is laid. Called by laying.js when a clutch lands. */
-  function addEggs(count) {
-    for (let i = 0; i < count; i++) state.eggs.push({ id: _nextId++, age: 0 });
+  /** A clutch is laid, of one caste. The caste is chosen at laying time
+   *  (#38) and carried on the egg, so an egg already knows what it will
+   *  become — which is what lets the HUD say "2 œufs de creuseuse" rather
+   *  than "2 œufs" and a surprise. */
+  function addEggs(count, profileId = 'worker') {
+    for (let i = 0; i < count; i++) state.eggs.push({ id: _nextId++, age: 0, profileId });
+  }
+
+  /* A digger walks to the nest mouth and stays there. Progress is counted in
+     digger-seconds by update(), not here, so two diggers at the face really do
+     advance the gauge twice as fast — the arithmetic is where the design
+     promise lives and it should be one line, not spread over the crew. */
+  function stepDigger(w, dt) {
+    const a = w.ant;
+    const home = nestOrigin();
+    const dx = home.x - a.x, dz = home.z - a.z;
+    const d = Math.hypot(dx, dz);
+
+    if (d <= DIG_SITE_R) {
+      a.speed = 0;
+      // face the hole and work: yaw toward it so the crew reads as a crew
+      a.yaw = dampAngle(a.yaw, Math.atan2(dx, dz), 4, dt);
+      w.atFace = true;
+    } else {
+      w.atFace = false;
+      a.yaw = dampAngle(a.yaw, Math.atan2(dx, dz), 6, dt);
+      a.speed = WORKER_SPEED * 0.9;
+      const step = a.speed * dt;
+      a.x += Math.sin(a.yaw) * step;
+      a.z += Math.cos(a.yaw) * step;
+      a.travel += step;
+    }
+    a.y = groundY(a.x, a.z);
+    a.bob = Math.sin(a.travel * (Math.PI * 2 / strideOf(DIGGER)) * 2) * 0.13
+          * Math.min(1, a.speed / 8);
+    updateLegs(a, w.legState, dt, DIGGER);
   }
 
   function stepWorker(w, dt) {
@@ -153,18 +198,49 @@ export function createColony() {
         state.eggs.splice(i, 1);
         // she comes out of the nest mouth, not out of the ground beside it
         const a = Math.random() * Math.PI * 2;
-        state.workers.push(spawnWorker(home.x + Math.cos(a) * 9, home.z + Math.sin(a) * 9));
+        state.workers.push(spawnWorker(home.x + Math.cos(a) * 9, home.z + Math.sin(a) * 9, e.profileId));
       }
     }
 
-    for (const w of state.workers) stepWorker(w, dt);
+    state.digging = 0;
+    for (const w of state.workers) {
+      if (w.profileId === 'digger') {
+        stepDigger(w, dt);
+        if (w.atFace) state.digging++;
+      } else {
+        stepWorker(w, dt);
+      }
+    }
+
+    /* The gauge. Digger-seconds, so the crew size is the rate — and the
+       gallery opens exactly once: digGallery() is idempotent because a
+       progress bar overshoots by definition. */
+    if (!state.galleryOpen && state.digging > 0) {
+      state.dig = Math.min(DIG_SECONDS, state.dig + state.digging * dt);
+      if (state.dig >= DIG_SECONDS) {
+        const r = digGallery();
+        if (r.ok) state.galleryOpen = true;
+      }
+    }
+    if (!state.galleryOpen && getGallery()) state.galleryOpen = true;
+  }
+
+  /** 0..1 while the first gallery is being dug, null when there is nothing to
+   *  show — before any digger exists, or once it is open. */
+  function digProgress() {
+    if (state.galleryOpen) return null;
+    if (!state.dig && !state.digging) return null;
+    return state.dig / DIG_SECONDS;
   }
 
   /** One line for the HUD, or null while there is nothing to say. */
   function statusText() {
     if (!state.workers.length && !state.eggs.length) return null;
     const parts = [];
-    if (state.workers.length) parts.push(`${state.workers.length} ouvrière${state.workers.length > 1 ? 's' : ''}`);
+    const foragers = state.workers.filter((w) => w.profileId !== 'digger').length;
+    const diggers = state.workers.length - foragers;
+    if (foragers) parts.push(`${foragers} ouvrière${foragers > 1 ? 's' : ''}`);
+    if (diggers) parts.push(`${diggers} creuseuse${diggers > 1 ? 's' : ''}`);
     if (state.eggs.length) parts.push(`${state.eggs.length} œuf${state.eggs.length > 1 ? 's' : ''}`);
     if (state.delivered) parts.push(`${state.delivered} rapporté${state.delivered > 1 ? 's' : ''}`);
     return `Colonie : ${parts.join(' · ')}`;
@@ -175,6 +251,8 @@ export function createColony() {
     return {
       delivered: state.delivered,
       eggs: state.eggs.map((e) => ({ id: e.id, age: e.age })),
+      dig: state.dig,
+      galleryOpen: state.galleryOpen,
       workers: state.workers.map((w) => ({
         id: w.id, profileId: w.profileId, carrying: w.carrying,
         x: w.ant.x, z: w.ant.z, yaw: w.ant.yaw,
@@ -182,5 +260,8 @@ export function createColony() {
     };
   }
 
-  return { state, addEggs, update, statusText, serialise, collideRadius: () => collideRadius(WORKER) };
+  return {
+    state, addEggs, update, statusText, digProgress, serialise,
+    collideRadius: () => collideRadius(WORKER),
+  };
 }

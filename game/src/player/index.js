@@ -1,6 +1,6 @@
 import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
-import { groundY, distanceToWater, foundedMix } from '../world/index.js';
+import { groundY, distanceToWater, foundedMix, getGallery } from '../world/index.js';
 import { PLAYER_AVATAR, collideRadius } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
@@ -102,6 +102,11 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
      cost the spatial index round went to the trouble of removing from the CPU
      side. See crowd.js. */
   const colony = createColony();
+  /* What the next clutch will be (#38). Held here rather than in colony.js
+     because it is a decision the *player* makes and colony.js is the thing
+     that lives without them — the moment the queen has a management panel
+     (design/castes-et-micro-macro.md 2) this is the first row in it. */
+  let caste = 'worker';
   const crowd = createCrowd(scene, WORKER);
   const interaction = createInteraction({ profile });
   // Props (carried item, the pile, stand-in resource markers) are built here,
@@ -149,6 +154,8 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        entered this frame is walked this frame (the order the old prototype's
        frame() used). */
     if (input.consumeHelp()) hud.toggleControls();
+    const pick = input.consumeCaste();
+    if (pick) { caste = pick; hud.setEventNow(`Prochaine ponte : ${pick === 'digger' ? 'creuseuses' : 'ouvrières'}`); }
     const act = interaction.update(ant, input.consumeInteract(), input.isInteractHeld(), dt);
 
     if (interaction.busy()) {
@@ -176,7 +183,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
 
     /* A clutch becomes eggs the colony owns. laying.js counts clutches; this
        is the first thing that turns one into something that hatches. */
-    if (interaction.laying.state.justLaid) colony.addEggs(3);
+    if (interaction.laying.state.justLaid) colony.addEggs(3, caste);
     colony.update(dt);
     crowd.render(colony.state.workers, elapsed);
 
@@ -187,6 +194,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     hud.setStock(colonyLine ? `${interaction.inventoryText()}  |  ${colonyLine}` : interaction.inventoryText());
     hud.setEvent(interaction.message());
     hud.setHold(interaction.holdProgress(act));
+    hud.setDig(colony.digProgress(), caste);
     /* The ring reads the same `act` the prompt does, so what is circled and
        what is named can never be two different things. */
     const mark = interaction.targetMark(ant, act);
@@ -234,6 +242,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // replaying the whole prologue first
     window.__colony = () => colony;
     window.__foundNest = (x, z) => found(x, z);
+    window.__gallery = () => getGallery();
     // the founding verdict + the sentence it produces, so the harness can
     // check the refusals for ground the queen would have to walk minutes to
     // reach (#33), and the waterline the movement clamp now follows (#4)

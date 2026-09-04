@@ -46,7 +46,8 @@ function el(id, style) {
 function nullHud() {
   return {
     setSite() {}, setPrompt() {}, setObjective() {}, setStock() {}, setEvent() {},
-    setHold() {}, toggleControls() {}, closeControls() {}, dispose() {},
+    setHold() {}, setDig() {}, setEventNow() {},
+    toggleControls() {}, closeControls() {}, dispose() {},
   };
 }
 
@@ -61,6 +62,7 @@ const CONTROLS = [
   ['Souris (glisser)', 'tourner la caméra'],
   ['Molette', 'reculer / rapprocher la vue'],
   ['E', 'action — appui court, ou maintenu quand la barre apparaît'],
+  ['5 / 6', 'prochaine ponte : ouvrières / creuseuses'],
   ['H', 'afficher / masquer cette aide'],
 ];
 
@@ -101,6 +103,24 @@ export function createHud() {
         + `<span style="opacity:0.72"> — ${what}</span></div>`).join('');
   let controlsOpen = true;
 
+  /* The dig gauge sits apart from the hold bar, centred and wider: a hold is
+     something the player is doing right now with a finger on a key, and it
+     belongs under the prompt that names it. This one is the colony working
+     while the player does something else entirely, possibly on the other side
+     of the map, and it has to be legible without being looked for. */
+  const digWrap = el('digbar', 'left:50%;transform:translateX(-50%);bottom:18px;'
+    + 'width:280px;text-align:center;');
+  const digLabel = document.createElement('div');
+  digLabel.style.cssText = 'font:12px/1.6 monospace;color:#e6d3ab;opacity:0.85;';
+  const digOuter = document.createElement('div');
+  digOuter.style.cssText = 'height:6px;background:rgba(0,0,0,0.5);border-radius:3px;overflow:hidden;';
+  const digFill = document.createElement('div');
+  digFill.style.cssText = 'height:100%;width:0%;background:#d8a24e;border-radius:3px;';
+  digOuter.appendChild(digFill);
+  digWrap.appendChild(digLabel);
+  digWrap.appendChild(digOuter);
+  digWrap.style.display = 'none';
+
   let lastSite = null, lastDetail = null, lastPrompt = null;
   let lastObjective = null, lastStock = null, lastEvent = null;
 
@@ -124,6 +144,23 @@ export function createHud() {
       if (factors !== lastDetail) { detail.textContent = factors; lastDetail = factors; }
     },
     setPrompt(text) { lastPrompt = setText(prompt, text, lastPrompt); },
+    /** Progress of the first gallery, 0..1, or null when there is nothing to
+     *  show. `caste` names what the next clutch will be, because the two are
+     *  read together: the gauge is slow *because* of what was laid. */
+    setDig(progress, caste) {
+      const on = progress !== null && progress !== undefined;
+      if (on !== (digWrap.style.display === 'block')) {
+        digWrap.style.display = on ? 'block' : 'none';
+      }
+      if (!on) return;
+      digFill.style.width = `${Math.min(100, progress * 100)}%`;
+      const pct = Math.round(progress * 100);
+      digLabel.textContent = `Creusement de la première galerie — ${pct} %`
+        + (caste === 'digger' ? '' : '  (6 : pondre des creuseuses)');
+    },
+    /** An event line that replaces whatever is there, for a player action
+     *  rather than a world event. */
+    setEventNow(text) { lastEvent = setText(event, text, null); },
     /** the standing goal of the prologue */
     setObjective(text) { lastObjective = setText(objective, text, lastObjective); },
     /** carried item + what is on the pile */
@@ -149,7 +186,7 @@ export function createHud() {
       controls.style.display = 'none';
     },
     dispose() {
-      for (const n of [objective, stock, site, detail, prompt, event, holdOuter, controls]) {
+      for (const n of [objective, stock, site, detail, prompt, event, holdOuter, controls, digWrap]) {
         if (n.parentNode) n.parentNode.removeChild(n);
       }
     },
