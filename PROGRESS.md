@@ -12,7 +12,7 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-05
+## État au 2026-09-05 (tour 13)
 
 **Branche de travail :** `feature/threejs-migration`.
 **`main` :** la [PR #23](https://github.com/splatch17/Myrmidia/pull/23) est
@@ -52,7 +52,9 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 | Carte de surface | Écrite à la main, **608×460 jouables**, 770×540 maillés, zéro aléatoire |
 | Eau | Rivière à l'ouest + **mare dans le creux est** — et `waterDepthAt()` a enfin une empreinte |
 | Ponte | Séquence scriptée de ~14 s : descente, ponte, bascule du ciel hors champ, remontée |
-| **Colonie** | **La couvée éclot. Les ouvrières sortent, récoltent et rapportent sans le joueur.** Rendu instancié : 6 ouvrières = 47 draw calls |
+| **Colonie** | La couvée éclot. Les ouvrières récoltent et rapportent sans le joueur. Rendu instancié : 6 ouvrières = 47 draw calls |
+| **Castes** | **La reine choisit ce qu'elle pond** (5 = ouvrières, 6 = creuseuses). Une caste est une ligne dans `avatar.js`, jamais un fichier |
+| **Première galerie** | **Les creuseuses creusent, jauge en digger-secondes, puis la galerie s'ouvre d'un coup.** Elle existe, elle est éclairée — personne n'y est encore entré |
 | Index spatial | Une grille uniforme sous toutes les requêtes de proximité. `nearestClimbable` ×42, une image à 20 fourmis passe de 3,43 ms à 0,10 ms |
 | Rivière | Bord ouest, plan d'eau ondulé, berge de sable, Fresnel vers le ciel |
 | Horizon | Deux rideaux de crêtes qui suivent la caméra en x/z |
@@ -93,21 +95,24 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 
 ## Prochaines étapes
 
-Le prologue est fini **et il a une suite** : la colonie vit. La question
-devient « qu'est-ce que le joueur *décide* », parce qu'aujourd'hui il regarde.
+L'objectif nommé par le porteur : **voir la première galerie se creuser et
+pouvoir y entrer.** Trois quarts sont faits.
 
-1. **Donner des ordres aux ouvrières.** Elles vont toutes au nœud le plus
-   proche ; le joueur ne choisit rien. C'est la porte du switch micro/macro.
-2. **#34 — mode macro**, le nid en coupe vue de côté. Arbitré au tour 5, jamais
-   commencé, et c'est le cœur du fantasme colonie.
-3. **Finir la conversion à l'index** : `nearestClimbable()` et
-   `harvest.target()` scannent encore linéairement (ils ont besoin de la
-   position dans le tableau, la couture ne la transporte pas).
-4. **Extraire la couche d'entités** (#36) — maintenant qu'il y a `colony.js`
-   *et* le joueur, on sait à quoi elle doit ressembler. Pas avant.
-5. **Lisibilité de la reine** et **arbitrage du rig** — Cephalotes n'a rien
-   livré trois tours de suite, à reprendre autrement.
-6. La colonie abandonnée, le bloom, la spec des brins.
+1. **#40 — entrer dans le nid et en ressortir à pied.** C'est le critère de fin,
+   pas un bonus : une galerie qu'on regarde depuis la surface ne montre rien du
+   futur du jeu. Le blocage est nommé — une reine ne peut pas descendre un puits
+   vertical avec un contrôleur qui suit le sol. Deux pistes, à trancher sur
+   mesure : une rampe plutôt qu'un puits (le moins cher, probablement le bon),
+   ou une vraie locomotion souterraine (plus général, et le mode macro le
+   demandera de toute façon).
+2. **Le menu de gestion de la reine** (`castes-et-micro-macro.md` §2). Il
+   commence à exister dès qu'il y a deux castes à arbitrer, ce qui est le cas
+   depuis ce tour. Aujourd'hui le choix de caste est deux touches sans écran.
+3. **#34 — mode macro**, le nid en coupe vue de côté.
+4. **Contrôler n'importe quelle fourmi** — demande d'abord que le joueur cesse
+   d'être un cas particulier (#36, `etat-des-lieux.md` §2c).
+5. Finir la conversion à l'index (`nearestClimbable`, `harvest.target`).
+6. Lisibilité de la reine, arbitrage du rig, bloom, colonie abandonnée.
 
 ## Où sont les choses
 
@@ -195,6 +200,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 13 | **Choix de caste à la ponte, creuseuses, jauge, première galerie qui s'ouvre** | `cdd6d5b`, `254b189` |
 | 12 | **Éclosion et ouvrières qui récoltent seules**, rendu instancié | `15c9e7b` |
 | 11 | Index spatial sous toutes les requêtes de proximité ; analyse du projet | `6c62128`, `3b13267` |
 | 10 | **Première ponte et prologue prouvé de bout en bout** ; mare à l'est ; `waterDepthAt()` corrigé ; ombres de l'herbe à un tiers du prix | `b0b5e2f`, `53b1a9c` |
