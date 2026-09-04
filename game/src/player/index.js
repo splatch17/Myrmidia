@@ -14,9 +14,12 @@ import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
 import { createInteraction } from './interaction.js';
 import { createProps } from './props.js';
 import { resourceNodes } from './resources.js';
-import { nestOrigin, canFound, refusalText } from './founding.js';
+import { nestOrigin, canFound, found, refusalText } from './founding.js';
 import { createHud } from './hud.js';
 import { createTargetMarker } from './marker.js';
+import { createColony } from './colony.js';
+import { createCrowd } from './crowd.js';
+import { WORKER } from './avatar.js';
 import { dampAngle } from './mathUtil.js';
 
 /**
@@ -93,6 +96,13 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   const cameraRig = createCameraRig(camera);
   const hud = createHud();
   const marker = createTargetMarker(scene);
+  /* The colony, and the two draw calls that show it. Workers are drawn
+     instanced rather than as ~30 meshes each like the player: twenty of them
+     the player's way would be six hundred draw calls, which is precisely the
+     cost the spatial index round went to the trouble of removing from the CPU
+     side. See crowd.js. */
+  const colony = createColony();
+  const crowd = createCrowd(scene, WORKER);
   const interaction = createInteraction({ profile });
   // Props (carried item, the pile, stand-in resource markers) are built here,
   // before main.js's one-shot scene.traverse() applies the nest shading — see
@@ -164,10 +174,17 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
 
     props.update(ant, interaction.harvest.state);
 
+    /* A clutch becomes eggs the colony owns. laying.js counts clutches; this
+       is the first thing that turns one into something that hatches. */
+    if (interaction.laying.state.justLaid) colony.addEggs(3);
+    colony.update(dt);
+    crowd.render(colony.state.workers, elapsed);
+
     refreshSite(dt);
     hud.setPrompt(interaction.promptText(ant, act));
     hud.setObjective(interaction.objectiveText(ant));
-    hud.setStock(interaction.inventoryText());
+    const colonyLine = colony.statusText();
+    hud.setStock(colonyLine ? `${interaction.inventoryText()}  |  ${colonyLine}` : interaction.inventoryText());
     hud.setEvent(interaction.message());
     hud.setHold(interaction.holdProgress(act));
     /* The ring reads the same `act` the prompt does, so what is circled and
@@ -213,6 +230,10 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__nodes = resourceNodes;
     window.__harvest = () => interaction.harvest.state;
     window.__nestOrigin = nestOrigin;
+    // the colony, so a harness can seed a clutch and watch it hatch without
+    // replaying the whole prologue first
+    window.__colony = () => colony;
+    window.__foundNest = (x, z) => found(x, z);
     // the founding verdict + the sentence it produces, so the harness can
     // check the refusals for ground the queen would have to walk minutes to
     // reach (#33), and the waterline the movement clamp now follows (#4)
@@ -230,6 +251,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     input.dispose();
     hud.dispose();
     marker.dispose();
+    crowd.dispose();
     props.dispose();
   }
 
