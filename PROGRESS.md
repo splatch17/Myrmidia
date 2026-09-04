@@ -12,7 +12,7 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-03
+## État au 2026-09-05
 
 **Branche de travail :** `feature/threejs-migration`.
 **`main` :** la [PR #23](https://github.com/splatch17/Myrmidia/pull/23) est
@@ -52,6 +52,8 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 | Carte de surface | Écrite à la main, **608×460 jouables**, 770×540 maillés, zéro aléatoire |
 | Eau | Rivière à l'ouest + **mare dans le creux est** — et `waterDepthAt()` a enfin une empreinte |
 | Ponte | Séquence scriptée de ~14 s : descente, ponte, bascule du ciel hors champ, remontée |
+| **Colonie** | **La couvée éclot. Les ouvrières sortent, récoltent et rapportent sans le joueur.** Rendu instancié : 6 ouvrières = 47 draw calls |
+| Index spatial | Une grille uniforme sous toutes les requêtes de proximité. `nearestClimbable` ×42, une image à 20 fourmis passe de 3,43 ms à 0,10 ms |
 | Rivière | Bord ouest, plan d'eau ondulé, berge de sable, Fresnel vers le ciel |
 | Horizon | Deux rideaux de crêtes qui suivent la caméra en x/z |
 | Herbe | 3400 brins, largeur par instance, quille de normale + vrille, **ombre portée** (même fonction GLSL pour la passe visible et la passe de profondeur) |
@@ -91,19 +93,21 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 
 ## Prochaines étapes
 
-Le prologue est fini. La question n'est plus « est-ce que ça marche » mais
-**« qu'est-ce qu'on fait après la première couvée »**.
+Le prologue est fini **et il a une suite** : la colonie vit. La question
+devient « qu'est-ce que le joueur *décide* », parce qu'aujourd'hui il regarde.
 
-1. **Les premières ouvrières** (défaut 8). La couvée éclot, une ouvrière sort,
-   et le joueur a quelque chose à commander. C'est la porte d'entrée du switch
-   micro/macro annoncé depuis le début.
-2. **#34 — mode macro**, le nid en coupe vue de côté (fourmilière d'élevage),
-   pas une carte de territoire. Arbitré au tour 5.
-3. **Rendre les pontes suivantes jouables** (défaut 7) — la chambre doit devenir
-   un lieu où l'on entre, pas une cinématique.
-4. **Lisibilité de la reine** (défaut 1) et **arbitrage du rig** (défaut 2) —
-   les deux attendent Cephalotes depuis deux tours.
-5. La colonie abandonnée (défaut 4), le bloom et la spec des brins (défaut 6).
+1. **Donner des ordres aux ouvrières.** Elles vont toutes au nœud le plus
+   proche ; le joueur ne choisit rien. C'est la porte du switch micro/macro.
+2. **#34 — mode macro**, le nid en coupe vue de côté. Arbitré au tour 5, jamais
+   commencé, et c'est le cœur du fantasme colonie.
+3. **Finir la conversion à l'index** : `nearestClimbable()` et
+   `harvest.target()` scannent encore linéairement (ils ont besoin de la
+   position dans le tableau, la couture ne la transporte pas).
+4. **Extraire la couche d'entités** (#36) — maintenant qu'il y a `colony.js`
+   *et* le joueur, on sait à quoi elle doit ressembler. Pas avant.
+5. **Lisibilité de la reine** et **arbitrage du rig** — Cephalotes n'a rien
+   livré trois tours de suite, à reprendre autrement.
+6. La colonie abandonnée, le bloom, la spec des brins.
 
 ## Où sont les choses
 
@@ -191,6 +195,8 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 12 | **Éclosion et ouvrières qui récoltent seules**, rendu instancié | `15c9e7b` |
+| 11 | Index spatial sous toutes les requêtes de proximité ; analyse du projet | `6c62128`, `3b13267` |
 | 10 | **Première ponte et prologue prouvé de bout en bout** ; mare à l'est ; `waterDepthAt()` corrigé ; ombres de l'herbe à un tiers du prix | `b0b5e2f`, `53b1a9c` |
 | 9 | Panneau de réglages graphiques + compteur d'images, anneau de cible refait en décal doux, carte ×2,7 avec 7 nouveaux reliefs écrits à la main | `25086bc` |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
