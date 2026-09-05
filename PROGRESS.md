@@ -22,6 +22,13 @@ README pointe dessus. Le travail continue sur la branche et repassera par une PR
 **Lien de test :** voir le tableau du `README.md` (build `game/dist/`, servi
 par raw.githack depuis la branche).
 
+> ### ⚠ La cadence de test est ACTIVE
+> `core/pace.js` divise toutes les attentes par 8 et tous les coûts par 5.
+> C'est volontaire pendant la phase de debug, mais **le rythme réel du jeu ne
+> peut pas être jugé avec ça allumé** — une galerie en cinq secondes est un
+> débogueur, pas un design. `P` puis `5` la coupe. À repasser en réel avant
+> tout arbitrage de game design.
+
 ### Pour reprendre en trois minutes
 
 ```
@@ -53,7 +60,8 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 | Eau | Rivière à l'ouest + **mare dans le creux est** — et `waterDepthAt()` a enfin une empreinte |
 | Ponte | Séquence scriptée de ~14 s : descente, ponte, bascule du ciel hors champ, remontée |
 | **Colonie** | La couvée éclot. Les ouvrières récoltent et rapportent sans le joueur. Rendu instancié : 6 ouvrières = 47 draw calls |
-| **Castes** | **La reine choisit ce qu'elle pond** (5 = ouvrières, 6 = creuseuses). Une caste est une ligne dans `avatar.js`, jamais un fichier |
+| **Castes** | La reine choisit ce qu'elle pond (5 = ouvrières, 6 = creuseuses). Une caste est une ligne dans `avatar.js`, jamais un fichier. **La creuseuse se débloque à la 2e ponte** |
+| **Cadence de test** | `core/pace.js` : attentes /8, coûts /5 (plancher 1 unité). **ON par défaut** — `P` puis `5` pour la couper |
 | **Première galerie** | **Les creuseuses creusent, jauge en digger-secondes, puis la galerie s'ouvre d'un coup.** Elle existe, elle est éclairée — personne n'y est encore entré |
 | Index spatial | Une grille uniforme sous toutes les requêtes de proximité. `nearestClimbable` ×42, une image à 20 fourmis passe de 3,43 ms à 0,10 ms |
 | Rivière | Bord ouest, plan d'eau ondulé, berge de sable, Fresnel vers le ciel |
@@ -84,14 +92,14 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 
 | # | Défaut | Gravité |
 |---|---|---|
-| 1 | La reine reste sombre de corps ; le contour la détache mais sa chitine est à la valeur du sol. **Cephalotes n'a rien livré au tour 10** (coupé avant), la mesure reste à faire | DA |
-| 2 | `RIG_PROLOGUE` retouché quatre fois à l'intégration, chaque valeur annotée contre `ambiance-prologue.md`. **La DA n'a toujours jamais arbitré** | À arbitrer |
-| 3 | Le tramage de dissolution proche caméra est très visible sur les brins traversés | Petit mais voyant |
-| 4 | La bouche de l'ancien tunnel montre le ciel quand `SHOW_PREBUILT_NEST` est réactivé : tube élargi à y=24, couture de `terrain.js` taillée pour y=11 | Bloque la colonie abandonnée |
-| 5 | L'ombre reste le premier poste : 7,01 ms sur la vue large après la correction, contre 2,96 ms sans ombre du tout | Perf |
-| 6 | Points 4 à 7 de `design/herbe-brins.md` non câblés ; pas de bloom sur les émissifs | Reste à faire |
-| 7 | La séquence de ponte est **scriptée** : 14 s sans contrôle. Acceptable une fois, pas répétable telle quelle pour les pontes suivantes | Design |
-| 8 | Rien après la première couvée : le HUD annonce « 5 unités de plus pour la suivante » mais il n'y a ni ouvrière, ni croissance, ni mode macro | Contenu |
+| 1 | **On ne peut pas entrer dans la galerie** (#40). Elle existe et elle est éclairée, personne n'y a marché. C'est le critère de fin de l'objectif en cours | **Bloquant** |
+| 2 | **Les touches 5/6 sont committées sans capture.** Mon harnais jetable n'envoie aucune touche (H n'y bascule pas le panneau non plus) alors que `verify-harvest.mjs` y arrive. Défaut du script, pas du jeu — mais à prouver | À vérifier |
+| 3 | La séquence de ponte est scriptée : ~14 s sans contrôle. Acceptable une fois, pas répétable | Design |
+| 4 | La reine reste sombre de corps ; le contour la détache mais sa chitine est à la valeur du sol | DA |
+| 5 | `RIG_PROLOGUE` retouché quatre fois à l'intégration. **La DA n'a jamais arbitré** (Cephalotes coupé 3 tours de suite) | À arbitrer |
+| 6 | La bouche de l'ancien tunnel montre le ciel si `SHOW_PREBUILT_NEST` est réactivé | Bloque la colonie abandonnée |
+| 7 | `nearestClimbable()` et `harvest.target()` scannent encore linéairement | Perf |
+| 8 | Tramage de dissolution très visible ; points 4-7 de `herbe-brins.md` ; pas de bloom | Reste à faire |
 
 ## Prochaines étapes
 
@@ -200,6 +208,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 14 | Cadence de test, déblocage de la creuseuse à la 2e ponte | `4b0adb2` |
 | 13 | **Choix de caste à la ponte, creuseuses, jauge, première galerie qui s'ouvre** | `cdd6d5b`, `254b189` |
 | 12 | **Éclosion et ouvrières qui récoltent seules**, rendu instancié | `15c9e7b` |
 | 11 | Index spatial sous toutes les requêtes de proximité ; analyse du projet | `6c62128`, `3b13267` |
