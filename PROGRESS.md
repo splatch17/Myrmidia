@@ -12,15 +12,62 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-03
+## État au 2026-09-05
 
-**Branche de travail :** `feature/threejs-migration`.
-**Pull request :** [#23](https://github.com/splatch17/Myrmidia/pull/23), ouverte
-contre `main`, mergeable. **Pas encore mergée** — le merge a été refusé par le
-classificateur d'auto-mode, il faut l'autoriser ou cliquer sur GitHub.
+**PR #23 mergée dans `main`** (`0f1a28a`). La ligne « pas encore mergée » de
+la précédente version de ce fichier est obsolète — `git log main` le confirme.
+Ce round (nocturne, autonome, sans capture possible — voir plus bas) travaille
+directement sur une branche `auto/round-*` à partir de `main`.
 **Stack :** Three.js 0.169 + Vite 5, projet npm à la racine `game/`.
 **Lien de test :** voir le tableau du `README.md` (build `game/dist/`, servi
 par raw.githack depuis la branche).
+
+### Round du 2026-09-05 (nocturne, sans écran)
+
+Ce round tournait sur un VPS ARM sans GPU : Chromium y retombe sur
+SwiftShader, donc aucun harnais `verify-*.mjs` (tous basés sur Playwright/
+Chromium et sur des chiffres de perf) n'a été lancé, et rien n'a été jugé sur
+capture. Seule tâche retenue : une tâche vérifiable sans image.
+
+**Livré : `game/scripts/test-logic.mjs`** (`npm run test:logic`, ou
+`node scripts/test-logic.mjs`) — un premier harnais de tests **non
+graphiques**, pur Node, pour la géométrie et le confinement de `world/**`.
+Il importe les vrais modules de production (`terrain.js`, `founding.js`,
+`underground.js`, `player/avatar.js`) via un hook de résolution Node
+(`scripts/logic-test/loader.mjs`) qui ne redirige que `world/texturing.js`
+vers un stub inerte (`scripts/logic-test/texturing-stub.mjs`) — c'est le seul
+module de ce sous-graphe qui touche le DOM (`document.createElement('canvas')`,
+`THREE.TextureLoader`). Tout le reste (three.js core, le bruit, les maths de
+tube, `containUnderground`, `foundNest`, `groundY`) tourne tel quel.
+
+Ce que ça teste, avec les vraies fonctions publiques (pas de réimplémentation
+de leur formule — la largeur franchissable est mesurée en sondant
+`containUnderground()` par dichotomie, pas recalculée) :
+- la reine fondatrice (rayon de collision 3,3) passe dans la galerie
+  principale et dans les trois corridors de salle (`underground.js`) ;
+- elle passe dans le puits creusé à l'exécution (`founding.js foundNest()`,
+  `SHAFT_R = 4,2`) ;
+- `groundY()` n'a pas de marche à la couture galerie/surface
+  (`z = TUNNEL_MOUTH`).
+
+C'est exactement la classe de bug que `PROGRESS.md` documente comme la plus
+coûteuse du projet (§ « Pièges », #6 — une constante calibrée sur une échelle
+et laissée derrière), rencontrée trois fois côté rendu (brouillard, brins,
+alésage du nid). Le harnais a été validé positif *et* négatif : passe à 15/15
+sur l'état actuel, et j'ai temporairement cassé `SHAFT_R` (4,2 → 2,0) pour
+confirmer qu'il le détecte (`1 failed`), puis restauré la valeur — `git diff`
+est revenu propre avant de continuer. Aucun fichier de `world/**` ou
+`player/**` n'a été modifié par ce round, seuls les trois fichiers de script
+ci-dessus et une ligne dans `package.json`.
+
+**Ce que ce harnais ne fait pas, volontairement :** il ne dit rien sur ce qui
+*se voit* — DA, lisibilité, defaut #2 (bouche du vieux tunnel), defaut #5
+(RIG_PROLOGUE), la fondation jamais vue (défaut #1). Tout ça reste dû à l'œil,
+sur une machine avec GPU, comme avant.
+
+**Vérification visuelle restant due** sur : rien de nouveau n'a été rendu ce
+round, donc rien de neuf à re-vérifier à l'œil — mais tous les défauts connus
+listés plus bas (1 à 8) restent entiers et n'ont pas avancé.
 
 ### Pour reprendre en trois minutes
 
@@ -29,10 +76,14 @@ git -C <repo> status --short        # 3 rounds sur 3, des agents ont été coup�
                                     # en pleine session : leur travail est SUR
                                     # LE DISQUE. L'inventorier avant tout.
 cd game && npx vite build           # doit passer sans erreur
-node scripts/verify-terrain.mjs _s  # 13 vues + perf + mémoire
+node scripts/test-logic.mjs         # géométrie/confinement, non graphique, sûr sans GPU
+node scripts/verify-terrain.mjs _s  # 13 vues + perf + mémoire — a besoin d'un vrai GPU
 ```
-Puis **regarder les PNG**. Tous les défauts rattrapés depuis le round 3 l'ont
-été en regardant des images, aucun en relisant du code.
+Puis **regarder les PNG** produits par `verify-terrain.mjs`. Tous les défauts
+rattrapés depuis le round 3 l'ont été en regardant des images, aucun en
+relisant du code — `test-logic.mjs` complète ça, il ne le remplace pas : il
+n'attrape que les incohérences numériques (une créature qui ne passe plus
+dans un tunnel), pas ce qui se juge à l'œil.
 
 ### Ce qui tourne aujourd'hui
 
@@ -110,6 +161,7 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 | Les textures | `world/texturing.js` (triplanaire), `scripts/generate-procedural-textures.mjs` (génération) |
 | L'éclairage du nid | `world/lighting.js` — `applyNestShading()` s'applique à toute la scène depuis `main.js` |
 | Le contrat monde ↔ gameplay | `design/api-monde-gameplay.md` — **fait autorité, aucun agent ne le modifie** |
+| Tester une constante de taille sans écran | `scripts/test-logic.mjs` — voir son en-tête ; à étendre plutôt qu'à dupliquer si une autre échelle se retrouve un jour fausse |
 
 ---
 
@@ -158,10 +210,18 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
   `dea42af` (brouillard du nid sur la pelouse, rivière noire, absence de
   reflet) ont tous été trouvés en regardant les images, aucun en relisant le
   code.
-- **Les harnais de vérification :** `game/scripts/verify-terrain.mjs` (12 vues
-  + perf + mémoire), `verify-room-access.mjs` (accès aux 3 salles),
+- **Les harnais de vérification graphiques :** `game/scripts/verify-terrain.mjs`
+  (12 vues + perf + mémoire), `verify-room-access.mjs` (accès aux 3 salles),
   `verify-textures.mjs`. Chromium **doit** être lancé avec
-  `--use-gl=angle --use-angle=d3d11`, sinon on mesure le rasteriseur logiciel.
+  `--use-gl=angle --use-angle=d3d11`, sinon on mesure le rasteriseur logiciel —
+  ce qui les rend inutilisables sur une machine sans GPU (ex. VPS ARM
+  d'un round nocturne).
+- **Le harnais non graphique :** `game/scripts/test-logic.mjs`
+  (`npm run test:logic`) — géométrie et confinement de `world/**` en pur Node,
+  sans Chromium ni GPU. Ne juge rien à l'œil (DA, lisibilité, aplomb d'un
+  seam) ; attrape seulement les incohérences numériques du genre « une
+  créature ne passe plus dans un tunnel ». Voir son en-tête pour comment il
+  importe les vrais modules de production sans DOM.
 - **Piège récurrent :** tout albédo doit porter
   `tex.colorSpace = THREE.SRGBColorSpace`. L'oubli ne lève aucune erreur, il
   délave simplement le rendu. Les rampes toon et les cartes `_orm`/`_normal`
@@ -182,6 +242,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 9 | Harnais de tests non graphiques (`test-logic.mjs`) — géométrie/confinement de `world/**` vérifiés en pur Node, sans GPU. Round nocturne sur VPS sans GPU, aucun rendu touché | *(non commité par l'agent — voir note de round ci-dessus)* |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
 | 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |
 | 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |
