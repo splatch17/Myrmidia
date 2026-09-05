@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "gen:textures": "node scripts/generate-procedural-textures.mjs"
+    "gen:textures": "node scripts/generate-procedural-textures.mjs",
+    "test:logic": "node scripts/test-logic.mjs"
   },
   "dependencies": {
     "three": "^0.169.0"
