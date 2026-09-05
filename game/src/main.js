@@ -213,14 +213,23 @@ function nestness(cam, ant) {
   return Math.max(tube, pit);
 }
 
-/* 0 = prologue, 1 = founded, animated once over FOUND_FADE seconds when the
-   nest appears. Read from the world rather than set by a gameplay call, so
-   this file keeps not knowing who founded or why. */
+/* 0 = prologue, 1 = founded, animated once over FOUND_FADE seconds. Read
+   from the world rather than set by a gameplay call, so this file keeps not
+   knowing who founded or why.
+
+   Trigger: the first ponte, not the dig. design/ressources-et-fondation.md
+   §7a is explicit that foundNest() only opens the sequence — "la bascule
+   est déclenchée par l'événement de ponte" — because lighting the world
+   while the queen is still digging rewards the excavation, not the colony
+   becoming viable. brood > 0 is player/ponte.js's first successful lay;
+   nestOrigin() alone (the previous condition here) fired at the dig and
+   contradicted the spec. */
 const FOUND_FADE = 6.0;
 let foundedAt = null;
 function advanceFoundedMix() {
   const now = performance.now() / 1000;
-  if (foundedAt === null && nestOrigin()) foundedAt = now;
+  const nest = getFoundedNest();
+  if (foundedAt === null && nest && nest.brood > 0) foundedAt = now;
   if (foundedAt !== null) setFoundedMix(clamp((now - foundedAt) / FOUND_FADE, 0, 1));
 }
 

@@ -121,6 +121,22 @@ coordonnées : `foundNest()` appelle `canFoundAt()`, il ne redécide pas.
 `'already-founded'`), pas une phrase pour le joueur. La phrase est du ressort
 de `player/**`, comme pour `soilAt`.
 
+### 4bis. La chambre qui se peuple (#12) — ajout au contrat, round 8
+
+```
+getFoundedNest() -> { x, z, mouth: {x,y,z,r}, chamber: {x,y,z,ceilY,r},
+                      brood: number, sealed: boolean, ... } | null
+populateNest(n)  -> number   // révèle n clutchs, borné à MAX_BROOD, renvoie
+                             // le compte réellement posé
+sealNest(sealed) -> void     // ferme/rouvre le puits froid (ambiance §2c plan 3)
+MAX_BROOD        -> number   // capacité du couvoir, 6 aujourd'hui
+```
+
+Le nid existe en coquille vide dès `foundNest()` ; `populateNest(n)` ne
+reconstruit rien, il révèle ce qui est déjà bâti et caché. `nest.brood` est
+la seule source de vérité sur combien de pontes ont eu lieu — `player/**` ne
+garde pas de compteur parallèle, il lit celui-ci.
+
 ---
 
 ## 5. Ce que `player/**` livre en face (round 6)
@@ -129,3 +145,21 @@ Récolte et fondation. Rien de tout cela n'est appelé depuis `world/**` :
 le monde ne connaît pas le joueur, le joueur appelle le monde. La dépendance
 va dans un seul sens, et c'est ce qui permet de tester le monde sans
 contrôleur.
+
+### 5bis. La ponte (`player/ponte.js`, round 8) — première tranche
+
+```
+canPonte(ant, stock) -> { ok: boolean, reason?: string }
+layEgg()             -> { ok: boolean, laid: number }
+broodCount()         -> number
+```
+
+Coûte des ressources stockées (la même réserve que la fondation,
+`harvest.js`), tenue à la **bouche** du nid (`nest.mouth`) et non à la
+chambre : marcher jusqu'à la chambre creusée à l'exécution est
+`PROGRESS.md` défaut #1, jamais vu fonctionner, et cette tranche ne veut pas
+en dépendre. Pas d'incubation, pas d'éclosion en ouvrière — la première
+ponte ne fait aujourd'hui que révéler la clutch suivante (`populateNest`) et
+déclencher la bascule crépuscule → jour (`design/ressources-et-fondation.md`
+§7a : c'est la ponte qui l'ouvre, pas le coup de pelle). `main.js` lit
+`getFoundedNest().brood > 0` pour ça, plus `nestOrigin()` seul.

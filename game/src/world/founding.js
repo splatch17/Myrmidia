@@ -61,7 +61,7 @@ const WARM_MOUTH_LIGHT = [1.05, 0.62, 0.24];   // ambiance §2b: the one warm
 const BROOD_LIGHT = [0.85, 0.55, 0.22];        // ambiance §2c plan 5
 const GLOW_LIGHT = [1.95, 1.20, 0.52];         // ambiance §2c plan 6
 
-const MAX_BROOD = 6;
+export const MAX_BROOD = 6;
 
 /* ---- state --------------------------------------------------------------- */
 
