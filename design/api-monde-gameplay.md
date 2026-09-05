@@ -129,3 +129,68 @@ Récolte et fondation. Rien de tout cela n'est appelé depuis `world/**` :
 le monde ne connaît pas le joueur, le joueur appelle le monde. La dépendance
 va dans un seul sens, et c'est ce qui permet de tester le monde sans
 contrôleur.
+
+---
+
+## 6. Marcher dans le nid — à livrer (round 15, #40 + #41)
+
+C'est la moitié de contrat la plus risquée écrite jusqu'ici, parce que les deux
+côtés touchent **la même fonction** : `groundY()`, que `terrain.js` déclare
+explicitement « la seule source de vérité pour la hauteur du sol, dehors et
+dedans ». Le joueur ne peut pas marcher dans une galerie tant que `groundY()`
+répond « la pelouse » pour un point situé vingt unités sous elle.
+
+### Ce que `world/**` livre
+
+```
+groundY(x, z)            -> number
+```
+**Signature inchangée.** Elle répond désormais le sol du nid quand (x, z) tombe
+dans l'empreinte du nid creusé, et la pelouse partout ailleurs. Aucun appelant
+existant ne change : le contrôleur, les pattes IK, la caméra et l'herbe
+l'appellent déjà et suivront.
+
+```
+nestFootprint()  -> { contains(x, z), floorY(x, z), headroom(x, z) } | null
+```
+`null` tant que rien n'est creusé. Sert à `player/**` pour savoir qu'il est
+**dedans** sans redériver la géométrie — c'est la question « suis-je sous
+terre », et une seconde réponse à cette question est exactement le genre de
+divergence que ce document existe pour empêcher.
+
+```
+descentPath()    -> [{x, y, z}, ...] | null
+```
+La ligne médiane praticable de la bouche jusqu'à la chambre. Publiée même si la
+descente devient une rampe que le contrôleur suit tout seul : c'est ce qui
+permet à la caméra, aux creuseuses et à une future ouvrière d'emprunter le même
+chemin que la reine sans que chacune se le recalcule.
+
+### Contrainte de conception, arbitrée
+
+La descente doit être **franchissable par le contrôleur qui suit le sol**. La
+séquence de ponte est scriptée sur ~14 secondes précisément parce qu'un puits
+vertical ne l'est pas, et ce scriptage est déjà signalé comme non répétable
+(`PROGRESS.md`). Donc : **une rampe, pas un puits.** Le puits actuel est
+`AXIS_TILT = 0.22` sur `SHAFT_LEN = 15` — quasi vertical. La galerie, elle, a
+déjà été creusée **à plat** au round 13 pour ne pas aggraver ce problème.
+
+Si la rampe change la silhouette du cratère vue de la pelouse, c'est acceptable
+et même souhaitable : une entrée qu'on voit être une entrée vaut mieux qu'un
+trou.
+
+### Ce que `player/**` livre en face
+
+Rien de neuf côté monde. Le contrôleur cesse de supposer « dehors » :
+
+- la marche suit `groundY()` sans cas particulier ;
+- la caméra sous terre existe déjà (`fittedBoom`, #27) et n'est pas à refaire ;
+- la séquence scriptée de `laying.js` doit **rester jouable si on la coupe** :
+  une fois la descente marchable, elle devient une mise en scène facultative,
+  pas la seule façon d'arriver en bas.
+
+### Critère de fin commun
+
+Une capture de la reine **dans la galerie**, arrivée en marchant, pilotée par
+le vrai pipeline d'entrée. Et une autre d'elle ressortie. Ni l'une ni l'autre
+ne compte si la position a été écrite dans l'état.
