@@ -63,8 +63,15 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 - Pas de mode macro (le nid en coupe, vue de côté).
 - Pas de post-process (bloom, contours).
-- Pas de repop des ressources, pas d'ouvrières, pas de ponte.
-- La bascule visuelle prologue → colonie fondée est câblée mais **jamais vue**.
+- Pas de repop des ressources, pas d'ouvrières.
+- **Ponte : première tranche seulement (round 9, `player/ponte.js`).** Tenir
+  E près de la bouche du nid, ça coûte `PONTE_COST` unités de réserve et ça
+  révèle la clutch suivante (`populateNest`). Pas d'incubation, pas
+  d'éclosion en ouvrière — ça reste à faire, voir défaut 9.
+- La bascule visuelle prologue → colonie fondée est câblée, et se déclenche
+  maintenant à la première ponte plutôt qu'au premier coup de pelle
+  (corrigé round 9, voir défaut 9) — mais elle reste, comme tout le reste
+  de la fondation, **jamais vue**.
 
 ---
 
@@ -80,21 +87,35 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 | 6 | Rayons de grimpe et de collision des tiges divisés par ~2,1 avec l'affinement des brins. Jamais jugé sur capture | À vérifier |
 | 7 | Points 4 à 7 de `design/herbe-brins.md` non câblés | Reste à faire |
 | 8 | Pas de bloom sur les émissifs — 3e volet de #28 | Reste à faire |
+| 9 | **La ponte (round 9) n'a jamais été vue, comme tout ce qui suit la fondation.** Écrite et câblée à l'aveugle (VPS sans GPU, voir l'en-tête de session) : le calcul (coût, plafond `MAX_BROOD`, portée) et le déclenchement de `founded` à `brood > 0` sont relus mais pas joués. Dépend en plus d'un chemin non vérifié — marcher jusqu'à la chambre creusée à l'exécution, défaut 1 — donc le geste de pondre est volontairement rattaché à la **bouche** (surface) et non à la chambre, justement pour ne pas dépendre de #1. Voir `design/api-monde-gameplay.md` §4bis/§5bis pour ce qui a été ajouté au contrat | **À voir avant tout** |
 
 ## Prochaines étapes
 
-1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
-   capturer le moment. Tant qu'il n'est pas vu, il n'est pas livré.
-2. **#6 — la ponte**, et la bascule crépuscule → jour **à la première ponte,
-   pas au premier coup de pelle** (`design/ressources-et-fondation.md`).
-   `populateNest()` et `setFoundedMix()` existent, il n'y a qu'à s'en servir.
-3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
+1. **Voir la fondation ET la ponte** (défauts 1 et 9 — le même blocage : rien
+   après « Réserve : 3/5 » n'a jamais tourné sous des yeux). Rejouer la
+   boucle de bout en bout : fonder, marcher jusqu'à la chambre (ou, si ça ne
+   marche pas, jusqu'à la bouche — le geste de pondre a été câblé pour ne pas
+   en dépendre), pondre, et regarder si `founded` monte bien à ce moment-là
+   et pas avant. Tant que ce n'est pas vu, rien de round 9 n'est livré.
+   Choses précises à juger sur capture :
+   - la chambre est-elle atteignable en marchant (défaut 1, jamais tranché) ;
+   - le anneau/prompt de ponte se déclenche-t-il à la bonne distance de la
+     bouche (`PONTE_RADIUS = 16`, non calibré sur mesure) ;
+   - le monde s'éclaire-t-il au bon instant, sur 6 s, sans à-coup ;
+   - `PONTE_COST = 3` et `PONTE_SECONDS = 2.5` sont des premiers chiffres, pas
+     un équilibrage — à ajuster une fois vus en jeu.
+2. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
    petit nid mort à trouver : entrée effondrée avec du relief, champignons
    toujours luminescents (le champignon survit à la colonie). Corrige aussi le
    défaut 2 au passage, puisque la bouche devient un éboulis et non un trou.
-4. **Lisibilité de la reine** (défaut 3) — mesurer, puis chiffrer.
-5. Bloom sélectif (défaut 8), points 4-7 de la spec des brins (défaut 7).
-6. **#34 — mode macro**, le nid en coupe vue de côté.
+3. **Lisibilité de la reine** (défaut 3) — mesurer, puis chiffrer.
+4. Bloom sélectif (défaut 8), points 4-7 de la spec des brins (défaut 7).
+5. **#34 — mode macro**, le nid en coupe vue de côté.
+6. **Incubation et éclosion en ouvrière** — la tranche que round 9 a
+   délibérément laissée de côté (pas de timer, pas d'entité ouvrière à qui
+   remettre la main). `player/ponte.js` pose `layEgg()`/`broodCount()`
+   comme les seuls points d'entrée à faire évoluer ; rien d'autre dans
+   `player/**` ne connaît la ponte.
 
 ## Où sont les choses
 
@@ -105,7 +126,8 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 | Ce que vaut un sol | `world/terrain.js` `sampleTerrain()` → `player/siteQuality.js` traduit en verdict de jeu |
 | Les ressources | `world/resources.js` (données + mesh), `player/harvest.js` (ce qu'on en fait) |
 | Creuser le nid | `world/founding.js` — `canFoundAt` / `foundNest` / `populateNest` |
-| Le ciel, le soleil, la bascule prologue→colonie | `world/sun.js` (`RIG_PROLOGUE`, `RIG_FOUNDED`, `setFoundedMix`) |
+| Pondre | `player/ponte.js` — `canPonte` / `layEgg` / `broodCount`, câblé dans `player/interaction.js` |
+| Le ciel, le soleil, la bascule prologue→colonie | `world/sun.js` (`RIG_PROLOGUE`, `RIG_FOUNDED`, `setFoundedMix`) ; le déclenchement (à `brood > 0`, pas à `foundNest()`) est dans `main.js` `advanceFoundedMix()` |
 | Les tailles/vitesses de la fourmi | `player/avatar.js` — un second corps = une entrée de plus, pas un contrôleur |
 | Les textures | `world/texturing.js` (triplanaire), `scripts/generate-procedural-textures.mjs` (génération) |
 | L'éclairage du nid | `world/lighting.js` — `applyNestShading()` s'applique à toute la scène depuis `main.js` |
@@ -182,6 +204,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 9 | Round nocturne solo, sur un VPS ARM sans GPU (les harnais `verify-*.mjs` étaient interdits) : première tranche de la ponte (`player/ponte.js`) et correction du déclenchement de la bascule crépuscule→jour (`main.js`, `brood > 0` au lieu de `nestOrigin()`). **Rien de tout cela n'a été vu tourner** — voir défaut 9, `npx vite build` est la seule vérification faite | *(à committer par le script appelant)* |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
 | 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |
 | 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |

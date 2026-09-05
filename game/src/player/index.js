@@ -15,6 +15,7 @@ import { createInteraction } from './interaction.js';
 import { createProps } from './props.js';
 import { resourceNodes } from './resources.js';
 import { nestOrigin, canFound, refusalText } from './founding.js';
+import { broodCount } from './ponte.js';
 import { createHud } from './hud.js';
 import { createTargetMarker } from './marker.js';
 import { dampAngle } from './mathUtil.js';
@@ -207,6 +208,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // reach (#33), and the waterline the movement clamp now follows (#4)
     window.__canFound = (x, z) => { const v = canFound(x, z); return { ...v, text: refusalText(v.reason) }; };
     window.__toWater = distanceToWater;
+    window.__brood = broodCount;
   }
 
   function dispose() {

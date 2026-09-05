@@ -133,6 +133,23 @@ export function createHarvest() {
   function stock() { return state.cache ? state.cache.total : 0; }
   function enough() { return stock() >= FOUND_STOCK; }
 
+  /** Remove `qty` units from the pile, any kind — the granary is one pool of
+   *  "stored resources" once something is spent from it rather than carried
+   *  and dropped (player/ponte.js: laying an egg costs the pile, not a
+   *  specific kind). False and untouched if the pile does not have enough. */
+  function spend(qty) {
+    if (stock() < qty) return false;
+    let remaining = qty;
+    for (const kind of Object.keys(state.cache.items)) {
+      if (remaining <= 0) break;
+      const take = Math.min(state.cache.items[kind], remaining);
+      state.cache.items[kind] -= take;
+      remaining -= take;
+    }
+    state.cache.total -= qty;
+    return true;
+  }
+
   /** "2 graines · 1 brindille", or null while the pile is empty. */
   function stockDetail() {
     if (!state.cache || state.cache.total === 0) return null;
@@ -151,6 +168,6 @@ export function createHarvest() {
 
   return {
     state, target, hold, release, canDrop, drop, cacheDistance,
-    stock, enough, stockDetail, inventoryLine, endFrame,
+    stock, enough, spend, stockDetail, inventoryLine, endFrame,
   };
 }

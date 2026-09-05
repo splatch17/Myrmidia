@@ -1,9 +1,10 @@
 import { collideRadius, PLAYER_AVATAR } from './avatar.js';
 import { nearestClimbable, tryInteract, climbPromptText, GRASS } from './climb.js';
-import { TREE } from '../world/index.js';
+import { TREE, MAX_BROOD } from '../world/index.js';
 import { createHarvest, FOUND_STOCK, CACHE_RADIUS } from './harvest.js';
 import { KIND_LABEL, nodesAreProvisional } from './resources.js';
 import { canFound, found, refusalText, isFounded, provisional as foundingProvisional, FOUND_SECONDS, nestOrigin, bearingWord } from './founding.js';
+import { canPonte, layEgg, broodCount, PONTE_SECONDS, PONTE_COST, PONTE_RADIUS } from './ponte.js';
 
 /* ==========================================================================
    One key, several verbs (#29/#33).
@@ -33,13 +34,14 @@ import { canFound, found, refusalText, isFounded, provisional as foundingProvisi
      5. a stem/trunk in reach -> E climbs
    ========================================================================== */
 
-const HOLD_KINDS = { harvest: true, found: true };
+const HOLD_KINDS = { harvest: true, found: true, ponte: true };
 
 export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   const harvest = createHarvest();
   const bodyR = collideRadius(profile);
 
   let foundProgress = 0;
+  let ponteProgress = 0;
   let lastMessage = null, messageTimer = 0;
 
   function say(text, seconds = 3.2) { lastMessage = text; messageTimer = seconds; }
@@ -68,6 +70,17 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
       return { kind: 'found', ok: verdict.ok, reason: verdict.reason, assumed: verdict.assumed };
     }
 
+    // Once founded, standing near the mouth outranks a stray node: the nest
+    // is what the player came back to, not one more seed (see ponte.js on
+    // why the gate sits at the mouth rather than the chamber).
+    if (isFounded()) {
+      const origin = nestOrigin();
+      if (origin && Math.hypot(origin.x - ant.x, origin.z - ant.z) <= PONTE_RADIUS * 1.5) {
+        const verdict = canPonte(ant, harvest.stock());
+        return { kind: 'ponte', ok: verdict.ok, reason: verdict.reason };
+      }
+    }
+
     const node = harvest.target(ant, bodyR);
     if (node) return { kind: 'harvest', node };
 
@@ -90,6 +103,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     // any rung that is not the hold it was on lets that hold decay
     if (act.kind !== 'harvest' || !held) harvest.release(dt);
     if (act.kind !== 'found' || !held || !act.ok) foundProgress = Math.max(0, foundProgress - dt / FOUND_SECONDS);
+    if (act.kind !== 'ponte' || !held || !act.ok) ponteProgress = Math.max(0, ponteProgress - dt / PONTE_SECONDS);
 
     switch (act.kind) {
       case 'harvest': {
@@ -111,6 +125,20 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
                 ? 'Colonie fondée ici. (le monde ne creuse pas encore la chambre)'
                 : 'Colonie fondée ici.')
               : `impossible : ${refusalText(res.reason)}`, 6);
+          }
+        }
+        break;
+      }
+      case 'ponte': {
+        if (held && act.ok) {
+          ponteProgress += dt / PONTE_SECONDS;
+          if (ponteProgress >= 1) {
+            ponteProgress = 0;
+            harvest.spend(PONTE_COST);
+            const res = layEgg();
+            say(res.ok
+              ? `Un œuf de plus — couvain ${res.laid}/${MAX_BROOD}.`
+              : 'La ponte ne prend pas.', 4);
           }
         }
         break;
@@ -155,6 +183,16 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
       if (foundProgress > 0) return `Creusement… ${pct(foundProgress)}`;
       return 'E (maintenir) — fonder la colonie ici';
     }
+    if (act.kind === 'ponte') {
+      if (!act.ok) {
+        if (act.reason === 'full') return 'Couvain au complet — il faut agrandir le nid';
+        if (act.reason === 'resources') return `Pondre : il manque des réserves (${PONTE_COST} nécessaires)`;
+        if (act.reason === 'far') return 'Pondre : revenir au nid';
+        return 'Pondre ici';
+      }
+      if (ponteProgress > 0) return `Ponte… ${pct(ponteProgress)}`;
+      return 'E (maintenir) — pondre un œuf';
+    }
     return null;
   }
 
@@ -164,8 +202,11 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
       const o = nestOrigin();
       const d = Math.hypot(o.x - ant.x, o.z - ant.z);
       const where = d < 12 ? 'ici' : `à ${d.toFixed(0)} u ${bearingWord(ant.x, ant.z, o.x, o.z)}`;
-      return `Colonie fondée ${where}. Suite : la ponte (pas encore implémentée).`
-        + (foundingProvisional() ? ' [chambre non creusée]' : '');
+      const brood = broodCount();
+      const objective = brood > 0
+        ? `Couvain : ${brood}/${MAX_BROOD}. Ramenez des réserves au nid ${where} pour pondre encore.`
+        : `Colonie fondée ${where}. Ramenez-y ${PONTE_COST} unités et maintenez E pour la première ponte.`;
+      return objective + (foundingProvisional() ? ' [chambre non creusée]' : '');
     }
     const missing = FOUND_STOCK - harvest.stock();
     if (harvest.state.carrying) {
@@ -187,6 +228,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   function holdProgress(act) {
     if (act.kind === 'harvest' && harvest.state.progress > 0) return harvest.state.progress;
     if (act.kind === 'found' && foundProgress > 0) return foundProgress;
+    if (act.kind === 'ponte' && ponteProgress > 0) return ponteProgress;
     return null;
   }
 
@@ -202,6 +244,10 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
       case 'found': {
         const c = harvest.state.cache;
         return c ? { x: c.x, z: c.z, radius: 11, blocked: !act.ok } : null;
+      }
+      case 'ponte': {
+        const o = nestOrigin();
+        return o ? { x: o.x, z: o.z, radius: PONTE_RADIUS, blocked: !act.ok } : null;
       }
       case 'drop': {
         const c = harvest.state.cache;
