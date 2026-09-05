@@ -2,6 +2,7 @@ import { groundY, RESOURCE_NODES, harvestNode, nestOrigin, digGallery, getGaller
 import { WORKER, DIGGER, profileById, strideOf, collideRadius } from './avatar.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
 import { dampAngle } from './mathUtil.js';
+import { paceTime } from '../core/pace.js';
 
 /* ==========================================================================
    The colony: eggs that hatch, and workers that forage.
@@ -194,7 +195,7 @@ export function createColony() {
     for (let i = state.eggs.length - 1; i >= 0; i--) {
       const e = state.eggs[i];
       e.age += dt;
-      if (e.age >= HATCH_SECONDS) {
+      if (e.age >= paceTime(HATCH_SECONDS)) {
         state.eggs.splice(i, 1);
         // she comes out of the nest mouth, not out of the ground beside it
         const a = Math.random() * Math.PI * 2;
@@ -216,8 +217,9 @@ export function createColony() {
        gallery opens exactly once: digGallery() is idempotent because a
        progress bar overshoots by definition. */
     if (!state.galleryOpen && state.digging > 0) {
-      state.dig = Math.min(DIG_SECONDS, state.dig + state.digging * dt);
-      if (state.dig >= DIG_SECONDS) {
+      const need = paceTime(DIG_SECONDS);
+      state.dig = Math.min(need, state.dig + state.digging * dt);
+      if (state.dig >= need) {
         const r = digGallery();
         if (r.ok) state.galleryOpen = true;
       }
@@ -230,7 +232,7 @@ export function createColony() {
   function digProgress() {
     if (state.galleryOpen) return null;
     if (!state.dig && !state.digging) return null;
-    return state.dig / DIG_SECONDS;
+    return state.dig / paceTime(DIG_SECONDS);
   }
 
   /** One line for the HUD, or null while there is nothing to say. */

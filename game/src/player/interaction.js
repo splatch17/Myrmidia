@@ -2,6 +2,7 @@ import { collideRadius, PLAYER_AVATAR } from './avatar.js';
 import { nearestClimbable, tryInteract, climbPromptText, GRASS } from './climb.js';
 import { TREE } from '../world/index.js';
 import { createHarvest, FOUND_STOCK, CACHE_RADIUS } from './harvest.js';
+import { paceCost } from '../core/pace.js';
 import { KIND_LABEL, nodesAreProvisional } from './resources.js';
 import { canFound, found, refusalText, isFounded, provisional as foundingProvisional, FOUND_SECONDS, nestOrigin, bearingWord } from './founding.js';
 import { createLaying } from './laying.js';
@@ -56,11 +57,15 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     return o ? Math.hypot(o.x - ant.x, o.z - ant.z) : Infinity;
   }
 
-  /** Can she go down and lay right now? The clutch costs what the founding
-   *  cost: five units on the pile, hauled the same way. */
+  /* What a clutch costs. The founding price, scaled by the test pace — the
+     number lives in harvest.js where it belongs and core/pace.js decides how
+     much of it is charged while we are debugging. */
+  function clutchCost() { return paceCost(FOUND_STOCK); }
+
+  /** Can she go down and lay right now? */
   function canLay(ant) {
     return isFounded() && !foundingProvisional() && laying.canLayMore()
-      && harvest.stock() >= FOUND_STOCK && mouthDistance(ant) <= MOUTH_RADIUS;
+      && harvest.stock() >= clutchCost() && mouthDistance(ant) <= MOUTH_RADIUS;
   }
 
   function say(text, seconds = 3.2) { lastMessage = text; messageTimer = seconds; }
@@ -154,7 +159,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
                  same five units a later clutch costs. Leaving it standing let
                  the queen lay a second clutch the moment she climbed back out
                  of the first, on food she had never gone back for. */
-              harvest.spend(FOUND_STOCK);
+              harvest.spend(clutchCost());
               laying.begin(ant);
             }
           }
@@ -166,7 +171,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
           layProgress += dt / LAY_SECONDS;
           if (layProgress >= 1) {
             layProgress = 0;
-            if (laying.begin(ant)) harvest.spend(FOUND_STOCK);
+            if (laying.begin(ant)) harvest.spend(clutchCost());
           }
         }
         break;
@@ -177,7 +182,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
           if (harvest.drop(ant)) {
             say(harvest.stock() === 1
               ? `dépôt ouvert ici — ${KIND_LABEL[kind]} posée`
-              : `${KIND_LABEL[kind]} ajoutée au dépôt (${harvest.stock()}/${FOUND_STOCK})`);
+              : `${KIND_LABEL[kind]} ajoutée au dépôt (${harvest.stock()}/${clutchCost()})`);
           }
         }
         break;
@@ -201,7 +206,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     if (act.kind === 'sequence') return laying.promptText();
     if (act.kind === 'lay') {
       if (layProgress > 0) return `Ponte… ${pct(layProgress)}`;
-      return `E (maintenir) — descendre pondre (${FOUND_STOCK} unités du dépôt)`;
+      return `E (maintenir) — descendre pondre (${clutchCost()} unité${clutchCost() > 1 ? 's' : ''} du dépôt)`;
     }
     if (act.kind === 'climb') return climbPromptText(ant, act.climbTarget);
     if (act.kind === 'return') return act.label;
@@ -230,13 +235,13 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
       const brood = laying.brood();
       if (brood === 0) return `Colonie fondée ${where}. Objectif : descendre pondre.${tail}`;
       if (!laying.canLayMore()) return `${brood} couvées — la chambre est pleine. Suite : les ouvrières.${tail}`;
-      const missing = FOUND_STOCK - harvest.stock();
+      const missing = clutchCost() - harvest.stock();
       if (missing > 0) {
         return `${brood} couvée${brood > 1 ? 's' : ''}. Objectif : ${missing} unité${missing > 1 ? 's' : ''} de plus pour la suivante.${tail}`;
       }
       return `${brood} couvée${brood > 1 ? 's' : ''}. Objectif : rentrer pondre — le nid est ${where}.${tail}`;
     }
-    const missing = FOUND_STOCK - harvest.stock();
+    const missing = clutchCost() - harvest.stock();
     if (harvest.state.carrying) {
       return harvest.state.cache
         ? `Objectif : rapporter au dépôt — encore ${missing} pour fonder`

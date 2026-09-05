@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { testPace, setTestPace } from './pace.js';
 
 /* ==========================================================================
    Graphics settings, live, with an FPS readout — asked for so the game can be
@@ -159,6 +160,7 @@ export function createQualityPanel({ renderer, sun, scene }) {
       ['2', 'Ombres', LEVELS.shadows[state.shadows].label],
       ['3', 'Herbe', LEVELS.grass[state.grass].label + ' (au prochain chargement)'],
       ['4', 'Textures', state.textures ? 'oui' : 'non'],
+      ['5', 'Cadence de test', testPace() ? 'ON — attentes /8, coûts /5' : 'off (cadence réelle)'],
     ];
     panel.innerHTML = '<div style="opacity:0.75;margin-bottom:3px">Graphismes — P pour fermer</div>'
       + rows.map(([k, name, val]) =>
@@ -210,6 +212,10 @@ export function createQualityPanel({ renderer, sun, scene }) {
       else if (code === 'Digit2') { cycle('shadows'); applyShadows(); }
       else if (code === 'Digit3') { cycle('grass'); applyGrass(); }
       else if (code === 'Digit4') { state.textures = !state.textures; applyTextures(); }
+      /* Digit5 is the caste key in play (player/input.js); it only means the
+         test pace while this panel is open, which is why the panel owns the
+         key and returns true to swallow it. */
+      else if (code === 'Digit5') { setTestPace(!testPace()); }
       else return false;
       render();
       save();

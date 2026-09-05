@@ -1,3 +1,4 @@
+import { paceCost } from '../core/pace.js';
 import { groundY } from '../world/index.js';
 import { nodeInReach, takeFromNode, countLabel, KIND_LABEL, resourceNodes } from './resources.js';
 
@@ -151,7 +152,10 @@ export function createHarvest() {
   function endFrame() { state.justTook = null; state.justDropped = null; }
 
   function stock() { return state.cache ? state.cache.total : 0; }
-  function enough() { return stock() >= FOUND_STOCK; }
+  /* Paced, so the founding threshold moves with the clutch price rather than
+   staying at five while everything around it collapses to one — a debug pace
+   that shortens the second wait and not the first is worse than none. */
+  function enough() { return stock() >= paceCost(FOUND_STOCK); }
 
   /** "2 graines · 1 brindille", or null while the pile is empty. */
   function stockDetail() {

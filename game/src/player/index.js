@@ -107,6 +107,24 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
      that lives without them — the moment the queen has a management panel
      (design/castes-et-micro-macro.md 2) this is the first row in it. */
   let caste = 'worker';
+
+  /* Castes are UNLOCKED, not offered from the start. The first clutch is
+     always foragers — she has nothing to dig with and nothing dug — and the
+     digger arrives with the second, which is the first moment the player has
+     a reason to want one and a colony that can afford it.
+
+     That is what makes the second laying worth walking back for: it is not
+     "the same thing again", it is the moment the roster grows. Before this,
+     both castes existed from the first frame and the choice was free, which
+     is the same as no choice. */
+  const CASTE_UNLOCK = { worker: 0, digger: 1 };   // clutches required
+  /* Kept here rather than pushed through interaction.say(): this is feedback
+     on a *player* keypress, and interaction.js's message queue belongs to
+     world events. Merged into the same HUD line below, with the player's own
+     action winning — the answer to a key you just pressed must not be
+     overwritten by something the colony did. */
+  let casteMsg = null, casteMsgTimer = 0;
+  function casteUnlocked(id) { return interaction.laying.brood() >= CASTE_UNLOCK[id]; }
   const crowd = createCrowd(scene, WORKER);
   const interaction = createInteraction({ profile });
   // Props (carried item, the pile, stand-in resource markers) are built here,
@@ -155,7 +173,18 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        frame() used). */
     if (input.consumeHelp()) hud.toggleControls();
     const pick = input.consumeCaste();
-    if (pick) { caste = pick; hud.setEventNow(`Prochaine ponte : ${pick === 'digger' ? 'creuseuses' : 'ouvrières'}`); }
+    if (pick) {
+      if (casteUnlocked(pick)) {
+        caste = pick;
+        casteMsg = `Prochaine ponte : ${pick === 'digger' ? 'creuseuses' : 'ouvrières'}`;
+      } else {
+        casteMsg = 'Creuseuses : à débloquer à la deuxième ponte';
+      }
+      casteMsgTimer = 3.5;
+    }
+    // a caste can be locked again by nothing, but the guard costs one line and
+    // stops a saved pick from outliving the rule that allowed it
+    if (!casteUnlocked(caste)) caste = 'worker';
     const act = interaction.update(ant, input.consumeInteract(), input.isInteractHeld(), dt);
 
     if (interaction.busy()) {
@@ -192,7 +221,8 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     hud.setObjective(interaction.objectiveText(ant));
     const colonyLine = colony.statusText();
     hud.setStock(colonyLine ? `${interaction.inventoryText()}  |  ${colonyLine}` : interaction.inventoryText());
-    hud.setEvent(interaction.message());
+    if (casteMsgTimer > 0) { casteMsgTimer -= dt; if (casteMsgTimer <= 0) casteMsg = null; }
+    hud.setEvent(casteMsg || interaction.message());
     hud.setHold(interaction.holdProgress(act));
     hud.setDig(colony.digProgress(), caste);
     /* The ring reads the same `act` the prompt does, so what is circled and
@@ -243,6 +273,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__colony = () => colony;
     window.__foundNest = (x, z) => found(x, z);
     window.__gallery = () => getGallery();
+    window.__caste = () => ({ caste, msg: casteMsg, unlocked: casteUnlocked('digger') });
     // the founding verdict + the sentence it produces, so the harness can
     // check the refusals for ground the queen would have to walk minutes to
     // reach (#33), and the waterline the movement clamp now follows (#4)
