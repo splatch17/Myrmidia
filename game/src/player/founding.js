@@ -27,6 +27,59 @@ const W = { ...world };
 
 export const FOUND_SECONDS = 4.0;   // held: digging the first chamber
 
+/* ==========================================================================
+   The ponte (design/boucle-de-jeu.md §2, round 9): the first thing the
+   colony does with the chamber it now has. populateNest(n) and MAX_BROOD
+   already existed in world/founding.js — nothing on this side had ever
+   called them, so the chamber stayed forever empty and the objective line
+   said "pas encore implémentée" no matter how the prologue ended.
+
+   Kept to the same shape as founding itself, deliberately: hold E near the
+   nest, pay from the same reserve that opened it (boucle-de-jeu.md §2 asks
+   that laying an egg cost stored resources rather than be free or timer-only,
+   "ça garde la récolte pertinente après la fondation"), reveal one more
+   clutch on success. Not modelled: incubation time, castes, workers actually
+   hatching — those need a creature to spawn and are their own round. This is
+   only the gesture that makes populateNest(n) advance past 0, which is also
+   the gesture design/ressources-et-fondation.md §7a needs to exist at all,
+   since main.js now waits for it before lighting the world up.
+   ========================================================================== */
+
+export const EGG_COST = 3;        // reserve units spent per clutch
+export const PONTE_SECONDS = 2.4; // held, laying one clutch
+export const PONTE_RADIUS = 16;   // how close to the nest counts as "at it" —
+                                  // same order as CACHE_RADIUS, since there is
+                                  // no verified walk-in collision for a
+                                  // run-time-dug chamber yet (PROGRESS.md
+                                  // defect 1: the founding moment itself has
+                                  // never been seen)
+
+/** How many clutches are laid right now (0 while nothing is founded). */
+export function broodCount() {
+  if (typeof W.getFoundedNest !== 'function') return 0;
+  const n = W.getFoundedNest();
+  return n ? n.brood : 0;
+}
+
+export function broodFull() {
+  const cap = typeof W.MAX_BROOD === 'number' ? W.MAX_BROOD : Infinity;
+  return broodCount() >= cap;
+}
+
+/** Close enough to the nest to lay an egg there. */
+export function ponteReach(x, z) {
+  const o = nestOrigin();
+  return !!o && Math.hypot(o.x - x, o.z - z) <= PONTE_RADIUS;
+}
+
+/** Reveal one more clutch. Does not touch the reserve itself — the caller
+ *  (interaction.js) debits harvest.spend(EGG_COST) first, so this function
+ *  stays pure world-plumbing the same way found()/canFound() do. */
+export function layEgg() {
+  if (typeof W.populateNest !== 'function') return broodCount();
+  return W.populateNest(broodCount() + 1);
+}
+
 /* The site reading's blocker keys are already 'soil'/'water'/'slope'/
    'underground'; the contract's are 'rock'/'water'/'slope'/'already-founded'.
    Both go through the same table so a phrase never depends on which side

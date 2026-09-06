@@ -133,6 +133,24 @@ export function createHarvest() {
   function stock() { return state.cache ? state.cache.total : 0; }
   function enough() { return stock() >= FOUND_STOCK; }
 
+  /** Debit `qty` from the reserve (founding.js's egg-laying gate), largest
+   *  kind first so a single species doesn't visually empty out while the
+   *  others still sit full on the pile. Returns how much was actually taken
+   *  (never more than what's there). */
+  function spend(qty) {
+    if (!state.cache) return 0;
+    let left = Math.min(qty, state.cache.total);
+    const taken = left;
+    while (left > 0) {
+      const [kind, n] = Object.entries(state.cache.items).sort((a, b) => b[1] - a[1])[0];
+      const take = Math.min(n, left);
+      state.cache.items[kind] -= take;
+      left -= take;
+    }
+    state.cache.total -= taken;
+    return taken;
+  }
+
   /** "2 graines · 1 brindille", or null while the pile is empty. */
   function stockDetail() {
     if (!state.cache || state.cache.total === 0) return null;
@@ -151,6 +169,6 @@ export function createHarvest() {
 
   return {
     state, target, hold, release, canDrop, drop, cacheDistance,
-    stock, enough, stockDetail, inventoryLine, endFrame,
+    stock, enough, spend, stockDetail, inventoryLine, endFrame,
   };
 }

@@ -17,7 +17,7 @@ import { shadeAt } from './shade.js';
 import { RESOURCE_NODES, harvestNode, nodesNear, buildResources } from './resources.js';
 import {
   initFounding, canFoundAt, foundNest, nestOrigin, getFoundedNest,
-  populateNest, sealNest, updateFounding,
+  populateNest, sealNest, updateFounding, MAX_BROOD,
 } from './founding.js';
 import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
 
@@ -68,6 +68,10 @@ import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './
 //                             populateNest(n) / sealNest() are the #12 half
 //                             (empty chamber that fills up) and are an
 //                             addition to the contract — see the report.
+//                             MAX_BROOD is the cap populateNest(n) clamps to;
+//                             exported so player/founding.js's egg-laying gate
+//                             (round 9, boucle-de-jeu.md §2) reads the same
+//                             number instead of a second copy of it.
 // RIG_PROLOGUE/RIG_FOUNDED/sunDir/foundedMix/setFoundedMix are the sky rig
 // main.js drives and shadeAt() reads, kept in one place so the light the
 // player is told about and the light drawn on screen cannot diverge.
@@ -81,7 +85,7 @@ export {
   MUSHROOMS, ROCKS, mushroomCollideR, applyNestShading, daylightAt, pitFactorAt,
   shadeAt,
   RESOURCE_NODES, harvestNode, nodesNear,
-  canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
+  canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest, MAX_BROOD,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
 

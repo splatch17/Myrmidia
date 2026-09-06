@@ -12,12 +12,12 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-03
+## État au 2026-09-06
 
-**Branche de travail :** `feature/threejs-migration`.
-**Pull request :** [#23](https://github.com/splatch17/Myrmidia/pull/23), ouverte
-contre `main`, mergeable. **Pas encore mergée** — le merge a été refusé par le
-classificateur d'auto-mode, il faut l'autoriser ou cliquer sur GitHub.
+**PR #23 mergée dans `main`** (`0f1a28a`, 2026-09-03) — la ligne « pas encore
+mergée » de la précédente version de ce fichier est obsolète, corrigée ici.
+Le tour 9 travaille directement sur `main` (branche jetable
+`auto/round-20260906-0701`).
 **Stack :** Three.js 0.169 + Vite 5, projet npm à la racine `game/`.
 **Lien de test :** voir le tableau du `README.md` (build `game/dist/`, servi
 par raw.githack depuis la branche).
@@ -63,8 +63,13 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 - Pas de mode macro (le nid en coupe, vue de côté).
 - Pas de post-process (bloom, contours).
-- Pas de repop des ressources, pas d'ouvrières, pas de ponte.
-- La bascule visuelle prologue → colonie fondée est câblée mais **jamais vue**.
+- Pas de repop des ressources, pas d'ouvrières. **La ponte existe désormais
+  comme geste** (tour 9, voir plus bas) mais rien ne pond de vraie ouvrière —
+  `populateNest(n)` ne fait que révéler des meubles déjà creusés, il n'y a
+  toujours aucune créature qui éclot.
+- La bascule visuelle prologue → colonie fondée est câblée **et le point de
+  déclenchement a changé de place ce tour** (première ponte, plus le premier
+  coup de pelle) mais elle reste, comme avant, **jamais vue** — voir défaut 1.
 
 ---
 
@@ -72,7 +77,7 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 | # | Défaut | Gravité |
 |---|---|---|
-| 1 | **La fondation n'a jamais été vue.** Les captures s'arrêtent à « Réserve : 3/5 ». Le code est là et compile, le moment ne l'est pas | **Bloquant** |
+| 1 | **La fondation n'a jamais été vue, et maintenant la ponte non plus.** Les captures s'arrêtent à « Réserve : 3/5 ». Le code est là et compile — creuser, pondre, et la bascule crépuscule→jour qui s'ensuit — mais aucun des trois moments n'a été vu tourner. **Vérification visuelle due** : fonder, tenir E près du nid pour pondre un œuf (coût 3, `EGG_COST` dans `player/founding.js`), regarder si `foundedMix` démarre à ce moment-là et pas avant, regarder si le halo/l'anneau de ponte (miel = possible, rouge = refusé) se comporte comme celui de la fondation | **Bloquant** |
 | 2 | La bouche de l'ancien tunnel montre le ciel au travers quand le nid est réactivé : le tube élargi a son plafond à y=24, la couture de `terrain.js` a été taillée pour y=11 | Bloque la réactivation |
 | 3 | La reine reste sombre de corps. Le contour la détache mais sa chitine est à la même valeur que le sol | DA |
 | 4 | Le tramage de dissolution proche caméra est très visible sur les brins traversés | Petit mais voyant |
@@ -83,18 +88,23 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 ## Prochaines étapes
 
-1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
-   capturer le moment. Tant qu'il n'est pas vu, il n'est pas livré.
-2. **#6 — la ponte**, et la bascule crépuscule → jour **à la première ponte,
-   pas au premier coup de pelle** (`design/ressources-et-fondation.md`).
-   `populateNest()` et `setFoundedMix()` existent, il n'y a qu'à s'en servir.
-3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
+1. **Voir la fondation ET la ponte** (défaut 1, élargi ce tour). Rejouer la
+   boucle de bout en bout : creuser, harvester à nouveau jusqu'à 3 unités de
+   réserve, tenir E près du nid pour pondre. Capturer le moment où
+   `foundedMix` démarre — il doit démarrer à la ponte, pas au coup de pelle.
+   Tant qu'aucun des deux n'est vu, ni l'un ni l'autre n'est livré.
+   **Ce round (9) a câblé la mécanique** (voir plus bas) mais n'a pu la voir
+   tourner (contrainte serveur : pas de GPU, `verify-*.mjs` interdits).
+2. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
    petit nid mort à trouver : entrée effondrée avec du relief, champignons
    toujours luminescents (le champignon survit à la colonie). Corrige aussi le
    défaut 2 au passage, puisque la bouche devient un éboulis et non un trou.
-4. **Lisibilité de la reine** (défaut 3) — mesurer, puis chiffrer.
-5. Bloom sélectif (défaut 8), points 4-7 de la spec des brins (défaut 7).
-6. **#34 — mode macro**, le nid en coupe vue de côté.
+3. **Lisibilité de la reine** (défaut 3) — mesurer, puis chiffrer.
+4. Bloom sélectif (défaut 8), points 4-7 de la spec des brins (défaut 7).
+5. **#34 — mode macro**, le nid en coupe vue de côté.
+6. Une fois la ponte vue et jugée juste : la faire réellement **éclore** une
+   ouvrière (créature, pas juste une pile qui s'allume) — c'est la suite
+   logique de `design/boucle-de-jeu.md` §2 que ce tour n'a pas touchée.
 
 ## Où sont les choses
 
@@ -182,6 +192,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 9 | La ponte câblée (round nocturne sans GPU, non vérifiée à l'image — voir défaut 1 et §"Ce qui reste dû") : `populateNest()`/`MAX_BROOD` exportés du monde, geste "tenir E près du nid" côté joueur (`EGG_COST`, `PONTE_SECONDS`, `PONTE_RADIUS` dans `player/founding.js`), `harvest.spend()`, et la bascule crépuscule→jour déplacée du coup de pelle à la première couvée dans `main.js` (`ressources-et-fondation.md` §7a). Contrat documenté dans l'addition round 9 de §4 d'`api-monde-gameplay.md` | commit à suivre |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
 | 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |
 | 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |

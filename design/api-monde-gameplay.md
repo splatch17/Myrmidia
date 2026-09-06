@@ -121,6 +121,27 @@ coordonnées : `foundNest()` appelle `canFoundAt()`, il ne redécide pas.
 `'already-founded'`), pas une phrase pour le joueur. La phrase est du ressort
 de `player/**`, comme pour `soilAt`.
 
+**Addition round 9 — la ponte (`design/boucle-de-jeu.md` §2) :**
+
+```
+populateNest(n)   -> number   // combien de couvées sont désormais visibles
+                               // (clampé à MAX_BROOD), et allume leur lampe
+getFoundedNest()  -> { ..., brood: number } | null
+MAX_BROOD         -> number   // capacité du couvoir tant qu'il n'est pas
+                               // agrandi
+```
+
+`populateNest()` ne fait que révéler des meubles déjà creusés avec la
+chambre — la coquille n'est jamais reconstruite (#12). C'est `player/**` qui
+décide *quand* l'appeler ; le monde ne sait pas ce qu'est un œuf, seulement
+combien de couvées sont là.
+
+`design/ressources-et-fondation.md` §7a fixe le point de déclenchement de la
+bascule crépuscule → jour : **la première couvée**, pas le premier coup de
+pelle. Concrètement, `main.js` n'anime `setFoundedMix()` qu'à partir du
+premier appel de `populateNest(n ≥ 1)` — `foundNest()` seul ne déclenche
+plus rien.
+
 ---
 
 ## 5. Ce que `player/**` livre en face (round 6)

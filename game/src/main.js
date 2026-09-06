@@ -213,14 +213,26 @@ function nestness(cam, ant) {
   return Math.max(tube, pit);
 }
 
-/* 0 = prologue, 1 = founded, animated once over FOUND_FADE seconds when the
-   nest appears. Read from the world rather than set by a gameplay call, so
-   this file keeps not knowing who founded or why. */
+/* 0 = prologue, 1 = founded, animated once over FOUND_FADE seconds. Read from
+   the world rather than set by a gameplay call, so this file keeps not
+   knowing who founded or why.
+
+   Fires on the first clutch laid (nest.brood > 0), not on foundNest() itself
+   — design/ressources-et-fondation.md §7a: lighting the world while she is
+   still digging rewards the excavation; lighting it while she is sealed in
+   the dark with her first egg means the player surfaces into a map that
+   changed without them watching, discovering it at the same moment they see
+   the mouth's warm lamp from outside for the first time. foundNest() only
+   opens the sequence; populateNest(n>=1) — wired from player/founding.js's
+   egg-laying gesture — is what starts the clock. */
 const FOUND_FADE = 6.0;
 let foundedAt = null;
 function advanceFoundedMix() {
   const now = performance.now() / 1000;
-  if (foundedAt === null && nestOrigin()) foundedAt = now;
+  if (foundedAt === null) {
+    const n = getFoundedNest();
+    if (n && n.brood > 0) foundedAt = now;
+  }
   if (foundedAt !== null) setFoundedMix(clamp((now - foundedAt) / FOUND_FADE, 0, 1));
 }
 
