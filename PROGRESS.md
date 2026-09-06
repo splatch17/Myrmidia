@@ -12,12 +12,12 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-03
+## État au 2026-09-06
 
-**Branche de travail :** `feature/threejs-migration`.
-**Pull request :** [#23](https://github.com/splatch17/Myrmidia/pull/23), ouverte
-contre `main`, mergeable. **Pas encore mergée** — le merge a été refusé par le
-classificateur d'auto-mode, il faut l'autoriser ou cliquer sur GitHub.
+**Branche de travail :** `main` (mise à jour depuis le round 9 — voir plus bas).
+**Pull request :** [#23](https://github.com/splatch17/Myrmidia/pull/23) a été
+**mergée** dans `main` (`0f1a28a`). `feature/threejs-migration` n'est plus la
+branche de travail active.
 **Stack :** Three.js 0.169 + Vite 5, projet npm à la racine `game/`.
 **Lien de test :** voir le tableau du `README.md` (build `game/dist/`, servi
 par raw.githack depuis la branche).
@@ -81,6 +81,68 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 | 7 | Points 4 à 7 de `design/herbe-brins.md` non câblés | Reste à faire |
 | 8 | Pas de bloom sur les émissifs — 3e volet de #28 | Reste à faire |
 
+### Défaut 3, mesuré (round 9)
+
+Aucun rendu n'a tourné cette nuit (VPS ARM sans GPU, voir contrainte en tête
+de round) : ce qui suit est calculé sur les valeurs de couleur réelles du
+code, pas jugé à l'œil. Méthode : luminance relative WCAG (sRGB linéarisé,
+`0.2126 R + 0.7152 G + 0.0722 B`) puis ratio de contraste `(L_clair+0.05) /
+(L_sombre+0.05)` entre chaque couleur de chitine et chaque sol qu'elle
+traverse.
+
+Couleurs de chitine (`player/avatar.js`) : reine `chitinA #b07226` (thorax/
+tête), `chitinB/limb #5e3d16` (gaster/pattes) ; ouvrière `chitinA #8b5a24`,
+`chitinB #432d15`. Sols traversés : pelouse `world/terrain.js`
+(`C_SOIL_A #86673B`, `C_SOIL_B #5A4529`, `C_MOSS_A #5F8034`,
+`C_MOSS_B #9DBE58`), parois du souterrain `world/underground.js`
+(`C_WALL_A #5a4226`, `C_WALL_B #332412`).
+
+**Résultat : le pire contraste mesuré par couleur de chitine est 1,04 à 1,16**
+(reine chitinB contre la paroi claire, ouvrière chitinA contre le sol clair,
+etc. — jamais mieux que 2,3 dans le meilleur cas). Un contraste perceptible
+commence en général autour de 3:1 ; on en est loin partout, ce qui confirme
+le défaut au chiffre, pas seulement à l'œil.
+
+**Pourquoi une teinte plate ne peut pas suffire :** les sols vont de
+`L≈0,03` (paroi sombre) à `L≈0,45` (mousse claire). Pour un contraste ≥3
+contre la paroi la plus sombre il faut `L_chitine ≥ 0,19` ; pour ≥3 contre la
+mousse la plus claire il faut `L_chitine ≤ 0,12`. Les deux contraintes sont
+incompatibles — **aucune couleur unique et plate ne peut se détacher des deux
+extrêmes du décor à la fois.** Éclaircir ou assombrir la teinte actuelle
+échoue nécessairement contre l'un des deux bouts (vérifié : pousser la reine
+vers le blanc plafonne à un contraste de 2,1, toujours sous la cible). Ce
+n'est donc pas un réglage de teinte qui manque, c'est une **variation de
+valeur sur le corps lui-même** — texture et/ou éclairage local — que le
+contour seul ne fournit pas.
+
+**Découverte en creusant ce point : la texture `chitin` existe déjà et n'est
+jamais branchée.** `game/src/assets/textures/chitin/chitin_albedo.png` est
+généré par `scripts/generate-procedural-textures.mjs` (chitin v2,
+`design/ambiance-prologue.md` §5b) et `design/charte-stylisation.md` §4 la
+liste comme « livrée » dès le round 4. Mais `world/texturing.js` n'exporte
+que `dirtAlbedo/barkAlbedo/lawnAlbedo/stoneAlbedo/capAlbedo` — pas de
+`chitinAlbedo()` — et `player/antMesh.js:33-40` construit chaque pièce du
+corps avec un `THREE.MeshStandardMaterial({ color })` plat, jamais avec
+`texturedSurfaceMaterial()`. L'asset dort depuis cinq tours.
+
+Câbler ce n'est pas un simple remplacement de matériau :
+`texturedSurfaceMaterial()` exige `vertexColors: true` et la texture n'ajoute
+que sa *variation* — la couleur moyenne reste portée par la couleur sommet
+(commentaire de `texturing.js`, confirmé par `charte-stylisation.md` §4.
+Les géométries partagées d'`antMesh.js` (une sphère, un cylindre, réutilisées
+pour toutes les pièces) n'ont aujourd'hui aucun attribut couleur : il faudra
+peindre `chitinA`/`chitinB` en couleur sommet par pièce avant que le
+triplanaire ait quoi que ce soit à moduler. Densité à reprendre du tableau
+§7.5 de la charte (`chitin` → 4, motif ~0,8 unité contre un corps de 6-7
+unités).
+
+**Ce round n'a pas câblé cette texture** : `ambiance-prologue.md` liste déjà
+en attente « chitin v2 sur la fourmi en gros plan : la ponctuation doit se
+voir sans que la fourmi ne devienne granuleuse » — un jugement qui ne se
+fait qu'à l'image. **La vérification visuelle reste entièrement due** sur ce
+point ; ce qui précède ne fait que chiffrer le problème et localiser où est
+le morceau manquant.
+
 ## Prochaines étapes
 
 1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
@@ -92,7 +154,13 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
    petit nid mort à trouver : entrée effondrée avec du relief, champignons
    toujours luminescents (le champignon survit à la colonie). Corrige aussi le
    défaut 2 au passage, puisque la bouche devient un éboulis et non un trou.
-4. **Lisibilité de la reine** (défaut 3) — mesurer, puis chiffrer.
+4. **Lisibilité de la reine** (défaut 3) — **mesuré au round 9** (voir
+   ci-dessus) : contraste 1,0-2,3 partout, une teinte plate ne peut pas
+   dépasser 2,1 contre les deux bouts du décor. Reste à faire : exporter
+   `chitinAlbedo()` dans `texturing.js` (sur le modèle de `dirtAlbedo()`),
+   peindre `chitinA`/`chitinB` en couleur sommet sur les géométries
+   d'`antMesh.js`, appliquer `texturedSurfaceMaterial()`, `worldPerTile ≈ 4`
+   — puis **juger sur capture** (le round de ce soir ne pouvait pas).
 5. Bloom sélectif (défaut 8), points 4-7 de la spec des brins (défaut 7).
 6. **#34 — mode macro**, le nid en coupe vue de côté.
 
@@ -182,6 +250,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 9 | PR #23 mergée dans `main`. Pas de rendu possible (VPS ARM sans GPU) : lisibilité de la reine (défaut 3) chiffrée — contraste réel mesuré (1,0-2,3 partout, plafond à 2,1 même en poussant vers le blanc) et cause identifiée (texture `chitin` générée depuis le round 4, jamais branchée dans `texturing.js`/`antMesh.js`). Aucun code moteur touché | — (mise à jour de `PROGRESS.md` seule) |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
 | 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |
 | 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |
