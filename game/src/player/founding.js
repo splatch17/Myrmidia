@@ -34,9 +34,8 @@ export const FOUND_SECONDS = 4.0;   // held: digging the first chamber
 
    'bounds' and 'occupied' are world/founding.js's two additions to the
    contract's list (the edge of the map, and the ground the pre-#11 gallery
-   already runs under). Phrased here like every other reason; flagged to the
-   integration so the contract's list catches up — not renamed on this side,
-   which is exactly the drift the contract exists to prevent. */
+   already runs under). Phrased here like every other reason; the contract's
+   list has since caught up (design/api-monde-gameplay.md §4). */
 const REASON_TEXT = {
   rock: 'la roche ne se creuse pas',
   soil: 'ce sol ne se creuse pas',

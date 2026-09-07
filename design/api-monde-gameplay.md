@@ -117,9 +117,38 @@ et son puits d'accès. Le nid actuel construit au démarrage devient l'état
 en continu. Les deux doivent donner le **même verdict** pour les mêmes
 coordonnées : `foundNest()` appelle `canFoundAt()`, il ne redécide pas.
 
-`reason` est une chaîne technique stable (`'rock'`, `'water'`, `'slope'`,
-`'already-founded'`), pas une phrase pour le joueur. La phrase est du ressort
-de `player/**`, comme pour `soilAt`.
+`reason` est une chaîne technique stable — `'rock'`, `'water'`, `'slope'`,
+`'already-founded'`, `'underground'`, `'bounds'` (bord de la carte jouable),
+`'occupied'` (le sol au-dessus de la galerie du nid pré-construit, cf. §0 —
+zone réservée tant que ce nid n'est pas remis en jeu) — pas une phrase pour le
+joueur. La phrase est du ressort de `player/**`, comme pour `soilAt`.
+`player/founding.js` maintient sa propre table `REASON_TEXT` ; toute chaîne
+technique ajoutée côté monde doit être ajoutée ici *et* là.
+
+### 4bis. Peuplement du nid fondé (round 7, livré mais pas encore consommé)
+
+```
+getFoundedNest()    -> { x, z, mouth: {x,y,z,r}, chamber: {x,y,z,ceilY,r},
+                         floorY, axis, brood: number, sealed: boolean } | null
+populateNest(n)     -> number   // révèle n couvées (0..MAX_BROOD=6), pose la
+                                 // lampe chaude de chacune ; à partir de 4,
+                                 // révèle aussi la première perle lumineuse.
+                                 // Idempotent, ne reconstruit jamais la coque.
+sealNest(sealed=true) -> void   // ferme/rouvre le puits : la lumière froide du
+                                 // jour s'éteint sur ~3 s (updateFounding()).
+```
+
+`updateFounding(dt)` (appelé une fois par frame par l'intégration, pas par
+`player/**` directement) anime ce fondu ; rien d'autre ici n'est du temps réel.
+
+Personne côté `player/**` n'appelle encore `populateNest`/`sealNest` — la
+ponte elle-même n'est pas implémentée (`player/interaction.js` répond
+« pas encore implémentée »). Quand elle le sera, `design/ressources-et-
+fondation.md` §7a fixe la règle : **c'est le premier appel à `populateNest(1)`
+qui doit déclencher la bascule `founded` (0→1 sur `FOUND_FADE`), pas
+`foundNest()`.** Aujourd'hui `main.js` bascule au moment du creusement
+(`foundedAt` posé dès que `nestOrigin()` répond), ce qui est le mauvais
+déclencheur et attend ce câblage pour être corrigé.
 
 ---
 

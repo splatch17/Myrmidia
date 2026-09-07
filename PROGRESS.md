@@ -81,6 +81,29 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 | 7 | Points 4 à 7 de `design/herbe-brins.md` non câblés | Reste à faire |
 | 8 | Pas de bloom sur les émissifs — 3e volet de #28 | Reste à faire |
 
+## Tour 9 (2026-09-07, nocturne, sans rendu)
+
+Ce serveur est un VPS ARM sans GPU (Chromium y retombe sur SwiftShader) : ce
+tour ne pouvait pas juger un rendu à l'oeil, donc aucun des points ci-dessous
+n'a été touché — ils exigent tous une capture. Fait à la place : **le
+contrat `design/api-monde-gameplay.md` §4 était en retard sur
+`world/founding.js`**, découvert en lisant `player/founding.js` qui le
+signalait déjà lui-même dans un commentaire (« flagged to the integration »).
+Ajouté : les raisons `'underground'`/`'bounds'`/`'occupied'` que
+`canFoundAt()` renvoie déjà et que le contrat ne listait pas encore, et un
+§4bis documentant `getFoundedNest()`/`populateNest()`/`sealNest()`/
+`updateFounding()` (livrés au tour 7, jamais consommés côté `player/**`) —
+avec la règle de déclenchement de `design/ressources-et-fondation.md` §7a
+(`foundedAt` doit basculer à la première `populateNest(1)`, pas à
+`foundNest()`) écrite noir sur blanc à l'endroit où l'agent qui câblera la
+ponte ira la lire. Petit commentaire corrigé dans `player/founding.js` en
+conséquence (il ne signale plus un retard qui vient d'être comblé).
+
+**Rien de graphique n'a changé** — deux fichiers texte, aucune ligne de
+shader ni de géométrie touchée. `npx vite build` passe. Pas de vérification
+visuelle due sur ce tour ; celle qui est due sur tout le reste (liste
+ci-dessous) l'était déjà avant ce tour et le reste.
+
 ## Prochaines étapes
 
 1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
@@ -182,6 +205,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 9 | Contrat `design/api-monde-gameplay.md` §4 remis à niveau avec `world/founding.js` (rien de graphique touché) | commit du tour, voir `git log` |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
 | 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |
 | 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |
