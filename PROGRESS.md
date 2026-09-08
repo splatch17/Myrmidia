@@ -12,12 +12,11 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-03
+## État au 2026-09-08
 
-**Branche de travail :** `feature/threejs-migration`.
-**Pull request :** [#23](https://github.com/splatch17/Myrmidia/pull/23), ouverte
-contre `main`, mergeable. **Pas encore mergée** — le merge a été refusé par le
-classificateur d'auto-mode, il faut l'autoriser ou cliquer sur GitHub.
+**PR [#23](https://github.com/splatch17/Myrmidia/pull/23) mergée dans `main`**
+le 2026-09-03 (commit `0f1a28a`). Les rounds tournent maintenant sur des
+branches `auto/round-*` coupées de `main`, plus sur `feature/threejs-migration`.
 **Stack :** Three.js 0.169 + Vite 5, projet npm à la racine `game/`.
 **Lien de test :** voir le tableau du `README.md` (build `game/dist/`, servi
 par raw.githack depuis la branche).
@@ -74,10 +73,10 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 |---|---|---|
 | 1 | **La fondation n'a jamais été vue.** Les captures s'arrêtent à « Réserve : 3/5 ». Le code est là et compile, le moment ne l'est pas | **Bloquant** |
 | 2 | La bouche de l'ancien tunnel montre le ciel au travers quand le nid est réactivé : le tube élargi a son plafond à y=24, la couture de `terrain.js` a été taillée pour y=11 | Bloque la réactivation |
-| 3 | La reine reste sombre de corps. Le contour la détache mais sa chitine est à la même valeur que le sol | DA |
+| 3 | **Corrigé ce round, pas encore vu.** La chitine de `WORKER` et `FOUNDING_QUEEN` (`player/avatar.js`) a été remontée à l'ancrage palette `#E0A752` (luminance 173) : les deux profils avaient dérivé sous cette valeur (96 et 122) et tombaient dans la bande de luminance du sol/mousse (67-200, `world/texturing.js`), d'où « chitine à la même valeur que le sol ». Chiffré depuis le code (mêmes poids Rec.709 que `chromaKeep()` du générateur de textures), **pas depuis une capture** — à confirmer à l'œil dès que possible | À voir |
 | 4 | Le tramage de dissolution proche caméra est très visible sur les brins traversés | Petit mais voyant |
 | 5 | `RIG_PROLOGUE` a été retouché quatre fois à l'intégration. Chaque valeur est annotée contre celle de `ambiance-prologue.md`. **La DA n'a jamais arbitré** | À arbitrer |
-| 6 | Rayons de grimpe et de collision des tiges divisés par ~2,1 avec l'affinement des brins. Jamais jugé sur capture | À vérifier |
+| 6 | ~~Rayons de grimpe et de collision des tiges divisés par ~2,1~~ — **vérifié ce round, ce n'est pas un bug.** `grassCollideR = g.w * 0.75` lit `g.w` (`world/blade.js` `bladeBaseWidth`), qui a déjà été recalé sur la reine par `07c9b61` (2026-09-03). Le rayon suit donc automatiquement la largeur corrigée ; rien n'est resté calibré sur l'ouvrière. Ce qui reste ouvert est un jugement de *feel* sur capture (la reine traverse-t-elle des tiges qu'elle bousculait ?), pas une correction de valeur | À juger sur capture (pas un défaut) |
 | 7 | Points 4 à 7 de `design/herbe-brins.md` non câblés | Reste à faire |
 | 8 | Pas de bloom sur les émissifs — 3e volet de #28 | Reste à faire |
 
@@ -85,14 +84,18 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
    capturer le moment. Tant qu'il n'est pas vu, il n'est pas livré.
-2. **#6 — la ponte**, et la bascule crépuscule → jour **à la première ponte,
+2. **Confirmer à l'œil la correction de chitine** (défaut 3, ce round) —
+   capturer la reine dehors et vérifier qu'elle se détache réellement de la
+   pelouse, pas seulement sur le papier. Si ça ne suffit pas, le prochain
+   levier est `chitinB` (le côté gastre/pétiole, resté sur son ratio d'origine)
+   ou le contraste de teinte plutôt que de valeur.
+3. **#6 — la ponte**, et la bascule crépuscule → jour **à la première ponte,
    pas au premier coup de pelle** (`design/ressources-et-fondation.md`).
    `populateNest()` et `setFoundedMix()` existent, il n'y a qu'à s'en servir.
-3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
+4. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
    petit nid mort à trouver : entrée effondrée avec du relief, champignons
    toujours luminescents (le champignon survit à la colonie). Corrige aussi le
    défaut 2 au passage, puisque la bouche devient un éboulis et non un trou.
-4. **Lisibilité de la reine** (défaut 3) — mesurer, puis chiffrer.
 5. Bloom sélectif (défaut 8), points 4-7 de la spec des brins (défaut 7).
 6. **#34 — mode macro**, le nid en coupe vue de côté.
 
@@ -182,6 +185,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 9 | Chitine de la reine/ouvrière remontée à l'ancrage palette (défaut 3, chiffré depuis le code) ; défaut 6 (rayon de collision des tiges) vérifié — pas un bug ; commentaire obsolète de `decorCollision.js` corrigé | *(pas encore commité)* |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
 | 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |
 | 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |

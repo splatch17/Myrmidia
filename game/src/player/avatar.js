@@ -86,7 +86,16 @@ export const WORKER = {
   legs: WORKER_LEGS,
   body: WORKER_BODY,
   breathes: false,
-  colors: { chitinA: 0x8b5a24, chitinB: 0x432d15, limb: 0x6b4420, mandible: 0xc9903f, eye: 0x100c06 },
+  // chitinA is the palette's own '#E0A752' anchor (README / charte-stylisation.md
+  // §"Ancrage palette" / generate-procedural-textures.mjs PAL.chitine) — the
+  // previous 0x8b5a24 was never derived from it (luminance 96 against the
+  // anchor's 173, by the Rec.709 weights charte-stylisation.md's own
+  // chromaKeep() uses) and landed inside the lawn's own soil/moss luminance
+  // band (67-200, see world/texturing.js's SOIL_*/MOSS_* triads), which is
+  // PROGRESS.md defect 3: chitin reads at the same value as the ground under
+  // it. chitinB keeps chitinA's original darkening ratio (~0.48-0.58 per
+  // channel), not a new one. Not yet judged on a capture.
+  colors: { chitinA: 0xe0a752, chitinB: 0x6c5430, limb: 0x6b4420, mandible: 0xc9903f, eye: 0x100c06 },
   // locomotion, in world units — the old prototype's frame() literals
   maxSpeed: 15,
   sprint: 1.75,
@@ -107,7 +116,12 @@ export const FOUNDING_QUEEN = {
   legs: QUEEN_LEGS,
   body: QUEEN_BODY,
   breathes: true,
-  colors: { chitinA: 0xb07226, chitinB: 0x5e3d16, limb: 0x5e3d16, mandible: 0xb07226, eye: 0x100c06 },
+  // Same palette-anchor correction as WORKER above (chitinA was 0xb07226,
+  // luminance 122 — still short of the anchor's 173 and still inside the
+  // lawn's own value range). mandible tracked chitinA exactly before this
+  // change, so it still does. chitinB keeps its own original ratio to
+  // chitinA (~0.53-0.58 per channel).
+  colors: { chitinA: 0xe0a752, chitinB: 0x785930, limb: 0x5e3d16, mandible: 0xe0a752, eye: 0x100c06 },
   // She is more than twice a worker's size and still slower in absolute
   // terms: ~0.4 body-lengths a second against the worker's ~1.15, and a turn
   // rate less than half as sharp, so she pivots like something that weighs

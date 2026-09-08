@@ -28,7 +28,8 @@ import { PLAYER_AVATAR, collideRadius } from './avatar.js';
 // pushes aside (world/grass.js).
 // The radius stays comfortably under climb.js's CLIMB_RADIUS (4.5): a blade
 // you cannot get within grabbing distance of is a blade you can never climb,
-// and w peaks around 4.5 for the tallest blades.
+// and w (half-width, blade.js's bladeBaseWidth) peaks around 2.2 for the
+// tallest blades since design/herbe-brins.md §2 narrowed them.
 function grassCollideR(g) { return g.w * 0.75; }
 
 // One trunk-sized cylinder, sampled from the same taper the climb uses, at
