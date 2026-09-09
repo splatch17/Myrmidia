@@ -194,3 +194,79 @@ Rien de neuf côté monde. Le contrôleur cesse de supposer « dehors » :
 Une capture de la reine **dans la galerie**, arrivée en marchant, pilotée par
 le vrai pipeline d'entrée. Et une autre d'elle ressortie. Ni l'une ni l'autre
 ne compte si la position a été écrite dans l'état.
+
+---
+
+## 7. Creuser : salles, liaisons, fronts de taille — round 16 (#48, #51, #52)
+
+Écrit **avant** l'implémentation, comme les six sections précédentes, et pour
+la même raison : les deux moitiés touchent la même fonction. Le round 15 a
+montré ce que coûte l'inverse — un prédicat côté joueur calibré contre un
+`groundY()` que le monde avait changé sous lui, et une paroi qui devenait une
+porte sans que rien ne lève d'erreur.
+
+### Ce qui change de forme
+
+La « première galerie » du round 13 était un cas particulier : un tube unique,
+codé en dur, avec ses propres tests d'appartenance. Le porteur demande une
+**salle** au bout du premier creusement, puis d'autres tunnels creusés depuis
+elle. Un deuxième cas particulier serait le troisième fichier à dire où est le
+sol, donc l'excavation devient une **liste**, dès maintenant :
+
+```
+rooms : [{ id, x, z, r, wall, roof }]     salle 0 = la chambre de fondation
+links : [{ id, ax, az, bx, bz, hw, roof }]  couloir droit entre deux salles
+faces : [{ id, x, z, y, nx, nz, needed, worked, opens }]
+```
+
+`chamber` reste exposé comme alias de `rooms[0]` : c'est ce que lisent déjà
+`nest.js`, la caméra et les harnais, et le contrat n'a pas à se casser pour un
+refactor interne.
+
+### Ce que `world/**` livre
+
+```
+nestFootprint()   -> { contains(x,z), floorY(x,z), headroom(x,z) } | null
+                     (§6, inchangé — il couvre maintenant les salles et les
+                      liaisons de la liste, ce qui ne change pas sa signature)
+digFaces()        -> [{ id, x, y, z, nx, nz, needed, worked, opens }]
+                     les fronts de taille ouverts. `nx, nz` = la normale
+                     horizontale sortant de la paroi, pour qu'un appelant sache
+                     de quel côté se tenir sans re-dériver la géométrie.
+advanceDigFace(id, antSeconds) -> { worked, needed, done, opened }
+                     avance UN front. `done` la première fois seulement ;
+                     idempotent au-delà, parce que l'appelant est une jauge et
+                     les jauges dépassent.
+```
+
+**Règle : `player/**` ne creuse pas.** Il compte des fourmis-secondes et les
+verse dans `advanceDigFace()`. Où la salle apparaît, quelle forme elle a et ce
+qu'elle ouvre ensuite sont des décisions du monde. C'est la même direction de
+dépendance que §4 (`foundNest`) et pour la même raison : un harnais doit
+pouvoir creuser tout le nid sans qu'aucune fourmi existe.
+
+### Ce que `player/**` livre en face
+
+- Les fouisseuses (`digger`, cf. #50) vont au front de taille **ouvert le plus
+  proche**, pas à la bouche du nid. `stepDigger()` cesse de viser
+  `nestOrigin()`.
+- Le HUD dessine la jauge **à la position du front**, projetée à l'écran. Elle
+  n'existe que tant qu'`advanceDigFace` progresse.
+- L'état reste sérialisable : un front est un identifiant et des nombres.
+
+### Contrainte de conception, arbitrée
+
+**On arrive en bas vite.** Le porteur : *« on peut au départ arriver simplement
+en bas devant de la terre à creuser »*. La descente reste marchable — c'est
+l'acquis du round 15 — mais elle est courte, et **le premier front de taille
+est en vue depuis le pied de la rampe**. Une entrée qui se négocie n'est pas
+une entrée.
+
+**Les parois glissent.** Aucune surface du jeu n'arrête net sauf le nid ; c'est
+un défaut, pas une règle (#49).
+
+### Critère de fin commun
+
+Une capture de la jauge circulaire en cours au front de taille, et une du
+**hall ouvert** avec la reine dedans, arrivée à pied. Plus un harnais qui longe
+les parois — pas la ligne centrale — et ressort quand même.
