@@ -18,84 +18,62 @@
 > **« ok il faut pouvoir voir la galerie et y entrer. Assigne des tickets aux
 > agents nécessaires à ça. »**
 
-### Ce que ça veut dire, en clair
+### C'EST FAIT (tour 15, `da6d7ce`, poussé)
 
-La première galerie **existe déjà** dans le code : les creuseuses creusent, une
-jauge en digger-secondes se remplit, et au bout la galerie s'ouvre d'un coup.
-Mais **personne n'y est jamais entré**. Aujourd'hui on regarde un trou depuis la
-surface. Ce n'est pas le critère de fin.
+La reine descend sa propre rampe à pied, entre dans la chambre, **pond là où
+elle se tient** (sans être emportée par la cinématique scriptée), continue
+jusqu'au fond de la première galerie, et **ressort sur la prairie**. Chaque pas
+sur de vraies touches. Les deux moitiés de la demande sont tenues :
 
-Le critère de fin, écrit dans `design/castes-et-micro-macro.md` §4 étape 4, est
-littéralement : **y entrer et en sortir**. Tant que la reine ne descend pas
-dedans à pied et n'en ressort pas, l'étape n'est pas faite. « Voir » et
-« entrer » sont les deux moitiés de la demande et aucune des deux n'est
-facultative :
+- **Voir** — la galerie est éclairée sur toute sa longueur (trois lampes
+  réparties, plus `DIG_FACE_LIGHT` au front de taille), plancher d'ambiance à
+  0,55. Avant, une seule lampe au bout : un disque clair et quarante unités de
+  noir.
+- **Entrer** — une rampe, pas un puits, comme arbitré. Pente pire cas **0,43**
+  (le puits était à 4,4), aucune marche > 0,11 sur 323 pas.
 
-1. **Voir** — l'entrée du nid doit se lire depuis la surface comme une entrée,
-   et l'intérieur de la galerie doit être visible (donc éclairé, et donc
-   *fermé* : voir le bug bloquant ci-dessous).
-2. **Entrer** — marcher dedans avec la reine. Ce qui suppose que la descente
-   soit praticable : le puits actuel est quasi vertical
-   (`AXIS_TILT = 0.22` sur `SHAFT_LEN = 15`), une fourmi ne peut pas le
-   descendre. **Arbitré : ce sera une rampe, pas un puits.**
-
-### Le bug bloquant, que je dois corriger moi-même
-
-`buildGallery()` dans `game/src/world/founding.js` ajoute des quads pour
-`GALLERY_SEGS` anneaux **sans jamais fermer le dernier**. Le tube est
-littéralement ouvert sur le ciel, au rayon `GALLERY_R * 0.55 = 2.75`.
-
-C'est mon bug (tour 13). Cephalotes a été catégorique et il a raison :
-**aucune valeur d'éclairage ne vaut la peine d'être réglée tant que la chose la
-plus lumineuse dans le cadre est le ciel au bout du tunnel.** C'est ce qui
-explique la mesure absurde « galerie à 60 % sous L 8 avec un disque de ciel à
-L 200 ». **À corriger en premier, avant tout réglage de lumière.**
-
-### État des trois tickets dispatchés pour cette demande
-
-| Agent | Ticket | État |
-|---|---|---|
-| **Cephalotes** (art) | Rendre l'entrée lisible | ✅ **Rendu et poussé** (`8e78e6d`), rapport entièrement mesuré. Ses chiffres restent **à câbler** — voir §6 |
-| **Atta** (rendu/monde) | [#41](https://github.com/splatch17/Myrmidia/issues/41) — `groundY()` répond à l'intérieur du nid, le puits devient une rampe | ⏸ **Coupé par la limite de session**, travail **sur le disque** |
-| **Cataglyphis** (gameplay) | [#40](https://github.com/splatch17/Myrmidia/issues/40) — la moitié joueur : marcher dans le nid | ⏸ **Coupé par la limite de session**, travail **sur le disque** |
-
-Dernière ligne émise par Atta avant la coupure : *« The mound was carving an
-open slot right through its apex — the flat plate is that slot's end face. The
-chamber must be roofed, so the carve has to stop at its wall and the arch be an
-opening, not a face. »*
-
-Dernière ligne de Cataglyphis : *« Now I'll write the harness first, as
-instructed, before implementing. »*
-
-### La toute première action d'une session neuve
-
-**Inventorier et récupérer leur travail sur le disque. Ne pas le refaire.**
-Cinq fois sur cinq, récupérer a battu refaire.
-
-```bash
-cd /c/Users/33778/dev/MYRMIDIA
-git status --short                       # ce qu'ils ont laissé
-cd game && npx vite build                # doit passer
-node scripts/verify-descent.mjs          # SEUL (voir piège 5)
-node scripts/verify-gallery-walk.mjs     # SEUL
 ```
+cd game
+node scripts/verify-descent.mjs        # SEUL — 11 vérifs, 14 vues
+node scripts/verify-gallery-walk.mjs   # SEUL — la marche complète
+```
+**Les deux passent intégralement.** Captures dans `game/_descent-shots/` et
+`game/_gallery-shots/` (non suivis par git depuis ce tour).
 
-Puis **regarder les PNG de `game/_descent-shots/`** avant de juger quoi que ce
-soit. Tous les défauts rattrapés depuis le tour 3 l'ont été en regardant des
-images, aucun en relisant du code.
+Le bug de l'anneau non fermé — le tube ouvert sur le ciel — n'existe plus :
+`world/excavation.js` a remplacé le puits, la chambre est voûtée et la bouche
+est une arche dans sa paroi.
 
-Fichiers laissés par les deux agents coupés, au moment où j'écris :
+### Les trois bugs qu'il a fallu corriger pour y arriver
 
-- modifiés : `main.js`, `player/{camera,climb,decorCollision,index,interaction,laying,movement}.js`,
-  `world/{founding,grass,index,terrain}.js`, `dist/index.html`
-- supprimés : `dist/assets/index-DR-HenCU.js`, `dist/assets/tunnel-dirt_albedo-DgMZYBLi.png`
-- **nouveaux** : `world/excavation.js`, `player/nest.js`,
-  `scripts/verify-descent.mjs`, `scripts/verify-gallery-walk.mjs`,
-  `scripts/_probe-nest.mjs`, `_descent-base/`, `_descent-shots/`
+Le travail des deux agents coupés était bien sur le disque et il a été
+récupéré, pas refait — sixième fois sur six que ça vaut mieux. Il restait :
 
-HEAD = `8e78e6d` sur `feature/threejs-migration`, poussé.
+1. **`rampOffset()` rejetait `u < 0` sans tolérance.** `u` est reconstruit par
+   un `atan2` + wrap, donc le seuil tombait à ±1e-16 selon le site : une fois
+   sur deux il sortait de la rampe et `descentPath()` annonçait la profondeur
+   de la chambre. Le contrôleur refusait alors — à raison — de faire descendre
+   la reine dans un trou de 18 unités. C'est ce qui faisait échouer le harnais
+   différemment à chaque exécution.
+2. **`movement.js` testait la porte avec `groundY(bord) - floorY(bord)`.** Juste
+   tant que `groundY()` ne répondait que la pelouse ; depuis #41 elle répond le
+   sol du nid dans l'empreinte, donc sur le bord elle comparait le sol à
+   lui-même et déclarait porte **chaque paroi**. La reine traversait le mur de
+   la galerie et était remontée de 28 unités jusqu'à la prairie. C'est le piège
+   récurrent du projet (une valeur calibrée contre un monde qui a changé) sous
+   forme de prédicat. Corrigé avec `headroom()` — finie = plafond = jamais une
+   porte — et un échantillon pris **hors** de l'empreinte.
+3. **Le harnais ne savait pas contourner un caillou** : il reculait et
+   revisait le même cap, donc il rentrait dans le même caillou. Il contourne
+   maintenant par côtés alternés et de plus en plus larges.
 
----
+### Ce qui reste ouvert sur cette demande
+
+Un seul point, et c'est un arbitrage de DA, pas un bug : **la reine est
+surexposée près de la bouche** (`_gallery-shots/01-at-the-entrance.png`). Sa
+chitine a été éclaircie et la lampe de la bouche a été descendue à `mouthY -
+2.5` — les deux chiffres viennent de la DA, mais pris séparément, et personne
+n'a mesuré leur somme à deux unités de distance. Voir §6.
 
 ## 1. Le projet, et ce que j'en attends
 
@@ -171,8 +149,8 @@ Conséquences **immédiates** sur le code (`design/castes-et-micro-macro.md` §3
 | 1 | Choix de la caste à la ponte | ✅ fait |
 | 2 | Les creuseuses creusent, jauge visible | ✅ fait |
 | 3 | Le tunnel s'ouvre d'un coup | ✅ fait |
-| 4 | **Y entrer et en sortir** | 🔴 **en cours — la demande actuelle** |
-| 5 | Le menu de gestion de la reine | à venir |
+| 4 | **Y entrer et en sortir** | ✅ **fait au tour 15** (`da6d7ce`) |
+| 5 | **Le menu de gestion de la reine** | 🔴 **la suite — c'est ici qu'on repart** |
 | 6 | Contrôler n'importe quelle fourmi | à venir (demande que le joueur cesse d'être un cas particulier) |
 
 ---
@@ -277,11 +255,22 @@ Règle de consommation : `player/**` lit à travers une copie de namespace
 
 ---
 
-## 6. À câbler : les chiffres livrés par Cephalotes
+## 6. Les chiffres livrés par Cephalotes — CÂBLÉS au tour 15
 
-Tout est mesuré et prêt ; c'était bloqué parce que les fichiers des deux agents
-coupés étaient ouverts. **Ils sont libres maintenant.** Le préalable reste le
-bug du dernier anneau non fermé (§0).
+Tout ce qui suit est **en place dans le code**, sauf mention contraire. Gardé
+ici parce que c'est la dérivation des valeurs, et qu'un réglage futur doit
+savoir contre quoi elles ont été mesurées avant de les bouger.
+
+**Ce qui n'a PAS été câblé, et pourquoi :** `RIM_H` 1,6 → 4,0 et « la rampe
+perce la lèvre d'un seul côté, le cratère se lit comme un C ». Ces deux-là
+décrivent le **puits**, que `world/excavation.js` a remplacé au même tour : la
+rampe perce déjà la lèvre d'un seul côté par construction. Les rejouer
+reviendrait à régler une géométrie qui n'existe plus. À refaire arbitrer sur
+les captures actuelles, pas à appliquer tel quel.
+
+**À arbitrer en priorité :** la reine surexposée sous la lampe de la bouche
+(§0). `WARM_MOUTH_LIGHT` descendue à `mouthY - 2.5` + chitine éclaircie de 30 %
+= elle part au blanc à deux unités. Chacun des deux chiffres est bon seul.
 
 **Géométrie de l'entrée** — `world/founding.js`
 - `RIM_H` 1.6 → **4.0**
@@ -326,10 +315,14 @@ la **distribution**, pas l'exposition (l'atténuation `1/(1 + 0.017 d²)` donne
 
 ---
 
-## 7. Après cette demande — la file d'attente
+## 7. La file d'attente
 
-Par ordre de priorité :
+Par ordre de priorité. L'étape 4 étant faite, **le prochain travail est le
+menu de gestion de la reine** (§2, étape 5) : il y a deux castes à arbitrer
+depuis le tour 14 et le choix se fait aujourd'hui par deux touches sans écran.
 
+0. **Faire arbitrer l'exposition par la DA** — la reine part au blanc près de
+   la bouche (§0, §6). Court, et c'est la première chose qu'on voit.
 1. **Prouver les raccourcis de caste 5/6 sur une capture** — défaut #2 de
    `PROGRESS.md`, partis sans capture parce que mon harnais jetable
    `_pace.mjs` ne délivrait **aucune** entrée clavier alors que
@@ -372,5 +365,6 @@ Par ordre de priorité :
 
 ---
 
-*Dernière mise à jour : 2026-09-09. HEAD `8e78e6d`, branche
-`feature/threejs-migration`.*
+*Dernière mise à jour : 2026-09-09 (tour 15). HEAD `da6d7ce`, branche
+`feature/threejs-migration`, poussée. Lien de test de la branche : voir le
+tableau du `README.md`.*

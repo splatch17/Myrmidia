@@ -69,6 +69,7 @@ Liens de playtest mis à jour à chaque round de développement — voir les iss
 
 | Prototype | Lien | Statut |
 |---|---|---|
+| **Le jeu — branche de travail** | [**tester le round 15**](https://raw.githack.com/splatch17/Myrmidia/feature/threejs-migration/game/dist/index.html) | **Round 15**, sur `feature/threejs-migration`. Tout ce qu'il y a sur `main`, **plus la première galerie : on descend la rampe à pied, on entre dans la chambre, on pond sur place, on va au fond de la galerie et on ressort.** L'intérieur est éclairé sur toute sa longueur. Rappel : la cadence de test est ON (attentes ÷8) — `P` puis `5` la coupe. |
 | Le jeu (Three.js/Vite, `game/`) | [tester](https://raw.githack.com/splatch17/Myrmidia/main/game/dist/index.html) | **Round 8**, sur `main`. On joue la reine fondatrice, seule sur la prairie au crépuscule : carte écrite à la main (relief, rivière, montagnes au loin), herbe qui porte son ombre, récolte au maintien avec portage visible, et fondation de la colonie à l'endroit choisi. Commandes affichées à l'écran, `H` pour les rappeler. État détaillé et défauts connus : [PROGRESS.md](PROGRESS.md) |
 | Ancien prototype (fichier HTML unique) | [tester](https://raw.githack.com/splatch17/Myrmidia/main/design/prototypes/sortie-fourmiliere.html) | Conservé comme référence — c'est de lui que le moteur a été porté |
 

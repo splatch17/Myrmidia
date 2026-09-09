@@ -16,7 +16,7 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-05 (tour 13)
+## État au 2026-09-09 (tour 15)
 
 **Branche de travail :** `feature/threejs-migration`.
 **`main` :** la [PR #23](https://github.com/splatch17/Myrmidia/pull/23) est
@@ -66,7 +66,8 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 | **Colonie** | La couvée éclot. Les ouvrières récoltent et rapportent sans le joueur. Rendu instancié : 6 ouvrières = 47 draw calls |
 | **Castes** | La reine choisit ce qu'elle pond (5 = ouvrières, 6 = creuseuses). Une caste est une ligne dans `avatar.js`, jamais un fichier. **La creuseuse se débloque à la 2e ponte** |
 | **Cadence de test** | `core/pace.js` : attentes /8, coûts /5 (plancher 1 unité). **ON par défaut** — `P` puis `5` pour la couper |
-| **Première galerie** | **Les creuseuses creusent, jauge en digger-secondes, puis la galerie s'ouvre d'un coup.** Elle existe, elle est éclairée — personne n'y est encore entré |
+| **Première galerie** | **Les creuseuses creusent, jauge en digger-secondes, puis la galerie s'ouvre d'un coup — et on y descend à pied.** Rampe (`world/excavation.js`), chambre, ponte sur place, fond de galerie, remontée. Éclairée par trois lampes réparties sur la longueur, pas une au bout |
+| **Descendre / remonter** | `nestFootprint()` / `descentPath()` (contrat §6) côté monde, `player/nest.js` côté joueur. Pente pire cas 0,43 ; aucun à-pic > 0,11 sur 323 pas ; la paroi tient (`headroom()` finie = jamais une porte) |
 | Index spatial | Une grille uniforme sous toutes les requêtes de proximité. `nearestClimbable` ×42, une image à 20 fourmis passe de 3,43 ms à 0,10 ms |
 | Rivière | Bord ouest, plan d'eau ondulé, berge de sable, Fresnel vers le ciel |
 | Horizon | Deux rideaux de crêtes qui suivent la caméra en x/z |
@@ -96,8 +97,9 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 
 | # | Défaut | Gravité |
 |---|---|---|
-| 1 | **On ne peut pas entrer dans la galerie** (#40). Elle existe et elle est éclairée, personne n'y a marché. C'est le critère de fin de l'objectif en cours | **Bloquant** |
+| 1 | ~~On ne peut pas entrer dans la galerie (#40)~~ **Fait au tour 15.** Elle descend, elle pond dedans, elle va au fond, elle ressort — sur captures | ✅ |
 | 2 | **Les touches 5/6 sont committées sans capture.** Mon harnais jetable n'envoie aucune touche (H n'y bascule pas le panneau non plus) alors que `verify-harvest.mjs` y arrive. Défaut du script, pas du jeu — mais à prouver | À vérifier |
+| 2b | **La reine est surexposée sous la lampe de la bouche** depuis que sa chitine a été éclaircie : à 2 unités de `WARM_MOUTH_LIGHT` elle part au blanc (`_gallery-shots/01-at-the-entrance.png`). Les deux chiffres sont ceux de la DA, pris séparément — c'est leur somme qui n'a pas été mesurée | DA, à arbitrer |
 | 3 | La séquence de ponte est scriptée : ~14 s sans contrôle. Acceptable une fois, pas répétable | Design |
 | 4 | La reine reste sombre de corps ; le contour la détache mais sa chitine est à la valeur du sol | DA |
 | 5 | `RIG_PROLOGUE` retouché quatre fois à l'intégration. **La DA n'a jamais arbitré** (Cephalotes coupé 3 tours de suite) | À arbitrer |
@@ -107,16 +109,14 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 
 ## Prochaines étapes
 
-L'objectif nommé par le porteur : **voir la première galerie se creuser et
-pouvoir y entrer.** Trois quarts sont faits.
+L'objectif nommé par le porteur — **voir la première galerie se creuser et
+pouvoir y entrer** — est **atteint** (tour 15, `da6d7ce`). La rampe a été
+choisie plutôt que le puits, comme arbitré. Reste :
 
-1. **#40 — entrer dans le nid et en ressortir à pied.** C'est le critère de fin,
-   pas un bonus : une galerie qu'on regarde depuis la surface ne montre rien du
-   futur du jeu. Le blocage est nommé — une reine ne peut pas descendre un puits
-   vertical avec un contrôleur qui suit le sol. Deux pistes, à trancher sur
-   mesure : une rampe plutôt qu'un puits (le moins cher, probablement le bon),
-   ou une vraie locomotion souterraine (plus général, et le mode macro le
-   demandera de toute façon).
+1. **Faire arbitrer la lumière et l'exposition de la reine par la DA.** Les
+   chiffres de Cephalotes sont câblés tels quels ; leur *somme* près de la
+   bouche surexpose (défaut 2b). C'est la première chose à regarder, parce que
+   c'est la première chose qu'on voit en jouant.
 2. **Le menu de gestion de la reine** (`castes-et-micro-macro.md` §2). Il
    commence à exister dès qu'il y a deux castes à arbitrer, ce qui est le cas
    depuis ce tour. Aujourd'hui le choix de caste est deux touches sans écran.
@@ -166,7 +166,21 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
    brins (9,1 contre une reine de 7,0), et l'alésage du nid (couloir de 3,3
    pour une reine de 3,3 — infranchissable). Aucun ne lève d'erreur, aucun ne
    se voit sans mesurer. **Réflexe : quand une constante décrit une taille, se
-   demander contre quel corps elle a été écrite.** L'avatar est passé de
+   demander contre quel corps elle a été écrite.** Et au tour 15, la même
+   erreur **sous forme de prédicat** : `movement.js` demandait « ce bord est-il
+   une porte ? » par `groundY(bord) - floorY(bord)`, ce qui était juste tant
+   que `groundY()` ne répondait que la pelouse. Depuis #41 elle répond le sol
+   du nid dans toute l'empreinte, donc sur le bord elle comparait le sol à
+   lui-même, lisait zéro, et déclarait porte **chaque paroi**. Une constante
+   n'est pas seule à pouvoir être calibrée contre un monde qui a changé — un
+   test l'est aussi.
+7. **Un arc doit contenir ses propres extrémités.** `rampOffset()` rejetait
+   `u < 0` sans tolérance ; `u` étant reconstruit par un `atan2` et un wrap, le
+   point de départ tombait à ±1e-16 selon le site. Une fois sur deux le seuil
+   sortait de la rampe et `descentPath()` annonçait la profondeur de la chambre
+   à la place — une porte 18 unités sous la prairie, sur la moitié des sites
+   seulement. **Toute paramétrisation reconstruite par trigonométrie a besoin
+   d'un epsilon à ses bornes.** L'avatar est passé de
    l'ouvrière (rayon 1,5) à la reine (3,3, `scale` 2,2) au tour 6, et tout ce
    qui n'a pas suivi est un défaut latent.
 
@@ -189,8 +203,10 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
   reflet) ont tous été trouvés en regardant les images, aucun en relisant le
   code.
 - **Les harnais de vérification :** `game/scripts/verify-terrain.mjs` (12 vues
-  + perf + mémoire), `verify-room-access.mjs` (accès aux 3 salles),
-  `verify-textures.mjs`. Chromium **doit** être lancé avec
+  + perf + mémoire), `verify-descent.mjs` (la rampe : pente, à-pics, rien en
+  travers, 14 vues), `verify-gallery-walk.mjs` (la marche complète, sur vraies
+  touches), `verify-room-access.mjs` (accès aux 3 salles),
+  `verify-textures.mjs`. **Un seul à la fois.** Chromium **doit** être lancé avec
   `--use-gl=angle --use-angle=d3d11`, sinon on mesure le rasteriseur logiciel.
 - **Piège récurrent :** tout albédo doit porter
   `tex.colorSpace = THREE.SRGBColorSpace`. L'oubli ne lève aucune erreur, il
@@ -212,6 +228,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 15 | **On entre dans la galerie et on en ressort à pied**, rampe au lieu du puits, galerie éclairée sur sa longueur, palette d'avatar de la DA | `da6d7ce` |
 | 14 | Cadence de test, déblocage de la creuseuse à la 2e ponte | `4b0adb2` |
 | 13 | **Choix de caste à la ponte, creuseuses, jauge, première galerie qui s'ouvre** | `cdd6d5b`, `254b189` |
 | 12 | **Éclosion et ouvrières qui récoltent seules**, rendu instancié | `15c9e7b` |
