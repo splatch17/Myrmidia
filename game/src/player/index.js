@@ -1,6 +1,6 @@
 import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
-import { groundY, distanceToWater, foundedMix, getGallery } from '../world/index.js';
+import { groundY, distanceToWater, foundedMix, getGallery, digGallery, descentPath } from '../world/index.js';
 import { PLAYER_AVATAR, collideRadius } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
@@ -19,6 +19,7 @@ import { createHud } from './hud.js';
 import { createTargetMarker } from './marker.js';
 import { createColony } from './colony.js';
 import { createCrowd } from './crowd.js';
+import { nestInfo, nestFootprint } from './nest.js';
 import { WORKER } from './avatar.js';
 import { dampAngle } from './mathUtil.js';
 
@@ -273,6 +274,31 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__colony = () => colony;
     window.__foundNest = (x, z) => found(x, z);
     window.__gallery = () => getGallery();
+    /* #40: where the nest is walkable, whether she is in it, and which floor
+       the controller is following. `approx` says whether that came from the
+       world's own nestFootprint() or from the stand-in nest.js keeps until
+       #41 lands — a harness that cannot tell those apart would happily
+       report the feature working on a guess. */
+    window.__nest = () => nestInfo(ant);
+    // point probe, so a harness can ask about ground it has not walked to yet
+    window.__nestAt = (x, z) => {
+      const fp = nestFootprint();
+      return fp ? { inside: fp.contains(x, z), floorY: fp.floorY(x, z), ground: groundY(x, z), approx: fp.approx } : null;
+    };
+    // the gallery normally opens when the diggers finish (colony.js); the
+    // harness needs it open without replaying twenty minutes of colony
+    window.__digGallery = () => digGallery();
+    // the world's own centre line down the cut, when it publishes one (#41)
+    // which verb E resolves to right now, and how far the current hold has
+    // got: a prompt on screen is not proof that the ladder agrees with it
+    window.__act = () => {
+      const a = interaction.resolve(ant);
+      return { kind: a.kind, inPlace: !!a.inPlace, hold: interaction.holdProgress(a) };
+    };
+    window.__descentPath = () => (typeof descentPath === 'function' ? descentPath() : null);
+    // ...and needs to be able to start the cutscene in order to prove it can
+    // be cut. The cut itself is a real keypress.
+    window.__beginLaying = () => interaction.laying.begin(ant);
     window.__caste = () => ({ caste, msg: casteMsg, unlocked: casteUnlocked('digger') });
     // the founding verdict + the sentence it produces, so the harness can
     // check the refusals for ground the queen would have to walk minutes to

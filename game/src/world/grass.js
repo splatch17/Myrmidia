@@ -431,5 +431,27 @@ export function createGrassField({ count = 1800, seed = 7 } = {}) {
   /** Shadow-casting range in world units, for core/quality.js. */
   function setCastRadius(r) { uniforms.uCastRadius.value = r; }
 
-  return { mesh, footprints, update, setCastRadius };
+  /**
+   * Take out every blade whose root falls inside `pred` — the nest being dug
+   * under it (world/founding.js). Their height is zeroed rather than their
+   * instance removed: the count is baked into the InstancedMesh, footprints[]
+   * is index-aligned with it, and core/spatialIndex.js was filled from those
+   * indices before the first frame. Setting aH to 0 collapses the blade in the
+   * same vertex shader that bends it, so the visible pass and the shadow pass
+   * lose it together and nothing downstream has to be told.
+   */
+  function clearIn(pred) {
+    const aH = geometry.getAttribute('aH');
+    let n = 0;
+    for (const f of footprints) {
+      if (f.h <= 0 || !pred(f.x, f.z)) continue;
+      aH.setX(f.i, 0);
+      f.h = 0;
+      n++;
+    }
+    if (n) aH.needsUpdate = true;
+    return n;
+  }
+
+  return { mesh, footprints, update, setCastRadius, clearIn };
 }

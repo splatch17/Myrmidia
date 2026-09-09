@@ -6,6 +6,7 @@ import {
   nestOrigin, canFoundAt, foundNest, populateNest, sealNest, getFoundedNest,
   pitFactorAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
   MUSHROOMS, ROCKS, TERRAIN_BOUNDS,
+  digGallery, getGallery, nestFootprint, descentPath, groundSlope,
 } from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
@@ -147,6 +148,13 @@ window.__world6 = {
   shadeAt, canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
   harvestNode, get nodes() { return RESOURCE_NODES; }, foundedMix, sunDir,
   waterDepthAt, distanceToWater,
+  /* Round 15 (#41). The descent has to be provable without a controller —
+     the whole point of the contract's dependency direction — so the three
+     functions design/api-monde-gameplay.md 6 adds are reachable from a
+     harness that never presses a key: scripts/verify-descent.mjs digs,
+     walks descentPath() and ray-casts the result. THREE itself is exposed
+     for that ray-cast; there is no second copy of the library to import. */
+  digGallery, getGallery, nestFootprint, descentPath, groundY, groundSlope, THREE,
 };
 
 renderer.setResizeCallback((aspect) => {

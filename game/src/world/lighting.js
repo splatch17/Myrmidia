@@ -34,7 +34,7 @@ export const LIGHT_SLOTS = 8;
 
 /* How much of the hemisphere fill survives at the deepest point of the nest
    (see the injection below). */
-const AMBIENT_FLOOR = 0.30;
+const AMBIENT_FLOOR = 0.55;
 
 const ALL_LIGHTS = [];
 

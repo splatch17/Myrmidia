@@ -6,6 +6,7 @@ import { paceCost } from '../core/pace.js';
 import { KIND_LABEL, nodesAreProvisional } from './resources.js';
 import { canFound, found, refusalText, isFounded, provisional as foundingProvisional, FOUND_SECONDS, nestOrigin, bearingWord } from './founding.js';
 import { createLaying } from './laying.js';
+import { insideNest } from './nest.js';
 
 /* ==========================================================================
    One key, several verbs (#29/#33).
@@ -62,10 +63,15 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
      much of it is charged while we are debugging. */
   function clutchCost() { return paceCost(FOUND_STOCK); }
 
-  /** Can she go down and lay right now? */
-  function canLay(ant) {
-    return isFounded() && !foundingProvisional() && laying.canLayMore()
-      && harvest.stock() >= clutchCost() && mouthDistance(ant) <= MOUTH_RADIUS;
+  /** Can she lay right now — and does she have to be taken down there for it?
+   *  Standing in her own nest is the answer to both questions at once: the
+   *  descent is a thing to watch only while it is also a thing she cannot do
+   *  herself (#40). Once she has walked down, E lays where she stands. */
+  function layPlace(ant) {
+    if (!isFounded() || foundingProvisional() || !laying.canLayMore()) return null;
+    if (harvest.stock() < clutchCost()) return null;
+    if (insideNest(ant.x, ant.z)) return 'here';
+    return mouthDistance(ant) <= MOUTH_RADIUS ? 'descend' : null;
   }
 
   function say(text, seconds = 3.2) { lastMessage = text; messageTimer = seconds; }
@@ -97,7 +103,8 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
       return { kind: 'found', ok: verdict.ok, reason: verdict.reason, assumed: verdict.assumed };
     }
 
-    if (canLay(ant)) return { kind: 'lay' };
+    const place = layPlace(ant);
+    if (place) return { kind: 'lay', inPlace: place === 'here' };
 
     const node = harvest.target(ant, bodyR);
     if (node) return { kind: 'harvest', node };
@@ -171,11 +178,22 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
           layProgress += dt / LAY_SECONDS;
           if (layProgress >= 1) {
             layProgress = 0;
-            if (laying.begin(ant)) harvest.spend(clutchCost());
+            const laid = act.inPlace ? laying.layInPlace() : laying.begin(ant);
+            if (laid) {
+              harvest.spend(clutchCost());
+              if (act.inPlace) say(laying.eventText() || 'Elle pond.', 6);
+            }
           }
         }
         break;
       }
+      case 'sequence':
+        /* The cutscene is a cutscene, so E gets her out of it — same key, and
+           the only one the player has been taught. laying.skip() settles what
+           the sequence still owed before handing her back, so cutting it can
+           never lose the clutch it was there to show. */
+        if (pressed && laying.skip(ant)) say(laying.eventText() || 'Ponte.', 6);
+        break;
       case 'drop':
         if (pressed) {
           const kind = harvest.state.carrying.kind;
@@ -206,7 +224,8 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     if (act.kind === 'sequence') return laying.promptText();
     if (act.kind === 'lay') {
       if (layProgress > 0) return `Ponte… ${pct(layProgress)}`;
-      return `E (maintenir) — descendre pondre (${clutchCost()} unité${clutchCost() > 1 ? 's' : ''} du dépôt)`;
+      const verb = act.inPlace ? 'pondre ici' : 'descendre pondre';
+      return `E (maintenir) — ${verb} (${clutchCost()} unité${clutchCost() > 1 ? 's' : ''} du dépôt)`;
     }
     if (act.kind === 'climb') return climbPromptText(ant, act.climbTarget);
     if (act.kind === 'return') return act.label;
@@ -289,6 +308,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
         return c ? { x: c.x, z: c.z, radius: 11, blocked: false } : null;
       }
       case 'lay': {
+        if (act.inPlace) return { x: ant.x, z: ant.z, radius: 9, blocked: false };
         const o = nestOrigin();
         return o ? { x: o.x, z: o.z, radius: 9, blocked: false } : null;
       }

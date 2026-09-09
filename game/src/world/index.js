@@ -18,6 +18,7 @@ import { RESOURCE_NODES, harvestNode, nodesNear, buildResources } from './resour
 import {
   initFounding, canFoundAt, foundNest, nestOrigin, getFoundedNest,
   populateNest, sealNest, updateFounding, digGallery, getGallery,
+  nestFootprint, descentPath,
 } from './founding.js';
 import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
 
@@ -82,7 +83,7 @@ export {
   shadeAt,
   RESOURCE_NODES, harvestNode, nodesNear,
   canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
-  digGallery, getGallery,
+  digGallery, getGallery, nestFootprint, descentPath,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
 
@@ -160,7 +161,12 @@ export function createWorld() {
   const dug = new THREE.Group();
   dug.name = 'dug';
   group.add(dug);
-  initFounding(dug);
+  /* The lawn and the grass are handed over because a dig has to cut through
+     them: the meadow is one grid built here, at load time, and the nest is
+     excavated into it later. Without this the cut is roofed by the lawn and
+     there is nothing to walk into — see openTheMeadow() for the capture that
+     made that obvious. */
+  initFounding(dug, { lawn, grass });
 
   function update(dt, elapsed, camera) {
     grass.update(dt, elapsed, camera);

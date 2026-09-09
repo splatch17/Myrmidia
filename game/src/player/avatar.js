@@ -86,7 +86,7 @@ export const WORKER = {
   legs: WORKER_LEGS,
   body: WORKER_BODY,
   breathes: false,
-  colors: { chitinA: 0x8b5a24, chitinB: 0x432d15, limb: 0x6b4420, mandible: 0xc9903f, eye: 0x100c06 },
+  colors: { chitinA: 0xc98a3c, chitinB: 0x855828, limb: 0x8a5b28, mandible: 0xc9903f, eye: 0x100c06 },
   // locomotion, in world units — the old prototype's frame() literals
   maxSpeed: 15,
   sprint: 1.75,
@@ -107,7 +107,7 @@ export const FOUNDING_QUEEN = {
   legs: QUEEN_LEGS,
   body: QUEEN_BODY,
   breathes: true,
-  colors: { chitinA: 0xb07226, chitinB: 0x5e3d16, limb: 0x5e3d16, mandible: 0xb07226, eye: 0x100c06 },
+  colors: { chitinA: 0xdda254, chitinB: 0x8f5a25, limb: 0x94612a, mandible: 0xe8c078, eye: 0x100c06 },
   // She is more than twice a worker's size and still slower in absolute
   // terms: ~0.4 body-lengths a second against the worker's ~1.15, and a turn
   // rate less than half as sharp, so she pivots like something that weighs
@@ -151,7 +151,7 @@ export const DIGGER = {
   id: 'digger',
   label: 'creuseuse',
   body: DIGGER_BODY,
-  colors: { chitinA: 0x6d4520, chitinB: 0x2f2010, limb: 0x4a2f16, mandible: 0xd8a24e, eye: 0x100c06 },
+  colors: { chitinA: 0xa8763a, chitinB: 0x805426, limb: 0x7a5227, mandible: 0xd8a24e, eye: 0x100c06 },
   maxSpeed: 12,
   turnRate: 7,
 };

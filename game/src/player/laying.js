@@ -1,5 +1,6 @@
 import * as world from '../world/index.js';
 import { clamp, lerp } from '../core/noise.js';
+import { nestFootprint } from './nest.js';
 
 /* ==========================================================================
    The first laying (#6) — the beat the whole prologue was walking towards.
@@ -20,15 +21,27 @@ import { clamp, lerp } from '../core/noise.js';
    *looks* right whichever module ends up driving it: this file starts its own
    ramp at the laying, which is where the spec puts it (see MIX_FADE below).
 
-   WHY IT IS SCRIPTED, AND WHAT THAT COSTS. A queen cannot walk down a
-   15-unit vertical shaft 8.4 units wide with a ground-following controller —
-   there is no ground to follow, and world/terrain.js's groundY() still
-   answers "the lawn" for every point inside the hole. So for these ~14
-   seconds the ant is placed along a path rather than steered, the camera is a
-   composed shot rather than a boom (camera.js takes it as final), and the
-   input is ignored. It is the only scripted stretch in the game and it is
-   deliberately short. When the chamber becomes a place she can walk into by
-   herself, this file loses its descend/ascend phases and keeps the rest.
+   IT IS A CUTSCENE, AND IT IS NOW OPTIONAL. It used to be the only way a
+   queen could ever be underground: a ground-following controller cannot walk
+   down a 15-unit near-plumb shaft, so for ~14 seconds the ant was placed
+   along a path rather than steered, the camera was a composed shot, and the
+   input was dropped on the floor. That is fine once and intolerable every
+   time (PROGRESS.md defect 3), and design/api-monde-gameplay.md section 6
+   settles that it must stop being load-bearing. So this file now offers three
+   ways in, and the sequence is only the first of them:
+
+     begin(ant)        play the beat — the founding, once, where the sky has
+                       to change while she is shut in the dark (7a below)
+     skip(ant)         cut it, at any frame. Whatever it had not done yet it
+                       does immediately (the clutch is laid, the entrance is
+                       unsealed) and she is handed back standing on her own
+                       floor, under the player's hand, wherever she had got to
+     layInPlace(ant)   no sequence at all: she walked down there herself and
+                       laid where she stands
+
+   What the three share is applyLay() — one clutch, one place. The cutscene is
+   staging around it, not a second implementation of it, which is the only
+   reason cutting it can be safe.
 
    PHASES, and what each is on screen:
      descend  she walks the last few units to the rim and drops down the shaft
@@ -93,6 +106,9 @@ export function createLaying() {
   };
 
   let nest = null, from = null, mouth = null, floorPos = null, exitPos = null, broodAt = null;
+  // has the clutch of the run currently playing already been laid? skip()
+  // needs it: cutting before the 'lay' phase must still produce the clutch
+  let laidThisRun = false;
   let eyeAz = 0, surfaceEye = null, aimAt = null, layYaw = 0, cutNext = false;
 
   /** True while the queen belongs to the sequence and not to the player. */
@@ -153,6 +169,7 @@ export function createLaying() {
     state.i = 0;
     state.t = 0;
     state.justEnded = false;
+    laidThisRun = false;
     cutNext = false;
     return true;
   }
@@ -279,27 +296,81 @@ export function createLaying() {
       cutNext = true;
       return;
     }
-    if (k === 'lay') {
-      state.brood = Math.min(state.brood + 1, MAX_BROOD);
-      if (typeof W.populateNest === 'function') W.populateNest(state.brood);
-      state.justLaid = true;
-      /* §7a: the crossfade starts *here*, with the queen sealed underground,
-         not when the spade went in. main.js currently starts its own ramp
-         from nestOrigin() (i.e. from the dig, ~5 s earlier) and, running
-         after this file each frame, wins — which costs nothing today because
-         she is already in the shaft by then, and both ramps end at 1. It
-         becomes exact the moment main.js gates its ramp on the laying
-         (getFoundedNest().brood > 0); this side is already where the spec
-         asks for it. */
-      if (state.mixT === null && typeof W.foundedMix === 'function' && W.foundedMix() < 1) {
-        state.mixT = 0;
-      }
-      return;
-    }
+    if (k === 'lay') { applyLay(); return; }
     if (k === 'ascend') {
       if (typeof W.sealNest === 'function') W.sealNest(false);
       cutNext = true;
     }
+  }
+
+  /* ---- one clutch, wherever it is laid from --------------------------- */
+
+  /** The clutch itself: the only place brood is incremented, so a laying that
+   *  came from the cutscene, from cutting the cutscene, or from her standing
+   *  in her own chamber are the same event to everything downstream. */
+  function applyLay() {
+    state.brood = Math.min(state.brood + 1, MAX_BROOD);
+    if (typeof W.populateNest === 'function') W.populateNest(state.brood);
+    state.justLaid = true;
+    laidThisRun = true;
+    /* §7a: the crossfade starts *here*, with the queen sealed underground,
+       not when the spade went in. main.js currently starts its own ramp
+       from nestOrigin() (i.e. from the dig, ~5 s earlier) and, running
+       after this file each frame, wins — which costs nothing today because
+       she is already in the shaft by then, and both ramps end at 1. It
+       becomes exact the moment main.js gates its ramp on the laying
+       (getFoundedNest().brood > 0); this side is already where the spec
+       asks for it. */
+    if (state.mixT === null && typeof W.foundedMix === 'function' && W.foundedMix() < 1) {
+      state.mixT = 0;
+    }
+  }
+
+  /** Lay from where she is standing — no shot, no phases, no lost control.
+   *  The caller decides she is somewhere it makes sense (interaction.js only
+   *  offers it inside her own nest); this only refuses when there is nothing
+   *  to lay into. */
+  function layInPlace() {
+    if (active()) return false;
+    const n = typeof W.getFoundedNest === 'function' ? W.getFoundedNest() : null;
+    if (!n || !n.chamber) return false;
+    applyLay();
+    return true;
+  }
+
+  /**
+   * Cut the sequence, now. Everything it still owed gets settled — the clutch
+   * if it had not been laid yet, the entrance if it was still sealed — and she
+   * is put down on a floor she can walk off:
+   *   inside the nest, exactly where she is, on the footprint's own floor;
+   *   caught mid-shaft, on the chamber floor the descent was heading for;
+   *   otherwise on the lawn under her feet.
+   * The middle case is what keeps this honest: a cut is not a rewind, she
+   * keeps the ground she covered.
+   */
+  function skip(ant) {
+    if (!active()) return false;
+    if (!laidThisRun) applyLay();
+    if (typeof W.sealNest === 'function') W.sealNest(false);
+
+    const fp = nestFootprint();
+    if (fp && fp.contains(ant.x, ant.z)) {
+      ant.floorY = fp.floorY(ant.x, ant.z);
+    } else if (fp && floorPos && fp.contains(floorPos[0], floorPos[2])) {
+      ant.x = floorPos[0]; ant.z = floorPos[2];
+      ant.floorY = fp.floorY(ant.x, ant.z);
+    } else {
+      ant.floorY = null;
+    }
+    ant.y = ant.floorY === null ? W.groundY(ant.x, ant.z) : ant.floorY;
+    ant.speed = 0;
+
+    state.phase = null;
+    state.i = 0;
+    state.t = 0;
+    state.justEnded = true;
+    nest = null;
+    return true;
   }
 
   /* ---- what the HUD says -------------------------------------------------- */
@@ -313,8 +384,12 @@ export function createLaying() {
 
   function promptText() {
     if (!active()) return null;
-    if (state.phase === 'lay') return state.brood === 1 ? 'Première ponte.' : 'Elle pond.';
-    return LINES[state.phase] || null;
+    const line = state.phase === 'lay'
+      ? (state.brood === 1 ? 'Première ponte.' : 'Elle pond.')
+      : LINES[state.phase];
+    // the offer to cut is part of the line, not a separate slot: a cutscene
+    // that does not say it can be cut is, to the player, one that cannot be
+    return line ? `${line}   (E — passer)` : 'E — passer';
   }
 
   /** The line the event slot shows on the frame a phase begins. */
@@ -329,6 +404,7 @@ export function createLaying() {
 
   return {
     state, begin, update, shot, promptText, eventText,
+    skip, layInPlace,
     active,
     brood: () => state.brood,
     canLayMore: () => state.brood < MAX_BROOD,

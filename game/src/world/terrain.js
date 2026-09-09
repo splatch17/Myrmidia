@@ -3,6 +3,7 @@ import { vnoise, clamp, lerp } from '../core/noise.js';
 import { nrm3 } from '../core/vecmath.js';
 import { MeshBuilder } from '../core/meshBuilder.js';
 import { undergroundFloor, TUNNEL_MOUTH } from './underground.js';
+import { excavationFloorAt } from './excavation.js';
 import { texturedSurfaceMaterial, lawnAlbedo } from './texturing.js';
 
 /* ==========================================================================
@@ -272,6 +273,25 @@ function generalRelief(x, z) {
  * around the mouth so the seam has no step in it.
  */
 export function groundY(x, z) {
+  if (z < TUNNEL_MOUTH) return undergroundFloor(x, z);
+  /* #41 / contract 6. Inside a nest dug at run time this answers the nest
+     floor, and that is the whole of the change the player half needed: the
+     controller, the IK legs, the camera and the grass all sample groundY()
+     already and all follow it down without knowing anything new.
+     world/excavation.js owns the shape; nothing is imported back from
+     founding.js, which would be a cycle. */
+  const dug = excavationFloorAt(x, z);
+  if (dug !== null) return dug;
+  return lawnY(x, z);
+}
+
+/**
+ * The surface as if nothing had been dug. This is what groundY() used to be,
+ * and it is exported because world/founding.js has to know where the meadow
+ * was in order to cut into it — asking groundY() there would give it back the
+ * hole it is in the middle of digging.
+ */
+export function lawnY(x, z) {
   if (z < TUNNEL_MOUTH) return undergroundFloor(x, z);
 
   const dw = x - riverEdgeAt(z);

@@ -1,4 +1,5 @@
 import { MUSHROOMS, ROCKS, mushroomCollideR, TREE, treeTrunkRadius, TUNNEL_MOUTH, containUnderground, profileR, getRoomBranches } from '../world/index.js';
+import { insideNest } from './nest.js';
 import { clamp } from '../core/noise.js';
 import { bladeCurvePoint } from '../world/blade.js';
 import { GRASS, CLIMB_MIN_H } from './climb.js';
@@ -228,6 +229,12 @@ function maxRadius(list) {
    edge touches the ant can be culled by a correct index. */
 function forEachCollider(x, z, fn, antR = 0) {
   const emit = (o) => fn(o.x, o.z, o.r);
+  /* Nothing on the lawn can be touching her when she is under it (#40). The
+     pebbles, the stems and the tree are all placed in 2D and tested in 2D, so
+     without this the boulder standing over her nest keeps shoving her around
+     twenty units below it — and the queen simply cannot get down her own
+     entrance if a blade of grass is growing in it. */
+  if (insideNest(x, z)) return;
   if (z < TUNNEL_MOUTH + 6) {
     const list = caps();
     queryDisc(KIND.MUSHROOMS, x, z, antR + maxRadius(list), list, emit);
