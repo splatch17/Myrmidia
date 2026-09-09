@@ -9,7 +9,9 @@ import {
   makeExcavation, setExcavation, clearExcavation, getExcavation,
   excavationFloorAt, excavationFootprint, excavationDescentPath,
   rampCentre, rampParam, rampOffset, rampFloorAt, chamberFloorAt, chamberRoofAt,
+  addRoom, addLink, addDigFace, excavationDigFaces, advanceDigFace,
   RAMP_DESCEND, RAMP_TURN, CHAMBER_WALL, CHAMBER_ROOF, NEST_DEPTH, ROOF_COVER,
+  QUEEN_R,
 } from './excavation.js';
 import { texturedSurfaceMaterial, texturedEmissiveMaterial, dirtAlbedo, capAlbedo } from './texturing.js';
 import { addLocalLight, applyNestShading, setNestPit } from './lighting.js';
@@ -69,7 +71,13 @@ const C_BROOD = new THREE.Color('#efdcb0');
 const C_GLOW = new THREE.Color('#ffc46a');
 
 const COLD_SHAFT_LIGHT = [0.55, 0.62, 0.82];   // ambiance §2c plan 2 (soie)
-const WARM_MOUTH_LIGHT = [0.85, 0.48, 0.17];   // ambiance §2b: the one warm
+/* Cut from [0.85,0.48,0.17]. The art direction measured this lamp and the
+   queen's lighter chitin separately and each is right on its own, but their
+   SUM at two units was never measured and she went white under it (defect 2b).
+   The ambient floor has since gone 0.30 -> 0.55 as well, so the lamp is no
+   longer carrying the entrance on its own and can afford to be a glow rather
+   than a source. */
+const WARM_MOUTH_LIGHT = [0.46, 0.26, 0.10];   // ambiance §2b: the one warm
                                                // point on the outdoor map
 const BROOD_LIGHT = [0.85, 0.55, 0.22];        // ambiance §2c plan 5
 /* The face the diggers are still working, at the far end of the gallery. Its
@@ -77,6 +85,14 @@ const BROOD_LIGHT = [0.85, 0.55, 0.22];        // ambiance §2c plan 5
    of the nest to the brightness of its doorway, and those two want to move in
    opposite directions. Measured by the art direction (REPRISE §6). */
 const DIG_FACE_LIGHT = [1.15, 0.66, 0.24];
+/* The hall's own lamps, brighter than the gallery's were. Not a taste change:
+   the gallery was a bore of radius 5 and the hall is a room of radius 8.5
+   under a 13-unit dome, so the same radiance spread over roughly six times the
+   volume arrives at the floor as nothing. The first shot of the finished hall
+   had a lit ceiling and a black floor, which is exactly that arithmetic. */
+const HALL_LAMP_LINK = [1.20, 0.72, 0.30];
+const HALL_LAMP_MID = [1.55, 0.95, 0.42];
+const HALL_LAMP_FAR = [1.35, 0.78, 0.30];
 /* Three lamps down the bore rather than one at the end. One lamp with the
    1/(1 + 0.017 d^2) falloff this rig uses is at 0.027 of its value 46 units
    away, which is the whole of the gallery in darkness and a bright disc at
@@ -226,9 +242,15 @@ function chooseHeading(x, z) {
 function buildShell(x, z, seed) {
   const mouthY = lawnY(x, z);
   const e = 6;
+  /* Clamped tighter than it used to be (0.35). The sill carries the meadow's
+     own gradient so the threshold is flush, but that gradient is added ON TOP
+     of the descent's slope inside SILL_RUN, and at 0.35 it was spending a
+     quarter of the whole slope budget without appearing in it — 0.626
+     measured against a 0.46 design line. The sill only has to LEAVE flush; it
+     does not have to match the meadow's steepness all the way down. */
   const grad = [
-    clamp((lawnY(x + e, z) - lawnY(x - e, z)) / (2 * e), -0.35, 0.35),
-    clamp((lawnY(x, z + e) - lawnY(x, z - e)) / (2 * e), -0.35, 0.35),
+    clamp((lawnY(x + e, z) - lawnY(x - e, z)) / (2 * e), -0.18, 0.18),
+    clamp((lawnY(x, z + e) - lawnY(x, z - e)) / (2 * e), -0.18, 0.18),
   ];
   const head = chooseHeading(x, z);
   const ex = makeExcavation({ x, z }, { y: mouthY, gx: grad[0], gz: grad[1] }, head, seed);
@@ -589,6 +611,13 @@ export function foundNest(x, z) {
      the mouth now that the descent is open for its whole length: at the mouth
      it would be a lamp in broad daylight. The warm one is the entrance seen
      from the lawn, the only warm point on an otherwise cold map. */
+  /* The face she will be looking at when she gets to the bottom. Placed at
+     founding rather than when the first fouisseuse hatches, because it is what
+     the descent is FOR: the porter asked to arrive at the bottom in front of
+     earth to be dug, and a bottom with nothing in it until a caste exists is
+     the room he already has. */
+  placeFirstFace(shell.ex);
+
   const foot = rampCentre(shell.ex, shell.ex.descend);
   const coldLight = addLocalLight([foot.x, shell.floorY + 6, foot.z], COLD_SHAFT_LIGHT);
   const warmLight = addLocalLight([x, shell.mouthY - 2.5, z], WARM_MOUTH_LIGHT);
@@ -649,134 +678,263 @@ export function descentPath() {
   return excavationDescentPath();
 }
 
-/* ---- the first gallery (#39) --------------------------------------------
-   A tunnel driven horizontally out of the chamber, revealed in one piece when
-   the diggers finish. design/castes-et-micro-macro.md 1 settles that it
-   appears at once rather than growing: a gallery that advances by the metre
-   costs a rebuild every frame and reads as nothing at ant scale, where a gauge
-   filling and then a mouth opening reads immediately.
+/* ---- digging: faces, tunnels and rooms (#51, #52) ------------------------
 
-   It runs level, not down. The shaft above it is already as steep as a
-   ground-following controller can survive (that is why the laying descent is
-   scripted at all, PROGRESS.md defect 7), and #40 has to make this one
-   walkable — so the one piece of geometry added here is the one piece that
-   does not make that problem worse.
+   The round-13 gallery was a 46-unit tube that appeared in one piece when a
+   gauge filled. It is gone, and what replaces it is the porter's own
+   description: the queen arrives at the bottom facing earth to be dug, lays
+   fouisseuses, they work at that face behind a circular gauge, and what
+   appears is a small ROOM — a hall — from which further tunnels are dug.
 
-   The direction is derived from the nest's own axis rather than chosen: the
-   shaft leans one way, and driving the gallery along that lean is what makes
-   the pair read as one excavation instead of two holes that happen to meet. */
-const GALLERY_R = 5.0;      // wider than the shaft: this one is meant to be walked
-const GALLERY_LEN = 46;
-const GALLERY_SEGS = 26;
-const GALLERY_ANG = 20;
+   Why a room rather than a longer tunnel. A tunnel that ends is a dead end
+   dressed as progress; a room is somewhere to put the next choice. The porter
+   asked for a small hall "pour commencer a creuser des tunnels", which is a
+   hub, and a hub is the only shape that makes the second dig a decision
+   rather than a repetition of the first.
 
-function buildGallery(n, seed) {
-  const c = n.chamber;
-  // heading: the horizontal component of the shaft's own lean, normalised
-  const dx = n.axis.dir[0], dz = n.axis.dir[2];
-  const hl = Math.hypot(dx, dz) || 1;
-  const hx = dx / hl, hz = dz / hl;
-  // start inside the chamber wall so the two solids overlap and there is no
-  // seam to see through
-  const sx = c.x + hx * (ROOM_R * 0.55), sz = c.z + hz * (ROOM_R * 0.55);
-  const px = -hz, pz = hx;          // horizontal perpendicular
+   design/castes-et-micro-macro.md §1 still governs the reveal: it appears at
+   once when the gauge fills, not metre by metre. A room that grows costs a
+   rebuild every frame and reads as nothing at ant scale.
 
+   THE WORLD DECIDES WHAT OPENS. player/** pays ant-seconds into
+   advanceDigFace() and reads back `opened`; every decision about where the
+   room goes and how big it is lives here (contract §7). That is what lets a
+   harness dig the whole nest with no ant alive anywhere. */
+
+/** Corridor half-width. Derived from the queen, never typed in: the round-13
+ *  gallery published 3.1 of walkable half-width for a body of radius 3.3 and
+ *  nobody noticed for two rounds, because the harness followed the centre line
+ *  where there is nothing to touch (#49). A full body of clearance each side. */
+const LINK_HW = QUEEN_R * 2.0;
+/** Small on purpose: the porter's standing note is that the goal is not a big
+ *  nest. Two queen-lengths across, against the founding chamber's three. */
+const HALL_R = 8.5;
+/** How far the hall stands off the chamber wall. */
+const HALL_GAP = 14;
+/** Ant-seconds for the first hall. One fouisseuse is a real wait, three feel
+ *  like a crew — the sizing DIG_SECONDS had, kept so the design promise "two
+ *  dig twice as fast" stays legible at the gauge. */
+const FIRST_FACE_SECONDS = 75;
+
+const ANG_TUNNEL = 16;
+
+/**
+ * Which way the queen is looking when she reaches the bottom.
+ *
+ * Taken from the descent path's own last segment rather than from the mouth
+ * bearing: the cut curves, so the direction she arrives travelling is not the
+ * one she set off in, and a face placed by the latter sits behind her
+ * shoulder. This is the whole of "arriver simplement en bas devant de la terre
+ * a creuser" (#48) — a direction, not a cutscene.
+ */
+function arrivalHeading(ex) {
+  const path = excavationDescentPath(4);
+  if (path && path.length >= 2) {
+    const a = path[path.length - 2], b = path[path.length - 1];
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const l = Math.hypot(dx, dz);
+    if (l > 1e-3) return [dx / l, dz / l];
+  }
+  const c = ex.chamber;
+  const dx = c.x - ex.mouth.x, dz = c.z - ex.mouth.z;
+  const l = Math.hypot(dx, dz) || 1;
+  return [dx / l, dz / l];
+}
+
+/** The first face: on the chamber wall, dead ahead of the arriving queen. */
+function placeFirstFace(ex) {
+  const [hx, hz] = arrivalHeading(ex);
+  const c = ex.chamber;
+  return addDigFace('face-hall',
+    c.x + hx * c.r * 0.92, c.z + hz * c.r * 0.92,
+    -hx, -hz, FIRST_FACE_SECONDS, {
+      kind: 'room',
+      id: 'hall',
+      x: c.x + hx * (c.r + HALL_GAP + HALL_R),
+      z: c.z + hz * (c.r + HALL_GAP + HALL_R),
+      r: HALL_R,
+      from: { x: c.x, z: c.z },
+    });
+}
+
+/* ---- meshes ------------------------------------------------------------- */
+
+/** A level corridor: a tube of half-width `hw` with its floor flattened onto
+ *  the nest floor. Straight, because a meander is what let the round-13
+ *  footprint and its own mesh disagree by three and a half units — the
+ *  straight capsule claimed ground the bent tube did not cover, and she walked
+ *  out through the wall (#49). */
+function buildTunnelMesh(ex, L, seed) {
   const M = new MeshBuilder();
+  const segs = Math.max(4, Math.round(L.len / 3));
+  const px = -L.hz, pz = L.hx;
   const rows = [];
-  for (let i = 0; i <= GALLERY_SEGS; i++) {
-    const t = i / GALLERY_SEGS;
-    const u = t * GALLERY_LEN;
-    // a gentle meander so it does not read as a drainpipe
-    const bend = Math.sin(t * 2.4 + seed * 0.017) * 5.0 * t;
-    const cx = sx + hx * u + px * bend;
-    const cz = sz + hz * u + pz * bend;
-    // taper the far end shut: a tunnel that stops in a flat disc reads as
-    // unfinished, one that narrows reads as a face still being worked
-    const r = GALLERY_R * (1 - 0.45 * Math.pow(t, 3));
+  for (let i = 0; i <= segs; i++) {
+    const u = (i / segs) * L.len;
+    const cx = L.ax + L.hx * u, cz = L.az + L.hz * u;
     const row = [];
-    for (let a = 0; a < GALLERY_ANG; a++) {
-      const th = 2 * Math.PI * a / GALLERY_ANG;
-      const wob = 0.88 + 0.24 * vnoise(th * 1.7 + u * 0.09, u * 0.13 + seed);
-      const rr = r * wob;
-      const py = c.y + GALLERY_R * 0.55 + Math.sin(th) * rr;
+    for (let a = 0; a < ANG_TUNNEL; a++) {
+      const th = (2 * Math.PI * a) / ANG_TUNNEL;
+      const wob = wobbleAt(th, u * 0.2, seed);
+      const rr = L.hw * (0.92 + (wob - 0.84) * 0.5);
+      const y = ex.floorY + L.roof * 0.55 + Math.sin(th) * L.roof * 0.55;
       row.push(M.addVertex(
         cx + px * Math.cos(th) * rr,
-        Math.max(py, c.y + 0.15),
+        Math.max(y, chamberFloorAt(ex, cx, cz)),
         cz + pz * Math.cos(th) * rr,
-        /* Same recipe as the shaft's walls (buildShell above), so the two
-           read as one excavation: freshly turned earth, damper and darker
-           than the old weathered gallery. */
-        mixColor(C_WALL_B, C_WALL_A, clamp((wob - 0.84) / 0.34 + 0.45, 0, 1) * 0.8 + 0.10)
-          .lerp(C_SOIL_A, 0.22).multiplyScalar(0.86).toArray(),
+        digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.24).toArray(),
       ));
     }
     rows.push(row);
   }
-  for (let i = 0; i < GALLERY_SEGS; i++) {
-    for (let a = 0; a < GALLERY_ANG; a++) {
-      const b = (a + 1) % GALLERY_ANG;
+  for (let i = 0; i < segs; i++) {
+    for (let a = 0; a < ANG_TUNNEL; a++) {
+      const b = (a + 1) % ANG_TUNNEL;
       M.addQuad(rows[i][a], rows[i][b], rows[i + 1][b], rows[i + 1][a]);
     }
   }
-  return {
-    geometry: M.toBufferGeometry(),
-    end: { x: sx + hx * GALLERY_LEN, y: c.y, z: sz + hz * GALLERY_LEN },
-    heading: [hx, hz],
-    start: { x: sx, z: sz },
-  };
+  return M.toBufferGeometry();
 }
 
-/** Is there a gallery yet, and where does it run? null before it is dug. */
-export function getGallery() { return nest && nest.gallery ? nest.gallery : null; }
+/** A room: floor disc, straight walls, dome. Openings are left wherever a link
+ *  arrives, tested on the quad's own midpoint against the same membership the
+ *  height field uses — so the hole in the mesh is the hole in the floor, not
+ *  an approximation of it. */
+function buildRoomMesh(ex, room, seed, openAt) {
+  const M = new MeshBuilder();
+  const ANG = 26, RINGS = 4, wallRings = 3, domeRings = 4;
+  const ringR = (i) => (i <= wallRings ? room.r : room.r * Math.cos(((i - wallRings) / domeRings) * (Math.PI / 2)));
+  const ringY = (i) => (i <= wallRings
+    ? ex.floorY + (room.wall * i) / wallRings
+    : ex.floorY + room.wall + (room.roof - room.wall) * Math.sin(((i - wallRings) / domeRings) * (Math.PI / 2)));
 
-/**
- * Open the first gallery. Idempotent — calling it twice is a no-op rather
- * than a second tunnel, because the caller is a progress bar and progress
- * bars overshoot.
- */
-export function digGallery() {
-  if (!nest) return { ok: false, reason: 'no-nest' };
-  if (nest.gallery) return { ok: true, already: true };
+  const floorRows = [];
+  for (let ri = 0; ri <= RINGS; ri++) {
+    const rr = (ri / RINGS) * room.r;
+    const row = [];
+    for (let a = 0; a < ANG; a++) {
+      const th = (2 * Math.PI * a) / ANG;
+      const fx = room.x + Math.cos(th) * rr, fz = room.z + Math.sin(th) * rr;
+      row.push(M.addVertex(fx, chamberFloorAt(ex, fx, fz), fz,
+        digColour(clamp((wobbleAt(th, ri, seed) - 0.84) / 0.34 + 0.45, 0, 1), 0.26).toArray()));
+    }
+    floorRows.push(row);
+  }
+  for (let ri = 0; ri < RINGS; ri++) {
+    for (let a = 0; a < ANG; a++) {
+      const b = (a + 1) % ANG;
+      M.addQuad(floorRows[ri][a], floorRows[ri][b], floorRows[ri + 1][b], floorRows[ri + 1][a]);
+    }
+  }
 
-  const seed = Math.floor(Math.abs(nest.x) * 73 + Math.abs(nest.z) * 149) % 9973;
-  const g = buildGallery(nest, seed);
-  const mesh = new THREE.Mesh(g.geometry, applyNestShading(texturedSurfaceMaterial({
+  const rows = [];
+  for (let i = 0; i <= wallRings + domeRings; i++) {
+    const rr = ringR(i), yy = ringY(i);
+    const row = [];
+    for (let a = 0; a < ANG; a++) {
+      const th = (2 * Math.PI * a) / ANG;
+      const wob = wobbleAt(th, i, seed);
+      const r2 = rr * (i <= wallRings ? 0.94 + (wob - 0.84) * 0.4 : 1);
+      const vx = room.x + Math.cos(th) * r2, vz = room.z + Math.sin(th) * r2;
+      row.push({
+        i: M.addVertex(vx, yy, vz, digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.20).toArray()),
+        x: vx, z: vz, y: yy,
+      });
+    }
+    rows.push(row);
+  }
+  const doorway = (p, q) => p.y - ex.floorY <= room.wall + 0.1
+    && openAt((p.x + q.x) * 0.5, (p.z + q.z) * 0.5);
+  for (let i = 0; i < rows.length - 1; i++) {
+    for (let a = 0; a < ANG; a++) {
+      const b = (a + 1) % ANG;
+      const p = rows[i][a], q = rows[i][b];
+      if (doorway(p, q) || doorway(rows[i + 1][a], rows[i + 1][b])) continue;
+      M.addQuad(p.i, q.i, rows[i + 1][b].i, rows[i + 1][a].i);
+    }
+  }
+  const top = M.addVertex(room.x, ex.floorY + room.roof, room.z, digColour(0.5, 0.24).toArray());
+  const last = rows[rows.length - 1];
+  for (let a = 0; a < ANG; a++) M.addTri(top, last[(a + 1) % ANG].i, last[a].i);
+  return M.toBufferGeometry();
+}
+
+function nestMaterial() {
+  return applyNestShading(texturedSurfaceMaterial({
     map: dirtAlbedo(), strength: 0.62, side: THREE.DoubleSide,
-  })));
-  mesh.name = 'first-gallery';
+  }));
+}
+
+/** Build what a finished face revealed, light it, and return the room. */
+function openRoom(spec) {
+  const ex = getExcavation();
+  if (!ex || !nest) return null;
+  const seed = (ex.seed + 613) % 9973;
+
+  const dx = spec.x - spec.from.x, dz = spec.z - spec.from.z;
+  const l = Math.hypot(dx, dz) || 1;
+  const hx = dx / l, hz = dz / l;
+
+  const room = addRoom(spec.id, spec.x, spec.z, spec.r);
+  /* Both ends are sunk INTO the solids they join, past the wall wobble, so
+     there is no seam to see through where three meshes meet. */
+  const link = addLink(`link-${spec.id}`,
+    { x: spec.from.x + hx * (nest.chamber.r * 0.80), z: spec.from.z + hz * (nest.chamber.r * 0.80) },
+    { x: spec.x - hx * (spec.r * 0.80), z: spec.z - hz * (spec.r * 0.80) },
+    LINK_HW, CHAMBER_WALL);
+
+  const tunnel = new THREE.Mesh(buildTunnelMesh(ex, link, seed), nestMaterial());
+  tunnel.name = `nest-${link.id}`;
+  tunnel.receiveShadow = true;
+  nest.group.add(tunnel);
+
+  const inThisLink = (x, z) => {
+    const s = (x - link.ax) * link.hx + (z - link.az) * link.hz;
+    if (s < -link.hw || s > link.len + link.hw) return false;
+    return Math.abs(-(x - link.ax) * link.hz + (z - link.az) * link.hx) <= link.hw;
+  };
+  const mesh = new THREE.Mesh(buildRoomMesh(ex, room, seed, inThisLink), nestMaterial());
+  mesh.name = `nest-room-${room.id}`;
   mesh.receiveShadow = true;
   nest.group.add(mesh);
 
-  /* Lit along its length, not just at the end — see GALLERY_LAMPS. Hung just
-     under the crown (the bore's own radius at the walkable part) so the light
-     grazes the roof and the floor reads as a floor. */
-  const [hx, hz] = g.heading;
-  for (const lamp of GALLERY_LAMPS) {
-    addLocalLight([
-      g.start.x + hx * GALLERY_LEN * lamp.t,
-      g.end.y + GALLERY_R * 0.55 + 1.5,
-      g.start.z + hz * GALLERY_LEN * lamp.t,
-    ], lamp.c);
-  }
+  /* Lit along the corridor AND in the room, never one lamp at the far end:
+     with this rig's 1/(1 + 0.017 d^2) falloff a single lamp is at 0.03 of its
+     value forty units away, which is what made the round-13 gallery a bright
+     disc in forty units of black. */
+  addLocalLight([link.ax + link.hx * link.len * 0.45, ex.floorY + 4.5, link.az + link.hz * link.len * 0.45], HALL_LAMP_LINK);
+  addLocalLight([room.x, ex.floorY + 5.5, room.z], HALL_LAMP_MID);
+  addLocalLight([room.x + hx * room.r * 0.55, ex.floorY + 4.0, room.z + hz * room.r * 0.55], HALL_LAMP_FAR);
 
-  nest.gallery = { ...g, mesh };
+  openTheMeadow();
+  return room;
+}
 
-  /* The gallery is level and its floor is the chamber's, so it joins the
-     height field as a straight corridor. Only the part before the taper is
-     claimed: past that the bore narrows below a queen's width, and a footprint
-     that says "walkable" where the mesh says "face still being worked" is the
-     kind of quiet disagreement this file keeps trying to avoid. */
+/** The faces worth walking to (contract §7). */
+export function digFaces() { return excavationDigFaces(); }
+
+/** Everything dug so far, by id — for a HUD or a harness that wants to name
+ *  where the queen is standing without re-deriving the plan. */
+export function dugRooms() {
   const ex = getExcavation();
-  if (ex) {
-    ex.gallery = {
-      x: g.start.x, z: g.start.z,
-      hx: g.heading[0], hz: g.heading[1],
-      len: GALLERY_LEN * 0.72, hw: GALLERY_R * 0.62,
-    };
-    ex.galleryRoof = GALLERY_R * 1.35;
-    openTheMeadow();
+  return ex ? ex.rooms.map((r) => ({ id: r.id, x: r.x, z: r.z, r: r.r })) : [];
+}
+
+/**
+ * Pay ant-seconds into one face. Returns what advanceDigFace() returns, with
+ * `opened` replaced by the room that was actually built.
+ *
+ * Idempotent past completion: the caller is a progress gauge, and gauges
+ * overshoot — the same reason digGallery() was written idempotent in round 13.
+ */
+export function payDigFace(id, antSeconds) {
+  const r = advanceDigFace(id, antSeconds);
+  if (!r) return null;
+  if (r.opened && r.opened.kind === 'room') {
+    const room = openRoom(r.opened);
+    return { ...r, opened: room ? { kind: 'room', id: room.id, x: room.x, z: room.z, r: room.r } : null };
   }
-  return { ok: true };
+  return { ...r, opened: null };
 }
 
 /**

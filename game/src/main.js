@@ -6,7 +6,7 @@ import {
   nestOrigin, canFoundAt, foundNest, populateNest, sealNest, getFoundedNest,
   pitFactorAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
   MUSHROOMS, ROCKS, TERRAIN_BOUNDS,
-  digGallery, getGallery, nestFootprint, descentPath, groundSlope,
+  digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundSlope,
 } from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
@@ -154,7 +154,7 @@ window.__world6 = {
      harness that never presses a key: scripts/verify-descent.mjs digs,
      walks descentPath() and ray-casts the result. THREE itself is exposed
      for that ray-cast; there is no second copy of the library to import. */
-  digGallery, getGallery, nestFootprint, descentPath, groundY, groundSlope, THREE,
+  digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundY, groundSlope, THREE,
 };
 
 renderer.setResizeCallback((aspect) => {
@@ -181,6 +181,8 @@ function frame() {
   // then the player (writes this frame's antState/camera for next frame).
   world.update(dt, t, camera);
   player.update(dt, t);
+  // the camera is final only now, and the dig ring is projected against it
+  player.syncDigDial(dt);
 
   applyEnvironment();
   renderer.render(scene, camera);
@@ -303,6 +305,7 @@ window.__renderView = (eye, target, elapsed = 0) => {
   camera.lookAt(target[0], target[1], target[2]);
   camera.updateMatrixWorld();
   world.update(1 / 60, elapsed, camera);
+  if (player.syncDigDial) player.syncDigDial(0);
   applyEnvironment();
   renderer.render(scene, camera);
 };

@@ -1,4 +1,4 @@
-import { groundY, RESOURCE_NODES, harvestNode, nestOrigin, digGallery, getGallery } from '../world/index.js';
+import { groundY, RESOURCE_NODES, harvestNode, nestOrigin, digFaces, payDigFace } from '../world/index.js';
 import { WORKER, DIGGER, profileById, strideOf, collideRadius } from './avatar.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
 import { dampAngle } from './mathUtil.js';
@@ -41,8 +41,17 @@ export const WORKER_CARRY = 1;       // units per trip
    letting the queen choose what she lays is that the choice shows. Sized so a
    single digger is a long wait and three feel like a crew, which is what makes
    laying a second one a real decision rather than an obvious one. */
+/* Kept as the pace reference for the HUD; the authority on how long a given
+   face takes is now the world, which carries `needed` on the face itself
+   (contract §7). */
 export const DIG_SECONDS = 75;
-const DIG_SITE_R = 10;               // how close to the mouth counts as at work
+/* How close to a face counts as working it. A body length: close enough that
+   the crew reads as being AT the wall, loose enough that three of them fit
+   without shoving each other off the gauge. */
+const DIG_SITE_R = 7;
+/* Where a fouisseuse stands: off the wall along the face's own outward
+   normal, so they line up facing it instead of piling onto its centre. */
+const FACE_STANDOFF = 5.0;
 
 const ARRIVE = 6;                    // how close counts as "there"
 const REPATH_EVERY = 0.6;            // seconds between target re-picks
@@ -71,9 +80,10 @@ export function createColony() {
     eggs: [],          // [{ id, age, profileId }]
     workers: [],       // see spawnWorker()
     delivered: 0,      // units the colony has brought home on its own
-    dig: 0,            // digger-seconds worked on the first gallery
-    digging: 0,        // how many diggers were at the face this frame
-    galleryOpen: false,
+    digging: 0,        // how many fouisseuses were at a face this frame
+    faceWork: new Map(),  // face id -> how many are working it this frame
+    opened: [],        // ids of the rooms the colony has dug open
+    lastOpened: null,  // the most recent one, for the HUD to announce
   };
 
   function spawnWorker(x, z, profileId = 'worker') {
@@ -95,26 +105,41 @@ export function createColony() {
 
   /** A clutch is laid, of one caste. The caste is chosen at laying time
    *  (#38) and carried on the egg, so an egg already knows what it will
-   *  become — which is what lets the HUD say "2 œufs de creuseuse" rather
+   *  become — which is what lets the HUD say "2 œufs de fouisseuse" rather
    *  than "2 œufs" and a surprise. */
   function addEggs(count, profileId = 'worker') {
     for (let i = 0; i < count; i++) state.eggs.push({ id: _nextId++, age: 0, profileId });
   }
 
-  /* A digger walks to the nest mouth and stays there. Progress is counted in
-     digger-seconds by update(), not here, so two diggers at the face really do
-     advance the gauge twice as fast — the arithmetic is where the design
-     promise lives and it should be one line, not spread over the crew. */
+  /* A fouisseuse walks to the nearest open dig face and works it. Progress is
+     counted in ant-seconds by update(), not here, so two of them at the same
+     face really do advance the gauge twice as fast — the arithmetic is where
+     the design promise lives, and it belongs in one line rather than spread
+     over the crew.
+
+     She aims at a point a body off the wall along the face's own normal, not
+     at the face itself: aiming at the face packs the crew into one spot and
+     the second fouisseuse is invisible behind the first, which is exactly the
+     thing the gauge is supposed to make visible. */
   function stepDigger(w, dt) {
     const a = w.ant;
-    const home = nestOrigin();
-    const dx = home.x - a.x, dz = home.z - a.z;
+    const faces = digFaces();
+    let face = null, bestD = Infinity;
+    for (const f of faces) {
+      const d = Math.hypot(f.x - a.x, f.z - a.z);
+      if (d < bestD) { bestD = d; face = f; }
+    }
+    w.faceId = face ? face.id : null;
+    if (!face) { w.atFace = false; a.speed = 0; return; }
+
+    const stand = { x: face.x + face.nx * FACE_STANDOFF, z: face.z + face.nz * FACE_STANDOFF };
+    const dx = stand.x - a.x, dz = stand.z - a.z;
     const d = Math.hypot(dx, dz);
 
     if (d <= DIG_SITE_R) {
       a.speed = 0;
-      // face the hole and work: yaw toward it so the crew reads as a crew
-      a.yaw = dampAngle(a.yaw, Math.atan2(dx, dz), 4, dt);
+      // face the wall and work: yaw at the face, so the crew reads as a crew
+      a.yaw = dampAngle(a.yaw, Math.atan2(face.x - a.x, face.z - a.z), 4, dt);
       w.atFace = true;
     } else {
       w.atFace = false;
@@ -213,26 +238,58 @@ export function createColony() {
       }
     }
 
-    /* The gauge. Digger-seconds, so the crew size is the rate — and the
-       gallery opens exactly once: digGallery() is idempotent because a
-       progress bar overshoots by definition. */
-    if (!state.galleryOpen && state.digging > 0) {
-      const need = paceTime(DIG_SECONDS);
-      state.dig = Math.min(need, state.dig + state.digging * dt);
-      if (state.dig >= need) {
-        const r = digGallery();
-        if (r.ok) state.galleryOpen = true;
+    /* The gauge, per face. Ant-seconds, so the crew size is the rate. What
+       the face opens is the world's decision and payDigFace() is idempotent,
+       because the caller here is a progress bar and progress bars overshoot.
+
+       Grouped by face rather than summed, so that when there are several
+       faces (the hall's own walls, #52) two fouisseuses on different walls do
+       not add up into one gauge that finishes both. */
+    state.faceWork.clear();
+    for (const w of state.workers) {
+      if (w.profileId !== 'digger' || !w.atFace || !w.faceId) continue;
+      state.faceWork.set(w.faceId, (state.faceWork.get(w.faceId) || 0) + 1);
+    }
+    for (const [id, crew] of state.faceWork) {
+      const r = payDigFace(id, crew * dt * paceDigMultiplier());
+      if (r && r.opened) {
+        state.opened.push(r.opened.id);
+        state.lastOpened = r.opened;
       }
     }
-    if (!state.galleryOpen && getGallery()) state.galleryOpen = true;
   }
 
-  /** 0..1 while the first gallery is being dug, null when there is nothing to
-   *  show — before any digger exists, or once it is open. */
+  /* The test pace divides waits by 8 (core/pace.js). A face carries its cost
+     in ant-seconds, so the pace has to be applied to the RATE rather than to
+     the requirement — paceTime() shrinks a duration, and there is no duration
+     here to shrink. */
+  const paceDigMultiplier = () => DIG_SECONDS / Math.max(1e-6, paceTime(DIG_SECONDS));
+
+  /**
+   * What the circular gauge should draw, or null when there is nothing to
+   * show. Carries the face's world position, because the gauge is drawn AT the
+   * face (#51) rather than in a corner of the screen — that is the whole point
+   * of the change: the player has to know where to look.
+   */
   function digProgress() {
-    if (state.galleryOpen) return null;
-    if (!state.dig && !state.digging) return null;
-    return state.dig / paceTime(DIG_SECONDS);
+    const faces = digFaces();
+    if (!faces.length) return null;
+    /* The one being worked, else the nearest unfinished one — so the gauge
+       appears as soon as there is earth to dig, greyed at zero, and the player
+       learns where the work happens before laying anything. */
+    let best = null;
+    for (const f of faces) {
+      const crew = state.faceWork.get(f.id) || 0;
+      const score = crew * 1000 + f.worked;
+      if (!best || score > best.score) best = { f, crew, score };
+    }
+    if (!best) return null;
+    const { f, crew } = best;
+    return {
+      id: f.id, x: f.x, y: f.y, z: f.z,
+      progress: f.needed > 0 ? f.worked / f.needed : 0,
+      diggers: crew,
+    };
   }
 
   /** One line for the HUD, or null while there is nothing to say. */
@@ -242,7 +299,7 @@ export function createColony() {
     const foragers = state.workers.filter((w) => w.profileId !== 'digger').length;
     const diggers = state.workers.length - foragers;
     if (foragers) parts.push(`${foragers} ouvrière${foragers > 1 ? 's' : ''}`);
-    if (diggers) parts.push(`${diggers} creuseuse${diggers > 1 ? 's' : ''}`);
+    if (diggers) parts.push(`${diggers} fouisseuse${diggers > 1 ? 's' : ''}`);
     if (state.eggs.length) parts.push(`${state.eggs.length} œuf${state.eggs.length > 1 ? 's' : ''}`);
     if (state.delivered) parts.push(`${state.delivered} rapporté${state.delivered > 1 ? 's' : ''}`);
     return `Colonie : ${parts.join(' · ')}`;
@@ -253,8 +310,7 @@ export function createColony() {
     return {
       delivered: state.delivered,
       eggs: state.eggs.map((e) => ({ id: e.id, age: e.age })),
-      dig: state.dig,
-      galleryOpen: state.galleryOpen,
+      opened: state.opened.slice(),
       workers: state.workers.map((w) => ({
         id: w.id, profileId: w.profileId, carrying: w.carrying,
         x: w.ant.x, z: w.ant.z, yaw: w.ant.yaw,

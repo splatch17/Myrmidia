@@ -66,7 +66,12 @@ const SITE = [70, 95];
    radius and ~24 long (player/avatar.js); 0.45 is tan(24 deg), which over her
    own body length is a rise of about one and a half body radii — steep to
    look at, unremarkable to walk. The plumb shaft this replaces is 4.4. */
-const MAX_SLOPE = 0.45;
+/* Raised with RAMP_SLOPE for #48 (0.38 -> 0.50). This threshold is a DESIGN
+   line — "does this read and walk as a ramp" — and the porter moved it by
+   asking for a shorter descent. The threshold that is not a design line is
+   STEP_MAX below: that one is about the controller having no notion of
+   falling, it is unchanged, and it is the one that would actually break. */
+const MAX_SLOPE = 0.58;
 
 /* The largest jump in groundY() allowed over a 0.25-unit walk step. Half a
    body radius: bigger than that and she visibly snaps rather than steps. */
@@ -125,13 +130,17 @@ async function main() {
     const verdict = W.canFoundAt(site[0], site[1]);
     if (!verdict.ok) return { verdict };
     const r = W.foundNest(site[0], site[1]);
-    W.digGallery();
+    /* Dig the hall out too, in one payment: the harness is proving the
+       DESCENT, and a nest with its first room still shut is only half the
+       shape the walk has to cross. payDigFace is idempotent and the world
+       does the opening, so no ant has to exist for this (contract §7). */
+    for (const f of W.digFaces()) W.payDigFace(f.id, f.needed);
     W.populateNest(2);
     const n = W.getFoundedNest();
     return {
       verdict: r,
       nest: { x: n.x, z: n.z, floorY: n.floorY, mouth: n.mouth, chamber: n.chamber },
-      gallery: W.getGallery() ? { start: W.getGallery().start, end: W.getGallery().end } : null,
+      rooms: W.dugRooms(),
     };
   }, SITE);
   console.log('dig:', JSON.stringify(dug.verdict), dug.nest ? `floorY=${dug.nest.floorY.toFixed(2)}` : '');

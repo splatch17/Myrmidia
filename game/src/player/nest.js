@@ -177,6 +177,27 @@ export function insideNest(x, z) {
  * the exact duplication design/api-monde-gameplay.md was written to stop. It
  * also means this works unchanged against the real footprint and the stand-in.
  */
+export function boundaryNormal(fp, bx, bz, probe = 1.2) {
+  /* Estimated by sampling contains() on a ring, not by asking the world for a
+     wall normal — for the same reason boundaryBetween() bisects: any other way
+     means a second copy of the nest's geometry inside player/**, which is the
+     duplication design/api-monde-gameplay.md exists to stop. Sixteen samples
+     is plenty for a wall whose curvature is measured in tens of units.
+
+     The normal points OUT of the excavation: it is the average direction of
+     the samples that are outside. */
+  let nx = 0, nz = 0, out = 0;
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    const dx = Math.cos(a), dz = Math.sin(a);
+    if (!fp.contains(bx + dx * probe, bz + dz * probe)) { nx += dx; nz += dz; out++; }
+  }
+  if (!out) return null;                       // nothing outside: not an edge
+  const l = Math.hypot(nx, nz);
+  if (l < 1e-4) return null;                   // a slot, not a wall: no slide
+  return [nx / l, nz / l];
+}
+
 export function boundaryBetween(fp, ix, iz, ox, oz, steps = 10) {
   let ax = ix, az = iz, bx = ox, bz = oz;
   for (let i = 0; i < steps; i++) {
@@ -239,20 +260,20 @@ export function nestInfo(ant) {
   if (!fp) return null;
   const L = fp.landmarks;
   const entry = nestEntry();
-  const g = L.gallery;
+  /* Every room dug so far, the founding chamber included, straight from the
+     world's own list (contract §7). It replaces the single `gallery` field:
+     the hall is the second room and there will be more, and a field per room
+     is the shape the excavation was just refactored out of. */
+  const rooms = typeof W.dugRooms === 'function' ? W.dugRooms() : [];
   return {
     approx: fp.approx,
     mouth: L.mouth,
     chamber: L.chamber,
     entry,
-    gallery: g ? {
-      ...g,
-      // a point the harness (and, later, a worker) can be sent to that is
-      // properly *in* the tunnel rather than in its mouth. Found by asking
-      // the footprint rather than by trusting the straight line from start to
-      // end: the tunnel meanders, so the far half of that line is in rock.
-      walk: deepestWalkable(fp, g),
-    } : null,
+    rooms,
+    /* The most recently dug room, which is the one a HUD or a harness wants to
+       talk about — "the thing that just opened". */
+    latestRoom: rooms.length > 1 ? rooms[rooms.length - 1] : null,
     inside: ant ? fp.contains(ant.x, ant.z) : false,
     floorY: ant ? fp.floorY(ant.x, ant.z) : null,
     headroom: ant ? fp.headroom(ant.x, ant.z) : null,

@@ -155,13 +155,17 @@ async function main() {
 
       if (Math.hypot(a.x - lastPos.x, a.z - lastPos.z) > 0.3) { lastMoveT = Date.now(); lastPos = a; }
       else if (Date.now() - lastMoveT > 2500) {
-        if (unsticks < 6) {
+        if (unsticks < 12) {
           unsticks++;
           await setKeys(new Set(['KeyS'])); await page.waitForTimeout(500);
           await releaseAll();
           detourSign = unsticks % 2 ? 1 : -1;
-          detourAngle = 0.8 + 0.35 * Math.floor((unsticks - 1) / 2); // 0.8, 1.15, 1.5 rad
-          detourUntil = Date.now() + 2200;
+          /* Widening past a right angle on purpose. A stem thicket is not one
+             obstacle to step round, it is a wall to walk ALONG until it ends,
+             and every detour capped under 90 degrees still drives into it at a
+             shallower angle. Cycles 0.9 / 1.25 / 1.6 / 1.95 rad. */
+          detourAngle = 0.9 + 0.35 * Math.floor((unsticks - 1) / 2);
+          detourUntil = Date.now() + 3000;
           lastMoveT = Date.now(); lastPos = await readAnt();
           continue;
         }
@@ -179,12 +183,12 @@ async function main() {
   /* ---- 0. the hooks this run needs -------------------------------------- */
   const hooks = await page.evaluate(() => ({
     nest: typeof window.__nest === 'function',
-    dig: typeof window.__digGallery === 'function',
+    dig: typeof window.__payDig === 'function',
     lay: typeof window.__beginLaying === 'function',
   }));
   console.log('\n=== hooks ===', JSON.stringify(hooks));
   check(hooks.nest, 'window.__nest() exists (the controller knows whether she is underground)');
-  check(hooks.dig, 'window.__digGallery() exists');
+  check(hooks.dig, 'window.__payDig() exists');
   if (!hooks.nest || !hooks.dig) {
     console.log('\nmissing hooks — nothing further can be driven; stopping here.');
     await shot('00-no-hooks');
@@ -246,13 +250,22 @@ async function main() {
 
   const founded = await page.evaluate(([x, z]) => {
     const r = window.__foundNest(x, z);
-    const g = window.__digGallery();
-    return { found: r, gallery: g, nest: window.__nest(), path: window.__descentPath() };
+    const before = window.__faces();
+    /* Pay the first face out in one go. The colony doing it with real
+       fouisseuses is a different proof (the gauge, #51); what this run is
+       about is walking through the result, and hatching a crew here would add
+       two minutes to a test that is not about them. payDigFace is idempotent
+       and the WORLD opens the room (contract §7), so this needs no ant. */
+    const paid = before.map((f) => window.__payDig(f.id, f.needed));
+    return { found: r, faces: before, paid, nest: window.__nest(), path: window.__descentPath() };
   }, [site.x, site.z]);
-  console.log('  foundNest ->', JSON.stringify(founded.found), ' digGallery ->', JSON.stringify(founded.gallery));
+  console.log('  foundNest ->', JSON.stringify(founded.found));
+  console.log('  faces at founding ->', JSON.stringify(founded.faces));
+  console.log('  paid ->', JSON.stringify(founded.paid));
   check(founded.found && founded.found.ok, 'the chamber was dug');
-  check(!!founded.nest && !!founded.nest.gallery, 'the first gallery is open');
-  if (!founded.nest || !founded.nest.gallery) { await browser.close(); server.kill(); process.exit(1); }
+  check(founded.faces.length > 0, 'founding leaves a dig face to work, in front of her');
+  check(!!founded.nest && founded.nest.rooms.length > 1, 'the hall is open');
+  if (!founded.nest || founded.nest.rooms.length < 2) { await browser.close(); server.kill(); process.exit(1); }
 
   const nest = founded.nest;
   console.log('  footprint:', nest.approx
@@ -261,7 +274,7 @@ async function main() {
   console.log('  mouth  ', JSON.stringify(nest.mouth));
   console.log('  chamber', JSON.stringify(nest.chamber));
   console.log('  entry  ', JSON.stringify(nest.entry));
-  console.log('  gallery', JSON.stringify(nest.gallery));
+  console.log('  rooms  ', JSON.stringify(nest.rooms));
   /* The cut curves (world/excavation.js RAMP_TURN), so "walk at the chamber"
      walks at a wall. A player follows the trench they can see; the harness has
      no eyes, so it follows the centre line the world publishes for exactly
@@ -329,22 +342,47 @@ async function main() {
   check(afterLay.inside === true, 'she is still standing in her chamber after laying, under the player\'s hand');
   await shot('03-clutch-laid-in-place');
 
-  /* ---- 5. THE SHOT: the queen in the first gallery ---------------------- */
-  console.log('\n=== into the gallery ===');
-  const g = nest.gallery;
-  const deep = await walkTo([g.walk.x, g.walk.z], { arriveDist: 6, timeoutMs: 60000, label: 'into the gallery' });
-  const inGallery = await readAnt();
-  console.log('  in the gallery:', JSON.stringify({
-    x: +inGallery.x.toFixed(1), z: +inGallery.z.toFixed(1),
-    y: +inGallery.y.toFixed(1), lawn: +inGallery.ground.toFixed(1), inside: inGallery.inside,
+  /* ---- 5. THE SHOT: the queen in the hall ------------------------------- */
+  console.log('\n=== into the hall ===');
+  const hall = nest.latestRoom;
+  console.log('  hall', JSON.stringify(hall));
+  const deep = await walkTo([hall.x, hall.z], { arriveDist: 5, timeoutMs: 60000, label: 'into the hall' });
+  const inHall = await readAnt();
+  console.log('  in the hall:', JSON.stringify({
+    x: +inHall.x.toFixed(1), z: +inHall.z.toFixed(1),
+    y: +inHall.y.toFixed(1), lawn: +inHall.ground.toFixed(1), inside: inHall.inside,
   }));
-  check(deep.ok, 'she walked from the chamber into the first gallery');
-  check(inGallery.inside === true, 'she is inside the nest footprint in the gallery');
-  check(inGallery.y < nest.mouth.y - 8, 'she is a nest\'s depth under the meadow in the gallery');
-  check(inGallery.roofed === true, 'there is soil over her head in the gallery');
-  const dFromChamber = Math.hypot(inGallery.x - nest.chamber.x, inGallery.z - nest.chamber.z);
-  check(dFromChamber > 12, `she is ${dFromChamber.toFixed(1)} from the chamber centre, i.e. properly down the gallery and not still in the room`);
+  check(deep.ok, 'she walked from the chamber through the tunnel into the hall');
+  check(inHall.inside === true, 'she is inside the nest footprint in the hall');
+  check(inHall.y < nest.mouth.y - 8, 'she is a nest depth under the meadow in the hall');
+  check(inHall.roofed === true, 'there is soil over her head in the hall');
+  const dFromChamber = Math.hypot(inHall.x - nest.chamber.x, inHall.z - nest.chamber.z);
+  check(dFromChamber > nest.chamber.r, 'she is ' + dFromChamber.toFixed(1) + ' from the chamber centre, i.e. properly out of the founding room');
   await shot('04-in-the-gallery');
+
+  /* ---- 5b. the walls let her past (#49) ---------------------------------
+     The thing this harness missed for two rounds: it followed the centre line,
+     where there is nothing to touch. The round-13 gallery published 3.1 of
+     walkable half-width for a body of radius 3.3 and no run ever noticed.
+
+     So: aim at a point well OUTSIDE the hall, on the far side, and hold the
+     keys. A wall that slides puts her against it and lets the walk continue
+     along it; a wall that stops dead leaves her where she first touched it.
+     Either way she must still be in the nest at the end — sliding is not a
+     way out. */
+  console.log('\n=== leaning on the walls ===');
+  const beforeLean = await readAnt();
+  const outward = [
+    hall.x + (hall.x - nest.chamber.x) * 3,
+    hall.z + (hall.z - nest.chamber.z) * 3,
+  ];
+  await walkTo(outward, { arriveDist: 4, timeoutMs: 18000, label: 'into the far wall' });
+  const leaned = await readAnt();
+  const slid = Math.hypot(leaned.x - beforeLean.x, leaned.z - beforeLean.z);
+  console.log('  she moved ' + slid.toFixed(1) + ' while pressed into the wall, inside=' + leaned.inside);
+  check(leaned.inside === true, 'leaning on a wall never pushes her out of the nest');
+  check(slid > 3, 'pressing into a wall still moves her along it (' + slid.toFixed(1) + ' units), it does not pin her');
+  await shot('04b-against-the-wall');
 
   /* ---- 6. and back out -------------------------------------------------- */
   console.log('\n=== back out ===');

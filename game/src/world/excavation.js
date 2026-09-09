@@ -55,10 +55,16 @@ export const QUEEN_R = 3.3;
 /** Half-width of the descending cut: she passes with a full body either side. */
 export const RAMP_HW = QUEEN_R * 2.0;          // 13.2 clear
 
-/** Steepest the floor is allowed to get, as tan(angle). 0.38 is 21 degrees:
- *  over the queen's own length that is a rise of nine units, which reads as a
- *  slope and walks as one. The shaft it replaces measured 4.4. */
-export const RAMP_SLOPE = 0.38;
+/** Steepest the floor is allowed to get, as tan(angle). 0.50 is 27 degrees.
+ *  The shaft this replaces measured 4.4, and the first ramp 0.38 — but 0.38
+ *  bought its gentleness with LENGTH, and length is what the porter called
+ *  complicated (#48): 73 units of winding trench to lose 18. What actually
+ *  constrains this number is that movement.js writes ant.y = groundY(x, z)
+ *  with no notion of falling, so what must stay small is the height change
+ *  per STEP, not the angle: at 0.50 a 0.25-unit step moves the floor by
+ *  0.125, two orders under the cliff threshold the harness enforces. 27
+ *  degrees is a ramp you walk down, not a slide. */
+export const RAMP_SLOPE = 0.46;
 
 /** How far the chamber floor sits below the lawn at the mouth. Fixed, and that
  *  is a decision with a history: the chamber ends up sixty units away, often
@@ -67,7 +73,7 @@ export const RAMP_SLOPE = 0.38;
  *  at a 127-unit trench. So the depth stays put and the SPOIL goes over the
  *  chamber instead (founding.js's mound), which is both what an ant does and
  *  the only surface mark the roofed ground gets. */
-export const NEST_DEPTH = 18;
+export const NEST_DEPTH = 13;
 
 /** Soil kept over the top of the dome, by mounding if the meadow is too low. */
 export const ROOF_COVER = 4.0;
@@ -79,10 +85,14 @@ export const CHAMBER_WALL = 9.5;
 export const CHAMBER_ROOF = 13;
 
 /** How much the cut turns on the way down, in radians. A straight trench
- *  reads as a canal; a curve reads as something dug, keeps the plan compact,
- *  and hides the chamber until you are in it. Kept under PI so the cut can
- *  never cross itself — a height field cannot express a spiral. */
-export const RAMP_TURN = 1.9;
+ *  reads as a canal; a curve reads as something dug and keeps the plan
+ *  compact. 1.9 rad also HID the chamber until you were in it, and that turned
+ *  out to be the wrong goal (#48): the porter wants to arrive at the bottom
+ *  facing something, so the bottom has to be visible from partway down. 0.85
+ *  is 49 degrees — still plainly excavated, no longer a labyrinth. Kept under
+ *  PI so the cut can never cross itself; a height field cannot express a
+ *  spiral. */
+export const RAMP_TURN = 0.85;
 
 /* The eased ends of the descent: the floor leaves the lawn and arrives at the
    chamber with zero slope, so there is no lip to trip on and no bowl at the
@@ -141,7 +151,7 @@ export function getExcavation() { return EX; }
 export function makeExcavation(mouth, lawn, head, seed) {
   const s = 1;                                   // turn sense; fixed, see a0
   const a0 = Math.atan2(-s * head[0], s * head[1]);
-  const chamberR = 14;
+  const chamberR = 11;
   const descend = descendFor(NEST_DEPTH);
   const R = descend / RAMP_TURN;
   const A = { x: mouth.x - R * Math.cos(a0), z: mouth.z - R * Math.sin(a0) };
@@ -152,6 +162,12 @@ export function makeExcavation(mouth, lawn, head, seed) {
   const len = descend + chamberR * 0.9;
   const end = pointOnArc(A, R, a0, s, len);
 
+  /* The founding chamber is rooms[0], not a field of its own. `chamber` below
+     is an alias onto the same object so nest.js, the camera and the harnesses
+     keep reading what they always read — the contract (§7) says outright that
+     it must not break for an internal refactor. */
+  const chamber = { id: 'chamber', x: end.x, z: end.z, r: chamberR, wall: CHAMBER_WALL, roof: CHAMBER_ROOF };
+
   return {
     seed,
     mouth: { x: mouth.x, z: mouth.z },
@@ -160,9 +176,48 @@ export function makeExcavation(mouth, lawn, head, seed) {
     arc: { ax: A.x, az: A.z, R, a0, s, len },
     hw: RAMP_HW,
     descend,
-    chamber: { x: end.x, z: end.z, r: chamberR },
-    gallery: null,
+    rooms: [chamber],
+    links: [],
+    faces: [],
+    chamber,
   };
+}
+
+/* ---- rooms, links and dig faces (contract §7) ---------------------------
+   A list, from the first room on, rather than a chamber field plus a gallery
+   field plus whatever the next one would have been called. The round-13
+   gallery was the second special case; the hall would have been the third,
+   and by then three files would have had an opinion about where the floor is.
+   Everything below is plain data: no THREE.js, no closure, serialisable. */
+
+/** Add a room and return it. `r` is the plan radius; the roof is domed. */
+export function addRoom(id, x, z, r, wall = CHAMBER_WALL, roof = CHAMBER_ROOF) {
+  const room = { id, x, z, r, wall, roof };
+  EX.rooms.push(room);
+  return room;
+}
+
+/** Add a straight level corridor between two points. */
+export function addLink(id, a, b, hw, roof = CHAMBER_WALL) {
+  const dx = b.x - a.x, dz = b.z - a.z;
+  const len = Math.hypot(dx, dz) || 1;
+  const link = { id, ax: a.x, az: a.z, hx: dx / len, hz: dz / len, len, hw, roof };
+  EX.links.push(link);
+  return link;
+}
+
+/** Where a point sits in a link's frame, or null if it is not in it. */
+function inLink(L, x, z) {
+  const s = (x - L.ax) * L.hx + (z - L.az) * L.hz;
+  if (s < -L.hw || s > L.len + L.hw) return null;
+  const lat = -(x - L.ax) * L.hz + (z - L.az) * L.hx;
+  return Math.abs(lat) <= L.hw ? { s, lat } : null;
+}
+
+/** The room containing (x, z), or null. */
+function roomAt(ex, x, z) {
+  for (const r of ex.rooms) if (Math.hypot(x - r.x, z - r.z) <= r.r) return r;
+  return null;
 }
 
 function pointOnArc(A, R, a0, s, u) {
@@ -239,16 +294,6 @@ export function inChamber(ex, x, z) {
   return Math.hypot(x - ex.chamber.x, z - ex.chamber.z) <= ex.chamber.r;
 }
 
-function inGallery(ex, x, z) {
-  const g = ex.gallery;
-  if (!g) return null;
-  const s = (x - g.x) * g.hx + (z - g.z) * g.hz;
-  if (s < 0 || s > g.len) return null;
-  const lat = -(x - g.x) * g.hz + (z - g.z) * g.hx;
-  if (Math.abs(lat) > g.hw) return null;
-  return { s, lat };
-}
-
 /**
  * THE function terrain.js's groundY() defers to: the floor of the excavation
  * at (x, z), or null if nothing has been dug there.
@@ -263,13 +308,14 @@ export function excavationFloorAt(x, z) {
   let y = null;
   const rp = rampParam(ex, x, z);
   if (rp) y = rampFloorAt(ex, x, z, rp.u, rp.lat);
-  if (inChamber(ex, x, z)) {
-    const cy = chamberFloorAt(ex, x, z);
-    y = y === null ? cy : Math.min(y, cy);
-  }
-  if (inGallery(ex, x, z)) {
-    const gy = chamberFloorAt(ex, x, z);
-    y = y === null ? gy : Math.min(y, gy);
+  /* Every room and every link is dug to the same level, so the whole nest
+     under the ramp is one flat floor and min() of it with itself is itself.
+     That is deliberate: a step between two dug pieces is a teleport in play,
+     not a stumble, and the cheapest way to have no step is to have no
+     difference. */
+  if (roomAt(ex, x, z) || ex.links.some((L) => inLink(L, x, z))) {
+    const fy = chamberFloorAt(ex, x, z);
+    y = y === null ? fy : Math.min(y, fy);
   }
   return y;
 }
@@ -291,14 +337,55 @@ export function excavationHeadroomAt(x, z) {
      what the mesh did before it was corrected, an open slot straight through
      the apex of the spoil heap. The chamber is roofed; the doorway is an arch
      through its wall, and CHAMBER_WALL is what makes that arch tall enough. */
-  if (inChamber(ex, x, z)) {
-    const d = Math.hypot(x - ex.chamber.x, z - ex.chamber.z) / ex.chamber.r;
-    return CHAMBER_WALL + (CHAMBER_ROOF - CHAMBER_WALL) * Math.pow(Math.sqrt(Math.max(0, 1 - d * d)), 0.7);
+  const room = roomAt(ex, x, z);
+  if (room) {
+    const d = Math.hypot(x - room.x, z - room.z) / room.r;
+    return room.wall + (room.roof - room.wall) * Math.pow(Math.sqrt(Math.max(0, 1 - d * d)), 0.7);
   }
-  if (inGallery(ex, x, z)) return ex.galleryRoof || CHAMBER_WALL;
+  for (const L of ex.links) if (inLink(L, x, z)) return L.roof;
   // open cut: nothing overhead at all
-  if (rampParam(ex, x, z)) return Infinity;
   return Infinity;
+}
+
+/* ---- dig faces ---------------------------------------------------------
+   A face is a place on a wall that can be worked, and what it opens when the
+   work is done. `opens` is a plain descriptor, not a callback: the state has
+   to survive being written to disk (castes-et-micro-macro.md §3.4), and a
+   closure does not. */
+
+/** Add a workable face. `nx, nz` points OUT of the wall, into the room. */
+export function addDigFace(id, x, z, nx, nz, needed, opens) {
+  const f = { id, x, z, y: EX.floorY, nx, nz, needed, worked: 0, done: false, opens };
+  EX.faces.push(f);
+  return f;
+}
+
+/** The faces still worth walking to: open, and not yet finished. */
+export function excavationDigFaces() {
+  if (!EX) return [];
+  return EX.faces.filter((f) => !f.done).map((f) => ({
+    id: f.id, x: f.x, y: f.y, z: f.z, nx: f.nx, nz: f.nz,
+    needed: f.needed, worked: f.worked, opens: f.opens.kind,
+  }));
+}
+
+/**
+ * Pay ant-seconds into one face. Idempotent past completion, because the
+ * caller is a progress gauge and gauges overshoot — the same reason
+ * digGallery() was written idempotent in round 13.
+ *
+ * Opening the thing the face reveals is the WORLD's job (§7): this returns
+ * `opened` and founding.js acts on it, so that a harness can dig the whole
+ * nest with no ant alive anywhere.
+ */
+export function advanceDigFace(id, antSeconds) {
+  const f = EX && EX.faces.find((x) => x.id === id);
+  if (!f) return null;
+  if (f.done) return { worked: f.worked, needed: f.needed, done: true, opened: null };
+  f.worked = Math.min(f.needed, f.worked + Math.max(0, antSeconds));
+  if (f.worked < f.needed) return { worked: f.worked, needed: f.needed, done: false, opened: null };
+  f.done = true;
+  return { worked: f.worked, needed: f.needed, done: true, opened: f.opens };
 }
 
 /** contains / floorY / headroom — contract §6. `lawnFallback` is groundY's

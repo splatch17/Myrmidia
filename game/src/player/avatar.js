@@ -149,7 +149,7 @@ const DIGGER_BODY = {
 export const DIGGER = {
   ...WORKER,
   id: 'digger',
-  label: 'creuseuse',
+  label: 'fouisseuse',
   body: DIGGER_BODY,
   colors: { chitinA: 0xa8763a, chitinB: 0x805426, limb: 0x7a5227, mandible: 0xd8a24e, eye: 0x100c06 },
   maxSpeed: 12,

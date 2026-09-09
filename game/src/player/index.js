@@ -1,6 +1,7 @@
+import * as THREE from 'three';
 import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
-import { groundY, distanceToWater, foundedMix, getGallery, digGallery, descentPath } from '../world/index.js';
+import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath } from '../world/index.js';
 import { PLAYER_AVATAR, collideRadius } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
@@ -95,6 +96,34 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   // view of the queen instead of on the meadow she is looking at
   input.state.camYaw = SPAWN_YAW;
   const cameraRig = createCameraRig(camera);
+
+  /* Screen position of the dig gauge (#51). The projection lives here rather
+     than in hud.js because this is the file that already holds a camera, and
+     a HUD that learns what a projection matrix is stops being a HUD.
+     
+     One frame behind: main.js writes camera.position after this runs. On a
+     ring that fills over seventy-five seconds that is invisible, and paying
+     for it with a second update order would not be. */
+  const _dp = new THREE.Vector3();
+  function projectDig(g) {
+    if (!g) return null;
+    _dp.set(g.x, g.y + 6.5, g.z);
+    const d = _dp.distanceTo(camera.position);
+    _dp.project(camera);
+    /* z outside [-1,1] is behind the near plane or past the far one; a point
+       behind the camera projects to a mirrored position on screen, which is a
+       gauge floating over open meadow while the face is at her back. */
+    const visible = _dp.z > -1 && _dp.z < 1
+      && _dp.x > -1.35 && _dp.x < 1.35 && _dp.y > -1.35 && _dp.y < 1.35;
+    const w = window.innerWidth, h = window.innerHeight;
+    return {
+      ...g,
+      sx: (_dp.x * 0.5 + 0.5) * w,
+      sy: (-_dp.y * 0.5 + 0.5) * h,
+      scale: 46 / Math.max(12, d),
+      visible,
+    };
+  }
   const hud = createHud();
   const marker = createTargetMarker(scene);
   /* The colony, and the two draw calls that show it. Workers are drawn
@@ -177,9 +206,9 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     if (pick) {
       if (casteUnlocked(pick)) {
         caste = pick;
-        casteMsg = `Prochaine ponte : ${pick === 'digger' ? 'creuseuses' : 'ouvrières'}`;
+        casteMsg = `Prochaine ponte : ${pick === 'digger' ? 'fouisseuses' : 'ouvrières'}`;
       } else {
-        casteMsg = 'Creuseuses : à débloquer à la deuxième ponte';
+        casteMsg = 'Fouisseuses : à débloquer à la deuxième ponte';
       }
       casteMsgTimer = 3.5;
     }
@@ -225,7 +254,11 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     if (casteMsgTimer > 0) { casteMsgTimer -= dt; if (casteMsgTimer <= 0) casteMsg = null; }
     hud.setEvent(casteMsg || interaction.message());
     hud.setHold(interaction.holdProgress(act));
-    hud.setDig(colony.digProgress(), caste);
+    /* The dig gauge is NOT drawn here. It is projected against the camera, and
+       the camera is not final until cameraRig.update() further down — so main
+       .js calls syncDigDial() once the camera is where the frame will be
+       rendered from. That also makes the ring correct for __renderView(),
+       which moves the camera without running this function at all. */
     /* The ring reads the same `act` the prompt does, so what is circled and
        what is named can never be two different things. */
     const mark = interaction.targetMark(ant, act);
@@ -273,7 +306,8 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // replaying the whole prologue first
     window.__colony = () => colony;
     window.__foundNest = (x, z) => found(x, z);
-    window.__gallery = () => getGallery();
+    window.__rooms2 = () => dugRooms();
+    window.__faces = () => digFaces();
     /* #40: where the nest is walkable, whether she is in it, and which floor
        the controller is following. `approx` says whether that came from the
        world's own nestFootprint() or from the stand-in nest.js keeps until
@@ -287,7 +321,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     };
     // the gallery normally opens when the diggers finish (colony.js); the
     // harness needs it open without replaying twenty minutes of colony
-    window.__digGallery = () => digGallery();
+    window.__payDig = (id, s) => payDigFace(id, s);
     // the world's own centre line down the cut, when it publishes one (#41)
     // which verb E resolves to right now, and how far the current hold has
     // got: a prompt on screen is not proof that the ladder agrees with it
@@ -321,5 +355,15 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     props.dispose();
   }
 
-  return { ant, group, update, dispose };
+  /**
+   * Place the dig gauge for the camera as it now stands. Called by main.js
+   * after the camera is final — both in the frame loop and in __renderView(),
+   * so a harness screenshot of a free view carries the same ring the player
+   * would see from there.
+   */
+  function syncDigDial(dt = 0) {
+    hud.setDig(projectDig(colony.digProgress()), dt);
+  }
+
+  return { ant, group, update, syncDigDial, dispose };
 }

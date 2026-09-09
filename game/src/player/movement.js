@@ -3,7 +3,7 @@ import { nrm3, cross3 } from '../core/vecmath.js';
 import { dampAngle } from './mathUtil.js';
 import { containUnderground, containSurface, groundY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '../world/index.js';
 import { resolveDecorCollision } from './decorCollision.js';
-import { nestFootprint, boundaryBetween } from './nest.js';
+import { nestFootprint, boundaryBetween, boundaryNormal } from './nest.js';
 import { PLAYER_AVATAR, collideRadius, strideOf } from './avatar.js';
 
 /* ==========================================================================
@@ -121,6 +121,34 @@ function containNest(ant, fromX, fromZ) {
   return false;
 }
 
+/**
+ * Slide along a nest wall instead of stopping dead against it (#49).
+ *
+ * Every other surface in the game slides — containSurface() follows the
+ * river's meander, resolveDecorCollision() pushes off a rock and lets the walk
+ * continue. The nest was the one place that did not: containNest() put her
+ * back on the boundary point and that was the end of the step, so walking up a
+ * curving trench while leaning on its outer wall made no progress at all.
+ * That is the porter's "la remontée bug encore", and it is a movement defect
+ * rather than a containment one — the containment was right, it just had
+ * nothing to say about what to do next.
+ *
+ * The tangent is taken from a normal estimated off contains() alone, so this
+ * behaves the same whatever shape the world digs.
+ */
+function slideAlongNestWall(ant, fp, fromX, fromZ, toX, toZ) {
+  const n = boundaryNormal(fp, ant.x, ant.z);
+  if (!n) return;
+  const mx = toX - fromX, mz = toZ - fromZ;
+  const into = mx * n[0] + mz * n[1];
+  if (into <= 0) return;                       // not pushing into the wall
+  // what is left of the step once the wall has taken its share
+  const sx = mx - n[0] * into, sz = mz - n[1] * into;
+  if (Math.hypot(sx, sz) < 1e-4) return;       // dead into the wall: no tangent
+  const nx = ant.x + sx, nz = ant.z + sz;
+  if (fp.contains(nx, nz)) { ant.x = nx; ant.z = nz; }
+}
+
 export function computeWishDir(intent, camEye, camAim) {
   const camFwd = nrm3([camAim[0] - camEye[0], 0, camAim[2] - camEye[2]]);
   const camRight = cross3(camFwd, [0, 1, 0]); // see issue #15 — this is the correct sign, not [camFwd[2],0,-camFwd[0]]
@@ -160,6 +188,13 @@ export function stepAnt(ant, wish, intent, dt) {
      construction (api-monde-gameplay.md §6). */
   if (containNest(ant, fromX, fromZ)) {
     const fp = nestFootprint();
+    /* If containNest pushed her back onto the boundary, the step is not over —
+       what it took away was the component into the wall, and the rest is a
+       walk along it. */
+    if (ant.x !== fromX + Math.sin(ant.yaw) * step || ant.z !== fromZ + Math.cos(ant.yaw) * step) {
+      slideAlongNestWall(ant, fp, fromX, fromZ,
+        fromX + Math.sin(ant.yaw) * step, fromZ + Math.cos(ant.yaw) * step);
+    }
     /* floorY is an *override* of the terrain, and legs.js applies it to every
        foot at once (floorUnder ignores x/z when it is set) — which is right
        for a flat chamber floor and wrong on a ramp. So it is only used when
