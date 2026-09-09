@@ -15,65 +15,58 @@
 
 ### Mon dernier prompt, littéralement
 
-> **« ok il faut pouvoir voir la galerie et y entrer. Assigne des tickets aux
-> agents nécessaires à ça. »**
+> **« assez bien mais il y a des choses à modifier. l'entrée est relativement
+> compliquée, et la remontée bug encore, il faut faciliter les déplacements et
+> la transition avec les zones réduites. On peut au départ arriver simplement
+> en bas devant de la terre à creuser. Pour cela il faudra pondre des
+> creuseuses (trouver un meilleur nom) qui commenceront à creuser (je veux une
+> petite animation de barre de chargement circulaire, type MMORPG/jeu récent,
+> qui en finissant laisse apparaître une nouvelle petite 'salle' qui serve
+> simplement de 'hall' pour commencer à creuser des tunnels. il faudra alors un
+> certain nombre de fourmis pour creuser plus, on brainstormera sur la manière
+> dont tout cela doit fonctionner. crée des tickets et implémente ce que je
+> viens d'expliquer, et continue le développement suivant ce qui est prévu
+> initialement. »**
 
-### C'EST FAIT (tour 15, `da6d7ce`, poussé)
+### Livré au round 16 (`3175592`, `f3a5015`)
 
-La reine descend sa propre rampe à pied, entre dans la chambre, **pond là où
-elle se tient** (sans être emportée par la cinématique scriptée), continue
-jusqu'au fond de la première galerie, et **ressort sur la prairie**. Chaque pas
-sur de vraies touches. Les deux moitiés de la demande sont tenues :
+Tickets **#48 à #53**, tous implémentés. Quatre harnais passent :
+`verify-descent`, `verify-dig`, `verify-gallery-walk`, `verify-queen-menu`.
 
-- **Voir** — la galerie est éclairée sur toute sa longueur (trois lampes
-  réparties, plus `DIG_FACE_LIGHT` au front de taille), plancher d'ambiance à
-  0,55. Avant, une seule lampe au bout : un disque clair et quarante unités de
-  noir.
-- **Entrer** — une rampe, pas un puits, comme arbitré. Pente pire cas **0,43**
-  (le puits était à 4,4), aucune marche > 0,11 sur 323 pas.
+| Demande | État |
+|---|---|
+| L'entrée est compliquée | ✅ 73 u de tranchée pour 18 de descente → **46 u pour 13**. Virage 1,9 rad → 0,85 |
+| Arriver en bas devant de la terre à creuser | ✅ Le front de taille est posé sur le dernier segment du chemin de descente : **mesuré à 0,0° de son axe d'arrivée** |
+| La remontée bugue | ✅ Deux causes, ci-dessous |
+| Faciliter les zones réduites | ✅ Les parois glissent au lieu d'arrêter net |
+| Meilleur nom que « creuseuse » | ✅ **fouisseuse** (terme zoologique réel). Si tu préfères autre chose, c'est une ligne |
+| Jauge circulaire type MMO | ✅ Anneau SVG **posé sur le front de taille**, projeté à l'écran, avec pulsation à l'achèvement |
+| Une petite salle « hall » | ✅ S'ouvre d'un coup quand la jauge se remplit, r 8,5, reliée par un couloir |
+| Un certain nombre de fourmis pour creuser plus | ⏳ Le mécanisme est là (les fronts sont une liste, chacun avec son coût) — **les nombres restent à brainstormer, comme demandé** |
+| Continuer le développement prévu | ✅ Étape 5 : **le menu de gestion de la reine** (`C`) |
 
-```
-cd game
-node scripts/verify-descent.mjs        # SEUL — 11 vérifs, 14 vues
-node scripts/verify-gallery-walk.mjs   # SEUL — la marche complète
-```
-**Les deux passent intégralement.** Captures dans `game/_descent-shots/` et
-`game/_gallery-shots/` (non suivis par git depuis ce tour).
+### Les deux causes de « la remontée bugue »
 
-Le bug de l'anneau non fermé — le tube ouvert sur le ciel — n'existe plus :
-`world/excavation.js` a remplacé le puits, la chambre est voûtée et la bouche
-est une arche dans sa paroi.
+1. **La galerie était plus étroite que la reine.** Elle publiait 3,1 de
+   demi-largeur marchable pour un corps de rayon 3,3. Quatrième fois que ce
+   piège frappe. Aucun harnais ne l'avait vu **parce qu'ils suivaient tous la
+   ligne centrale**, là où il n'y a rien à toucher. Le harnais a maintenant un
+   test qui va volontairement **dans le mur**.
+2. **Le nid était la seule surface du jeu qui arrêtait net.** `containNest()`
+   la remettait sur le point frontière et le pas s'arrêtait là — donc monter
+   une tranchée qui tourne en frottant le mur extérieur n'avançait pas d'un
+   pouce. Ça glisse maintenant, sur une normale estimée depuis `contains()`
+   seul, donc ça tient quelle que soit la forme creusée.
 
-### Les trois bugs qu'il a fallu corriger pour y arriver
+### Ce qui reste ouvert
 
-Le travail des deux agents coupés était bien sur le disque et il a été
-récupéré, pas refait — sixième fois sur six que ça vaut mieux. Il restait :
-
-1. **`rampOffset()` rejetait `u < 0` sans tolérance.** `u` est reconstruit par
-   un `atan2` + wrap, donc le seuil tombait à ±1e-16 selon le site : une fois
-   sur deux il sortait de la rampe et `descentPath()` annonçait la profondeur
-   de la chambre. Le contrôleur refusait alors — à raison — de faire descendre
-   la reine dans un trou de 18 unités. C'est ce qui faisait échouer le harnais
-   différemment à chaque exécution.
-2. **`movement.js` testait la porte avec `groundY(bord) - floorY(bord)`.** Juste
-   tant que `groundY()` ne répondait que la pelouse ; depuis #41 elle répond le
-   sol du nid dans l'empreinte, donc sur le bord elle comparait le sol à
-   lui-même et déclarait porte **chaque paroi**. La reine traversait le mur de
-   la galerie et était remontée de 28 unités jusqu'à la prairie. C'est le piège
-   récurrent du projet (une valeur calibrée contre un monde qui a changé) sous
-   forme de prédicat. Corrigé avec `headroom()` — finie = plafond = jamais une
-   porte — et un échantillon pris **hors** de l'empreinte.
-3. **Le harnais ne savait pas contourner un caillou** : il reculait et
-   revisait le même cap, donc il rentrait dans le même caillou. Il contourne
-   maintenant par côtés alternés et de plus en plus larges.
-
-### Ce qui reste ouvert sur cette demande
-
-Un seul point, et c'est un arbitrage de DA, pas un bug : **la reine est
-surexposée près de la bouche** (`_gallery-shots/01-at-the-entrance.png`). Sa
-chitine a été éclaircie et la lampe de la bouche a été descendue à `mouthY -
-2.5` — les deux chiffres viennent de la DA, mais pris séparément, et personne
-n'a mesuré leur somme à deux unités de distance. Voir §6.
+- **Le brainstorm que tu as annoncé** : combien de fourmis pour quel
+  creusement, coût en fourmis-secondes ou en effectif minimum, ce qu'on creuse
+  après le hall, si un tunnel se paye aussi en ressources. Rien n'a été tranché
+  à ta place — les valeurs actuelles (75 fourmis-secondes pour le hall) sont
+  des points de départ.
+- Le hall est nu : c'est un volume, pas encore un lieu. Il n'a **pas** encore
+  ses propres fronts de taille sur ses parois (le modèle les supporte).
 
 ## 1. Le projet, et ce que j'en attends
 
@@ -122,7 +115,10 @@ autorité sur tout document plus ancien qui les contredirait.
 | Mode macro | **Le nid en coupe, vue de côté** |
 | Départ | **La reine dehors, dans un vrai monde** |
 | Creusement | La galerie s'ouvre **d'un coup** derrière une jauge — pas de creusement mètre par mètre (coûteux à générer, illisible) |
-| Descente | **Une rampe, pas un puits** — arbitré pour cette demande-ci |
+| Descente | **Une rampe, pas un puits** — et **courte** : arriver en bas vite, face à un front de taille |
+| Creusement | Un **front de taille** + jauge circulaire dans le monde → une **salle**. Pas un tunnel qui finit nulle part |
+| Nom de la caste qui creuse | **fouisseuse** |
+| Publication | La CI construit et publie sur poussée vers `preview`. **`dist/` n'est plus committé** |
 | Progression | **Phase de test/debug : rapporter UNE seule graine suffit** pour aller à la 2e ponte, qui débloque directement les nouvelles espèces |
 
 ### Note pour plus tard, à ne jamais contredire
@@ -150,8 +146,9 @@ Conséquences **immédiates** sur le code (`design/castes-et-micro-macro.md` §3
 | 2 | Les creuseuses creusent, jauge visible | ✅ fait |
 | 3 | Le tunnel s'ouvre d'un coup | ✅ fait |
 | 4 | **Y entrer et en sortir** | ✅ **fait au tour 15** (`da6d7ce`) |
-| 5 | **Le menu de gestion de la reine** | 🔴 **la suite — c'est ici qu'on repart** |
-| 6 | Contrôler n'importe quelle fourmi | à venir (demande que le joueur cesse d'être un cas particulier) |
+| 5 | Le menu de gestion de la reine | ✅ fait au tour 16 (`f3a5015`) |
+| 6 | **Contrôler n'importe quelle fourmi** | 🔴 **la suite** — le menu de la reine a déjà posé la moitié du terrain : il s'affiche sur le drapeau `manages` du profil, pas sur « est-ce le joueur » |
+| 7 | Creuser depuis le hall | à venir — **à brainstormer avec le porteur d'abord** |
 
 ---
 
@@ -365,6 +362,6 @@ depuis le tour 14 et le choix se fait aujourd'hui par deux touches sans écran.
 
 ---
 
-*Dernière mise à jour : 2026-09-09 (tour 15). HEAD `da6d7ce`, branche
-`feature/threejs-migration`, poussée. Lien de test de la branche : voir le
-tableau du `README.md`.*
+*Dernière mise à jour : 2026-09-09 (tour 16). Branche `feature/threejs-migration`,
+poussée. Aperçu publié : https://splatch17.github.io/Myrmidia/ — il bouge quand
+on pousse sur `preview` (`git push origin HEAD:preview`).*
