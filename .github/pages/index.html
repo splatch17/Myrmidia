@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Myrmidia — aperçu</title>
+<style>
+  :root {
+    --bg: #11140f;
+    --panel: #191d15;
+    --line: #2c3325;
+    --ink: #e8e6dc;
+    --muted: #9aa08c;
+    --accent: #b9c46a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.6 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+    padding: 3rem 1.5rem 4rem;
+  }
+  main { max-width: 46rem; margin: 0 auto; }
+  h1 {
+    font-size: 2rem;
+    margin: 0 0 .3rem;
+    letter-spacing: -.01em;
+  }
+  .sub { color: var(--muted); margin: 0 0 2.5rem; }
+  ul { list-style: none; padding: 0; margin: 0; display: grid; gap: .9rem; }
+  a.card {
+    display: block;
+    padding: 1.1rem 1.3rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: inherit;
+    text-decoration: none;
+    transition: border-color .15s, transform .15s;
+  }
+  a.card:hover, a.card:focus-visible {
+    border-color: var(--accent);
+    transform: translateY(-1px);
+    outline: none;
+  }
+  .name { font-weight: 600; color: var(--accent); }
+  .desc { color: var(--muted); font-size: .93rem; margin-top: .15rem; }
+  footer {
+    margin-top: 3rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: .85rem;
+  }
+  footer a { color: var(--muted); }
+  code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .85em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Myrmidia</h1>
+  <p class="sub">Aperçu publié — construit par CI à chaque poussée sur <code>preview</code>.</p>
+
+  <ul>
+    <li>
+      <a class="card" href="game/">
+        <div class="name">Le prototype jouable</div>
+        <div class="desc">Moteur Three.js, prologue de la reine fondatrice. WebGL, se charge directement dans le navigateur.</div>
+      </a>
+    </li>
+    <li>
+      <a class="card" href="design/prototypes/sortie-fourmiliere.html">
+        <div class="name">Prototype — sortie de la fourmilière</div>
+        <div class="desc">Étude d'ambiance et d'échelle : le passage du tunnel à la pelouse.</div>
+      </a>
+    </li>
+    <li>
+      <a class="card" href="design/concept.html">
+        <div class="name">Concept visuel</div>
+        <div class="desc">Direction artistique, castes, charte de stylisation.</div>
+      </a>
+    </li>
+  </ul>
+
+  <footer>
+    <a href="https://github.com/splatch17/Myrmidia">github.com/splatch17/Myrmidia</a>
+    — commit publié dans <a href="COMMIT">COMMIT</a>
+  </footer>
+</main>
+</body>
+</html>
