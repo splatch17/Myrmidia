@@ -1,3 +1,4 @@
+import { paceCost } from '../core/pace.js';
 import { groundY } from '../world/index.js';
 import { nodeInReach, takeFromNode, countLabel, KIND_LABEL, resourceNodes } from './resources.js';
 
@@ -127,11 +128,34 @@ export function createHarvest() {
     return true;
   }
 
+  /**
+   * Take `n` units off the pile — what a clutch costs (laying.js). Empties the
+   * biggest heap first so a pile of one kind does not survive a spend that a
+   * mixed pile would not, and returns what was actually taken.
+   */
+  function spend(n) {
+    if (!state.cache) return 0;
+    let left = n, took = 0;
+    while (left > 0) {
+      const best = Object.entries(state.cache.items)
+        .filter(([, k]) => k > 0)
+        .sort((a, b) => b[1] - a[1])[0];
+      if (!best) break;
+      state.cache.items[best[0]] -= 1;
+      state.cache.total -= 1;
+      left -= 1; took += 1;
+    }
+    return took;
+  }
+
   /** Called once at the end of a frame: the one-frame event flags expire. */
   function endFrame() { state.justTook = null; state.justDropped = null; }
 
   function stock() { return state.cache ? state.cache.total : 0; }
-  function enough() { return stock() >= FOUND_STOCK; }
+  /* Paced, so the founding threshold moves with the clutch price rather than
+   staying at five while everything around it collapses to one — a debug pace
+   that shortens the second wait and not the first is worse than none. */
+  function enough() { return stock() >= paceCost(FOUND_STOCK); }
 
   /** "2 graines · 1 brindille", or null while the pile is empty. */
   function stockDetail() {
@@ -150,7 +174,7 @@ export function createHarvest() {
   }
 
   return {
-    state, target, hold, release, canDrop, drop, cacheDistance,
+    state, target, hold, release, canDrop, drop, cacheDistance, spend,
     stock, enough, stockDetail, inventoryLine, endFrame,
   };
 }

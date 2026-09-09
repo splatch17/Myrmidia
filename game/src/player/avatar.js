@@ -86,7 +86,7 @@ export const WORKER = {
   legs: WORKER_LEGS,
   body: WORKER_BODY,
   breathes: false,
-  colors: { chitinA: 0x8b5a24, chitinB: 0x432d15, limb: 0x6b4420, mandible: 0xc9903f, eye: 0x100c06 },
+  colors: { chitinA: 0xc98a3c, chitinB: 0x855828, limb: 0x8a5b28, mandible: 0xc9903f, eye: 0x100c06 },
   // locomotion, in world units — the old prototype's frame() literals
   maxSpeed: 15,
   sprint: 1.75,
@@ -103,11 +103,17 @@ export const WORKER = {
 export const FOUNDING_QUEEN = {
   id: 'queen',
   label: 'reine fondatrice',
+  /* She gets the management panel (#53). A flag on the caste, not a check for
+     "is this the player": design/castes-et-micro-macro.md §3 arbitrates that
+     control is an attribute and that the HUD depends on WHO is controlled, so
+     the day the player hops into a forager the panel has to go away on its
+     own. Absent on WORKER and DIGGER, which is the whole test. */
+  manages: true,
   scale: 2.2,
   legs: QUEEN_LEGS,
   body: QUEEN_BODY,
   breathes: true,
-  colors: { chitinA: 0xb07226, chitinB: 0x5e3d16, limb: 0x5e3d16, mandible: 0xb07226, eye: 0x100c06 },
+  colors: { chitinA: 0xdda254, chitinB: 0x8f5a25, limb: 0x94612a, mandible: 0xe8c078, eye: 0x100c06 },
   // She is more than twice a worker's size and still slower in absolute
   // terms: ~0.4 body-lengths a second against the worker's ~1.15, and a turn
   // rate less than half as sharp, so she pivots like something that weighs
@@ -127,6 +133,35 @@ export const FOUNDING_QUEEN = {
   cam: { dist: 58, min: 16, max: 140 },
 };
 
+/* The digger (#38). A row in this table and not a file of its own — that is
+   design/castes-et-micro-macro.md 3's rule, and the reason is the micro mode
+   it is written for: when the player can take control of any ant, a caste that
+   is a class rather than a row means a second controller.
+
+   She reads as a digger at ant height, in grass, which is the only test that
+   matters here: darker chitin than a forager, and mandibles half again as
+   long and thick. Everything else is the worker's — same body plan, same
+   gait — because a colony whose castes share a silhouette vocabulary reads as
+   one species, and because inventing a second anatomy to say "digger" would
+   be solving the problem twice.
+
+   Slower and steadier than a forager: she is not running errands, she is
+   working a face. */
+const DIGGER_BODY = {
+  ...WORKER_BODY,
+  mandible: { root: [0.56, 1.40, 3.35], tip: [0.30, 1.14, 5.05], gape: 0.30, r: 0.23 },
+};
+
+export const DIGGER = {
+  ...WORKER,
+  id: 'digger',
+  label: 'fouisseuse',
+  body: DIGGER_BODY,
+  colors: { chitinA: 0xa8763a, chitinB: 0x805426, limb: 0x7a5227, mandible: 0xd8a24e, eye: 0x100c06 },
+  maxSpeed: 12,
+  turnRate: 7,
+};
+
 /** The body the player currently drives. #32: the game opens on the queen. */
 export const PLAYER_AVATAR = FOUNDING_QUEEN;
 
@@ -135,3 +170,12 @@ export const PLAYER_AVATAR = FOUNDING_QUEEN;
 export function legLengths(p) { return [p.legLen[0] * p.scale, p.legLen[1] * p.scale]; }
 export function strideOf(p) { return p.stride * p.scale; }
 export function collideRadius(p) { return p.bodyR * p.scale; }
+
+/* Profiles by id, so an entity's *state* can name its body with a string
+   instead of holding a reference to this table (#36). The profile is a
+   definition, not state: two ants of the same caste share one entry and
+   nothing about it changes at run time, which is exactly why a saved entity
+   should carry `profileId` and resolve it on load rather than serialise a
+   copy of the body plan. */
+export const PROFILES = { worker: WORKER, queen: FOUNDING_QUEEN, digger: DIGGER };
+export function profileById(id) { return PROFILES[id] || WORKER; }

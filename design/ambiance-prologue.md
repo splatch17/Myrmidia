@@ -69,6 +69,27 @@ La charte impose que les ombres tombent à **25-32 %** de la valeur d'une surfac
 - Dans le prologue, un brin d'herbe côté soleil et le même brin côté ombre doivent différer d'au moins **45 valeurs** (aujourd'hui : 58 vs 41, soit 17 — l'herbe est un mur d'une seule valeur, constat 5).
 - Aucun pixel du prologue ne doit descendre sous **luminance 14** hors silhouettes de prédateur.
 
+### 1e. Arbitrage du rig intégré (défaut n°5) — **validé, un seul nombre change**
+
+Le rig a été retouché quatre fois à l'intégration et la DA n'avait jamais tranché. Tranché ici, sur mesure et non au jugé : même image, mêmes 600×360 pixels d'un carré de pelouse dégagée (pas d'arbre, pas de tertre, pas d'eau), les deux rigs commutés par `setFoundedMix`, percentiles lus dans le tampon de rendu.
+
+| | moyenne | p05 | p50 | p98 | % sous L 14 |
+|---|---|---|---|---|---|
+| **Prologue (tel qu'intégré)** | **44,0** | 22,3 | 41,2 | 75,9 | 0,8 % |
+| Fondé | 105,4 | 77,6 | 107,8 | 135,5 | 0 % |
+
+**Les trois critères du §1d sont tenus.** Chute de moyenne **−58 %** (le seuil est 35 %) ; 0,8 % de pixels sous L 14, et ce sont des cœurs de brins, pas des surfaces qu'on lit. Rapport ombre/lumière **p05/p98 = 0,294** contre **0,573** pour le rig fondé : le prologue porte déjà **la moitié du remplissage** du jour fondé, ce qui est très exactement la dérogation §1c. Et sur capture, les longues barres d'ombre rasantes se lisent — c'est ce que le soleil à 18,5° existait pour produire.
+
+Donc : **les trois passes d'intégration avaient raison, et les nombres de la spec avaient tort.** Ils étaient écrits à l'échelle d'un paysage (brume à 40, exposition 1,02) et appliqués à l'échelle d'une fourmi — c'est le piège n°6 de `PROGRESS.md`, mot pour mot. `fogNear/fogFar 95/420`, `exposure 1.30`, `hemiIntensity 1.15`, `fog #7d7488` : **conservés, explicitement**.
+
+**Le seul changement : `sunIntensity` 5.4 → 6.1.** Pas un goût, une dérivation. Un sol plat reçoit `sin(élévation)` de la radiance : `sin(51°)/sin(18,5°) = 0,777/0,317 = 2,45`. Le prologue doit donc valoir **2,45×** l'intensité du rig fondé pour que le sol y soit lu, soit `2,5 × 2,45 = 6,13`. 5,4 valait 2,16×, 12 % trop bas. Effet mesuré, tout le reste inchangé : moyenne 44 → 47, p98 76 → 81, pixels sous L 14 0,8 % → 0,7 %. Le nombre cesse d'être rejouable parce qu'il a maintenant une raison.
+
+**Ce qu'il ne faut pas faire, et pourquoi je l'ai mesuré avant de le dire.** Balayage de `hemiIntensity` à soleil constant : 1,15 → 1,45 → 1,75 donne p05 22,3 → 25,8 → 28,9 et le rapport ombre/lumière 0,294 → 0,321 → 0,342. Monter le remplissage **aplatit** la seule chose que le soleil rasant apporte. Il reste à 1,15.
+
+**Et la seule vraie faute mesurée n'est pas dans le rig.** Dans la poche d'ombre au pied du tertre — là où la joueuse se tient le plus souvent — la reine tombe à **L 5,0** et le tertre à **L 7,7**, tous deux sous le plancher dur de 14 du §1d. Le soleil n'y entre pas par définition, et le balayage ci-dessus montre qu'aucun réglage d'hémisphérique ne remonte une poche à 5 jusqu'à 14. Ça se répare **ailleurs** : à l'albedo de la carapace (`charte-stylisation.md` §1f) et à la densité d'ombres de brins (défaut n°8). Pas ici.
+
+Reste ouvert, et c'est du câblage, pas une valeur : `sky: 0x9a93a8` est encore marqué PLACEHOLDER alors que `sky_gradient-prologue.png` existe depuis le round 5.
+
 ---
 
 ## 2. La bascule — ce qui change à la fondation, et par quel moyen

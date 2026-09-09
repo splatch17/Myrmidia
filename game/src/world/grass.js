@@ -142,10 +142,14 @@ void grassShape(out vec3 pos, out vec3 nrm) {
 }
 `;
 
-/* 1600 rather than 900: thinner blades without more of them is a bald lawn —
-   design/herbe-brins.md §3 asks for the two together, and they are one
-   change, not two. */
-export function createGrassField({ count = 1600, seed = 7 } = {}) {
+/* 1800 since round 11, down from 3400. The player asked for clearly less grass
+   while the game itself is built, and they are right for a reason beyond frame
+   time: every proximity query in player/** is a linear scan over this array
+   (see design/etat-des-lieux.md §2b), so the blade count is a CPU tax on
+   walking, not only a GPU one. Halving it halves that tax today; the spatial
+   index is what removes it. Turn it back up once that lands — quality.js
+   already thins it live, and the field is seeded identically either way. */
+export function createGrassField({ count = 1800, seed = 7 } = {}) {
   const R = rng(seed);
   const geometry = buildBladeGeometry();
 
@@ -194,7 +198,12 @@ export function createGrassField({ count = 1600, seed = 7 } = {}) {
     // decorCollision.js read it. Their radii therefore shrink with the blade,
     // which is correct for a stem half as thick and is a change of feel at
     // contact: to be judged on a capture, not compensated for blind.
-    footprints.push({ x: bx, z: bz, h, baseY, w: bladeBaseWidth(h), ang });
+    /* `i` is the blade's own index in this array, carried on the record so a
+       query that hands back the footprint can say WHICH blade it is without
+       the caller searching for it (player/climb.js's ant.climb.i is an index
+       into this array). Every consumer builds the field from the same seed
+       and count, so the index means the same thing in all of them. */
+    footprints.push({ i, x: bx, z: bz, h, baseY, w: bladeBaseWidth(h), ang });
     i++;
   }
   const actualCount = i;
@@ -238,6 +247,37 @@ export function createGrassField({ count = 1600, seed = 7 } = {}) {
     // cheap constant term is enough to read as that, and it doubles as the
     // guarantee that a blade is never a silhouette the player can't see past.
     uTransl: { value: 0.16 },
+
+    /* SHADOW CASTING RANGE — the single biggest frame cost in the game, and
+       the reason this pair of uniforms exists.
+
+       Measured on the target machine (Intel Iris Xe, ANGLE/D3D11, 1280x720,
+       scripts/verify-round10.mjs, GPU timer queries rather than wall clock):
+       an 8.0 ms frame, of which 5.35 ms was the shadow map. Splitting that
+       bill by freezing the depth pass while still sampling the map gave
+       4.0 ms depth pass / 1.3 ms lookup — and turning grass casting off
+       alone took the depth pass from 4.0 ms to 0.66 ms. So 3.4 ms of an
+       8 ms frame, 42% of everything, was 3400 grass blades rasterising into
+       a 2048^2 depth target. The lookup filter was not the problem (PCF hard
+       measured the same as PCFSoft), and the map resolution was only a lever
+       because it scales that same grass fill.
+
+       The fix has to keep the round-7 win (grass that shades itself and the
+       ground) while paying less for it. Shrinking the shadow BOX would not
+       have worked: fewer blades fall inside it, but each one then covers
+       proportionally more texels, and the total fill is unchanged. What
+       actually reduces fill is drawing fewer blades into the map — so the
+       depth pass keeps only the blades near where the shadow is looked at,
+       and clips the rest out at the vertex stage, before rasterisation.
+
+       Two centres, not one: the ant (that is where the player is looking at
+       the ground, and where a blade's shadow is read at its real size) and
+       the camera (which can be a long way from her on a 58-unit boom, and
+       which is also the only centre a free-flown verification view has).
+       A blade inside either disc casts. */
+    uCastA: { value: new THREE.Vector3(0, 0, 0) },
+    uCastB: { value: new THREE.Vector3(0, 0, 0) },
+    uCastRadius: { value: 46 },
   };
 
   const material = new THREE.MeshStandardMaterial({ roughness: 0.85, metalness: 0, side: THREE.DoubleSide });
@@ -341,11 +381,32 @@ export function createGrassField({ count = 1600, seed = 7 } = {}) {
   depthMaterial.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', GRASS_SHAPE + '\n#include <common>')
+      .replace('#include <common>', GRASS_SHAPE + `
+        uniform vec3 uCastA;
+        uniform vec3 uCastB;
+        uniform float uCastRadius;
+        #include <common>
+      `)
       .replace('#include <begin_vertex>', `
         vec3 gPos, gNrm;
         grassShape(gPos, gNrm);
         vec3 transformed = gPos;
+      `)
+      /* Out-of-range blades are killed AFTER projection, by pushing the
+         vertex outside the clip volume on every axis, rather than by
+         collapsing it to a point. A degenerate triangle still enters
+         rasterisation; a fully clipped one does not, and clipping is where
+         the fragments this whole change is about get saved. Tested against
+         aBase (the blade's root, one value per instance) so all 14 vertices
+         of a blade always agree — a per-vertex test would tear blades in
+         half at the boundary. See the uCast* uniforms for the measurement. */
+      .replace('#include <project_vertex>', `
+        #include <project_vertex>
+        {
+          float dA = distance(aBase.xz, uCastA.xz);
+          float dB = distance(aBase.xz, uCastB.xz);
+          if (min(dA, dB) > uCastRadius) gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        }
       `);
   };
   depthMaterial.customProgramCacheKey = () => 'grass-depth';
@@ -359,11 +420,38 @@ export function createGrassField({ count = 1600, seed = 7 } = {}) {
   for (let k = 0; k < actualCount; k++) mesh.setMatrixAt(k, identity);
   mesh.instanceMatrix.needsUpdate = true;
 
-  function update(dt, elapsed) {
+  function update(dt, elapsed, camera) {
     uniforms.uTime.value = elapsed;
     uniforms.uAntPos.value.copy(antState.position);
     uniforms.uAntRadius.value = antState.radius;
+    uniforms.uCastA.value.copy(antState.position);
+    if (camera) uniforms.uCastB.value.copy(camera.position);
   }
 
-  return { mesh, footprints, update };
+  /** Shadow-casting range in world units, for core/quality.js. */
+  function setCastRadius(r) { uniforms.uCastRadius.value = r; }
+
+  /**
+   * Take out every blade whose root falls inside `pred` — the nest being dug
+   * under it (world/founding.js). Their height is zeroed rather than their
+   * instance removed: the count is baked into the InstancedMesh, footprints[]
+   * is index-aligned with it, and core/spatialIndex.js was filled from those
+   * indices before the first frame. Setting aH to 0 collapses the blade in the
+   * same vertex shader that bends it, so the visible pass and the shadow pass
+   * lose it together and nothing downstream has to be told.
+   */
+  function clearIn(pred) {
+    const aH = geometry.getAttribute('aH');
+    let n = 0;
+    for (const f of footprints) {
+      if (f.h <= 0 || !pred(f.x, f.z)) continue;
+      aH.setX(f.i, 0);
+      f.h = 0;
+      n++;
+    }
+    if (n) aH.needsUpdate = true;
+    return n;
+  }
+
+  return { mesh, footprints, update, setCastRadius, clearIn };
 }

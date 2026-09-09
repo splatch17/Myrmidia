@@ -365,6 +365,13 @@ const CHIT_HI = hexToRGB('#F6DCA2');
 const SPORE_DK = hexToRGB('#4E2F6B'), SPORE_MD = hexToRGB('#9A63C4'), SPORE_LT = hexToRGB('#D9AEEE');
 const SEED_DK = hexToRGB('#6E5426'), SEED_MD = hexToRGB('#A8864A'), SEED_LT = hexToRGB('#D8BE86');
 const WART_HI = hexToRGB('#F3E6FF');
+// Grit: the grains pressed into a gallery wall. NOT the STONE ramp, which is
+// for boulders lying in daylight. Underground, a cool grey grain against warm
+// earth is the single highest-contrast, most desaturated feature in the tile,
+// and that is exactly what the eye templates — it is what made a founded
+// mound read as a printed motif repeating every 5 units (DIRT_TILE) on the
+// round-15 captures. Same values, moved back onto the warm axis.
+const GRIT_DK = hexToRGB('#493626'), GRIT_MD = hexToRGB('#8A755A'), GRIT_LT = hexToRGB('#BFA57E');
 
 // ---------------------------------------------------------------------
 // toon_ramp-lawn / toon_ramp-nest — the lighting ramp, not a surface.
@@ -817,18 +824,32 @@ function generateTunnelDirt() {
 
   writeTexture('tunnel-dirt', 'albedo', W, H, (u, v) => {
     const c = clod(u, v);
+    /* broad was 0.24. A 3x3 swing is a value pattern one third of a tile
+       wide — at DIRT_TILE = 5 that is a light-and-dark blotch 1.7 units
+       across, repeated identically every 5 units, and on a 34-unit mound it
+       is six copies of the same blotch. Large-scale value variation on a
+       wall is the *geometry's* job (the vertex colours the triplanar
+       multiplies, and the cavity shading baked into them); the texture's job
+       stops at the clod. Cut to 0.10, which leaves the ramp breathing
+       without giving the tile a signature. */
     const t = clamp01(0.40 + (c.id - 0.5) * 0.34 + facetLight(c.dx, c.dy) * 0.24
-      + (broad(u, v) - 0.5) * 0.24 + (grain(u, v) - 0.5) * 0.22);
+      + (broad(u, v) - 0.5) * 0.10 + (grain(u, v) - 0.5) * 0.26);
     let col = tri(DIRT_DK, DIRT_MD, DIRT_LT, t);
 
     const cre = 1 - smoothstep(clamp01(c.edge / 0.15));
     col = mixRGB(col, darken(DIRT_DK, 0.55), cre * 0.80);
 
+    /* Grains, not gravel. Two changes against v3: the GRIT ramp instead of
+       STONE (warm, so a grain is a pale bit of the same earth rather than a
+       cool chip dropped on it), and 0.66 instead of 0.88 coverage so the
+       clod still shows through its brightest grains. Together they take the
+       grain-to-wall value ratio from 1.9x down to ~1.35x, which is what
+       stops the eye finding the repeat before it finds the wall. */
     const p = pebble(u, v), pr = 0.22 + 0.14 * p.id;
     if (p.d < pr && p.id > 0.52) {
       const pl = facetLight(p.dx, p.dy);
-      col = mixRGB(col, tri(STONE_DK, STONE_MD, STONE_LT, clamp01(0.45 + pl * 0.42)),
-        smoothstep(clamp01((1 - p.d / pr) / 0.45)) * 0.88);
+      col = mixRGB(col, tri(GRIT_DK, GRIT_MD, GRIT_LT, clamp01(0.45 + pl * 0.42)),
+        smoothstep(clamp01((1 - p.d / pr) / 0.45)) * 0.66);
       const rim = (1 - Math.abs(p.d - pr * 0.92) / (pr * 0.22)) * clamp01(0.30 - pl);
       if (rim > 0) col = mixRGB(col, darken(DIRT_DK, 0.5), smoothstep(clamp01(rim)) * 0.6);
     }

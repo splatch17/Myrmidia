@@ -46,7 +46,8 @@ function el(id, style) {
 function nullHud() {
   return {
     setSite() {}, setPrompt() {}, setObjective() {}, setStock() {}, setEvent() {},
-    setHold() {}, toggleControls() {}, closeControls() {}, dispose() {},
+    setHold() {}, setDig() {}, setEventNow() {},
+    toggleControls() {}, closeControls() {}, dispose() {},
   };
 }
 
@@ -61,6 +62,9 @@ const CONTROLS = [
   ['Souris (glisser)', 'tourner la caméra'],
   ['Molette', 'reculer / rapprocher la vue'],
   ['E', 'action — appui court, ou maintenu quand la barre apparaît'],
+  ['5 / 6', 'prochaine ponte : ouvrières / fouisseuses'],
+  ['C', 'gestion de la reine — ponte, effectifs, chantiers'],
+  ['P', 'graphismes — et la cadence de test (raccourcit les attentes)'],
   ['H', 'afficher / masquer cette aide'],
 ];
 
@@ -101,6 +105,45 @@ export function createHud() {
         + `<span style="opacity:0.72"> — ${what}</span></div>`).join('');
   let controlsOpen = true;
 
+  /* ---- the dig gauge (#51) ----------------------------------------------
+     A ring, drawn AT the dig face rather than in a corner of the screen.
+
+     The straight bar this replaces was pinned to the bottom of the viewport
+     while the work it described happened somewhere the player could not see —
+     you were told a percentage and never told where to look. The porter asked
+     for the register modern games use for exactly this: a circular cast bar
+     over the thing being worked.
+
+     SVG rather than canvas: one element, no per-frame raster, and the ring is
+     a single stroke-dasharray write per frame. It is positioned by a screen
+     point the caller projects, so this file never learns what a camera is. */
+  const DIAL = 108;                     // viewBox units; CSS scales it
+  const R_RING = 42;
+  const CIRC = 2 * Math.PI * R_RING;
+  const dial = el('digdial', 'left:0;top:0;width:108px;height:108px;'
+    + 'pointer-events:none;transform-origin:50% 50%;');
+  dial.innerHTML = `<svg viewBox="0 0 ${DIAL} ${DIAL}" width="100%" height="100%">
+    <circle cx="54" cy="54" r="${R_RING}" fill="rgba(10,7,4,0.45)" stroke="rgba(0,0,0,0.55)" stroke-width="7"/>
+    <circle id="dialtrack" cx="54" cy="54" r="${R_RING}" fill="none"
+            stroke="rgba(255,214,150,0.16)" stroke-width="7"/>
+    <circle id="dialfill" cx="54" cy="54" r="${R_RING}" fill="none"
+            stroke="#ffc46a" stroke-width="7" stroke-linecap="round"
+            transform="rotate(-90 54 54)"
+            stroke-dasharray="${CIRC}" stroke-dashoffset="${CIRC}"/>
+    <circle id="dialpulse" cx="54" cy="54" r="${R_RING}" fill="none"
+            stroke="#ffe6b0" stroke-width="4" opacity="0"/>
+    <text id="dialpct" x="54" y="52" text-anchor="middle" dominant-baseline="middle"
+          font-family="monospace" font-size="21" fill="#ffe6b0">0%</text>
+    <text id="dialcrew" x="54" y="70" text-anchor="middle" dominant-baseline="middle"
+          font-family="monospace" font-size="11" fill="#e6d3ab" opacity="0.8"></text>
+  </svg>`;
+  dial.style.display = 'none';
+  const dialFill = dial.querySelector('#dialfill');
+  const dialPulse = dial.querySelector('#dialpulse');
+  const dialPct = dial.querySelector('#dialpct');
+  const dialCrew = dial.querySelector('#dialcrew');
+  let lastPct = -1, lastCrewText = null, pulseT = 0, wasFull = false;
+
   let lastSite = null, lastDetail = null, lastPrompt = null;
   let lastObjective = null, lastStock = null, lastEvent = null;
 
@@ -124,6 +167,58 @@ export function createHud() {
       if (factors !== lastDetail) { detail.textContent = factors; lastDetail = factors; }
     },
     setPrompt(text) { lastPrompt = setText(prompt, text, lastPrompt); },
+    /**
+     * Draw the dig gauge. `g` is null when there is nothing being dug, else
+     * { progress, diggers, sx, sy, scale, visible } — the caller does the
+     * projection, so this file stays a DOM file and knows no geometry.
+     *
+     * It shows at zero as soon as there is a face, greyed and empty: the
+     * player has to be able to learn where the work happens BEFORE laying
+     * anything, or the first clutch of fouisseuses is a guess.
+     */
+    setDig(g, dt = 0) {
+      const on = !!g && g.visible;
+      if (on !== (dial.style.display === 'block')) {
+        dial.style.display = on ? 'block' : 'none';
+      }
+      if (!on) { wasFull = false; return; }
+
+      const p = Math.max(0, Math.min(1, g.progress));
+      dialFill.style.strokeDashoffset = `${CIRC * (1 - p)}`;
+      dialFill.style.stroke = g.diggers > 0 ? '#ffc46a' : 'rgba(255,196,106,0.45)';
+
+      const pct = Math.round(p * 100);
+      if (pct !== lastPct) { dialPct.textContent = `${pct}%`; lastPct = pct; }
+      const crewText = g.diggers > 0
+        ? `${g.diggers} au front`
+        : 'personne ne creuse';
+      if (crewText !== lastCrewText) { dialCrew.textContent = crewText; lastCrewText = crewText; }
+
+      /* Completion pulse: one ring expanding out of the dial. It is the only
+         thing that says "look here, it just opened" at the moment the room
+         appears, and the room appears off to one side of the ring. */
+      if (p >= 1 && !wasFull) { wasFull = true; pulseT = 0.85; }
+      if (p < 1) wasFull = false;
+      if (pulseT > 0) {
+        pulseT = Math.max(0, pulseT - dt);
+        const k = 1 - pulseT / 0.85;
+        dialPulse.setAttribute('r', `${R_RING + k * 26}`);
+        dialPulse.style.opacity = `${(1 - k) * 0.9}`;
+      } else if (dialPulse.style.opacity !== '0') {
+        dialPulse.style.opacity = '0';
+      }
+
+      /* Placed by its centre, and scaled with distance so it reads as being
+         in the world rather than pasted on it — but clamped, because a ring
+         that fills the screen when she stands on top of the face is worse
+         than one that does not. */
+      const k = Math.max(0.55, Math.min(1.7, g.scale));
+      dial.style.transform = `translate(${g.sx - 54}px, ${g.sy - 54}px) scale(${k})`;
+    },
+
+    /** An event line that replaces whatever is there, for a player action
+     *  rather than a world event. */
+    setEventNow(text) { lastEvent = setText(event, text, null); },
     /** the standing goal of the prologue */
     setObjective(text) { lastObjective = setText(objective, text, lastObjective); },
     /** carried item + what is on the pile */
@@ -149,7 +244,7 @@ export function createHud() {
       controls.style.display = 'none';
     },
     dispose() {
-      for (const n of [objective, stock, site, detail, prompt, event, holdOuter, controls]) {
+      for (const n of [objective, stock, site, detail, prompt, event, holdOuter, controls, dial]) {
         if (n.parentNode) n.parentNode.removeChild(n);
       }
     },

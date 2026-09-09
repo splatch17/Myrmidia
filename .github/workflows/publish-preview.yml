@@ -1,0 +1,70 @@
+name: Publish preview
+
+# The published link only moves when you push to `preview`:
+#
+#     git push origin HEAD:preview        # from any branch
+#
+# Nothing runs on your machine: GitHub builds the game and serves the result at
+# https://splatch17.github.io/Myrmidia/
+
+on:
+  push:
+    branches: [preview]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it, so the live link is
+# never left half-updated.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: game/package-lock.json
+
+      - name: Install dependencies
+        working-directory: game
+        run: npm ci
+
+      - name: Build the game
+        working-directory: game
+        run: npm run build
+
+      - name: Assemble the site
+        run: |
+          mkdir -p _site/game _site/design
+          cp -r game/dist/. _site/game/
+          cp -r design/. _site/design/
+          cp .github/pages/index.html _site/index.html
+          printf '%s\n' "$GITHUB_SHA" > _site/COMMIT
+          echo "--- published tree ---"
+          find _site -maxdepth 2 -not -path '*/assets/*' | sort
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -4,6 +4,7 @@ import { groundY, TREE, treeTrunkRadius, treeWalkBranch } from '../world/index.j
 import { createGrassField } from '../world/grass.js';
 import { bladeCurvePoint, bladeClimbBasis } from '../world/blade.js';
 import { PLAYER_AVATAR } from './avatar.js';
+import { insideNest } from './nest.js';
 
 /* ==========================================================================
    Stem/tree climbing (README "Suite" — grimpe des tiges, #5 on the old
@@ -66,6 +67,11 @@ const TREE_WALK_LEN = (() => {
 /** Nearest climbable target within range, or null — grass blades tall
  *  enough to bother with, or the tree trunk. */
 export function nearestClimbable(ant) {
+  /* Stems and the tree are rooted in the lawn, and both the offer and the
+     climb itself are resolved in 2D: underground, the nearest "climbable" is
+     a blade of grass growing in the roof twenty units up, and taking it would
+     teleport her out through it. Nothing is climbable in a nest yet (#40). */
+  if (insideNest(ant.x, ant.z)) return null;
   let best = null, bestD = reach(ant); // plain distance, so it compares fairly against the tree's surface distance below
   for (let i = 0; i < GRASS.length; i++) {
     const g = GRASS[i];

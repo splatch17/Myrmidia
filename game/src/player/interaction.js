@@ -2,8 +2,11 @@ import { collideRadius, PLAYER_AVATAR } from './avatar.js';
 import { nearestClimbable, tryInteract, climbPromptText, GRASS } from './climb.js';
 import { TREE } from '../world/index.js';
 import { createHarvest, FOUND_STOCK, CACHE_RADIUS } from './harvest.js';
+import { paceCost } from '../core/pace.js';
 import { KIND_LABEL, nodesAreProvisional } from './resources.js';
 import { canFound, found, refusalText, isFounded, provisional as foundingProvisional, FOUND_SECONDS, nestOrigin, bearingWord } from './founding.js';
+import { createLaying } from './laying.js';
+import { insideNest } from './nest.js';
 
 /* ==========================================================================
    One key, several verbs (#29/#33).
@@ -31,21 +34,53 @@ import { canFound, found, refusalText, isFounded, provisional as foundingProvisi
         (the pile is where she chose to put it, not where the food is).
      4. a node in reach     -> hold E to harvest
      5. a stem/trunk in reach -> E climbs
+   Once the colony exists, rung 3 becomes "hold E at the mouth to lay the next
+   clutch" (#6): same gesture, same pile, same cost — the loop does not change
+   shape once the nest is dug, it changes what the five units buy.
    ========================================================================== */
 
-const HOLD_KINDS = { harvest: true, found: true };
+const HOLD_KINDS = { harvest: true, found: true, lay: true };
+
+const LAY_SECONDS = 2.2;    // held: going down to lay
+const MOUTH_RADIUS = 15;    // how close to her own entrance counts as "at it"
 
 export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   const harvest = createHarvest();
   const bodyR = collideRadius(profile);
 
-  let foundProgress = 0;
+  const laying = createLaying();
+  let foundProgress = 0, layProgress = 0;
   let lastMessage = null, messageTimer = 0;
+
+  /** Distance from the ant to the mouth of her own nest, or Infinity. */
+  function mouthDistance(ant) {
+    const o = nestOrigin();
+    return o ? Math.hypot(o.x - ant.x, o.z - ant.z) : Infinity;
+  }
+
+  /* What a clutch costs. The founding price, scaled by the test pace — the
+     number lives in harvest.js where it belongs and core/pace.js decides how
+     much of it is charged while we are debugging. */
+  function clutchCost() { return paceCost(FOUND_STOCK); }
+
+  /** Can she lay right now — and does she have to be taken down there for it?
+   *  Standing in her own nest is the answer to both questions at once: the
+   *  descent is a thing to watch only while it is also a thing she cannot do
+   *  herself (#40). Once she has walked down, E lays where she stands. */
+  function layPlace(ant) {
+    if (!isFounded() || foundingProvisional() || !laying.canLayMore()) return null;
+    if (harvest.stock() < clutchCost()) return null;
+    if (insideNest(ant.x, ant.z)) return 'here';
+    return mouthDistance(ant) <= MOUTH_RADIUS ? 'descend' : null;
+  }
 
   function say(text, seconds = 3.2) { lastMessage = text; messageTimer = seconds; }
 
   /** What E means right now. Pure — the HUD reads it every frame. */
   function resolve(ant) {
+    // the founding sequence owns her (laying.js): E means nothing until it
+    // hands her back
+    if (laying.active()) return { kind: 'sequence' };
     if (ant.climb) return { kind: 'climb', climbTarget: null };
 
     if (harvest.state.carrying) {
@@ -68,6 +103,9 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
       return { kind: 'found', ok: verdict.ok, reason: verdict.reason, assumed: verdict.assumed };
     }
 
+    const place = layPlace(ant);
+    if (place) return { kind: 'lay', inPlace: place === 'here' };
+
     const node = harvest.target(ant, bodyR);
     if (node) return { kind: 'harvest', node };
 
@@ -83,6 +121,13 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
    * a second time (and possibly differently).
    */
   function update(ant, pressed, held, dt) {
+    /* The sequence moves the ant itself, so it runs before anything that
+       might also move her, and it is stepped even when it is idle: it owns
+       the prologue -> colony crossfade, which outlives the last phase. */
+    laying.update(ant, dt);
+    const ev = laying.eventText();
+    if (ev) say(ev, 6);
+
     const act = resolve(ant);
 
     if (messageTimer > 0) { messageTimer -= dt; if (messageTimer <= 0) lastMessage = null; }
@@ -90,6 +135,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     // any rung that is not the hold it was on lets that hold decay
     if (act.kind !== 'harvest' || !held) harvest.release(dt);
     if (act.kind !== 'found' || !held || !act.ok) foundProgress = Math.max(0, foundProgress - dt / FOUND_SECONDS);
+    if (act.kind !== 'lay' || !held) layProgress = Math.max(0, layProgress - dt / LAY_SECONDS);
 
     switch (act.kind) {
       case 'harvest': {
@@ -111,17 +157,50 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
                 ? 'Colonie fondée ici. (le monde ne creuse pas encore la chambre)'
                 : 'Colonie fondée ici.')
               : `impossible : ${refusalText(res.reason)}`, 6);
+            /* Straight into the descent, with no free walk in between: the
+               sky's crossfade has to happen while she is underground
+               (design/ressources-et-fondation.md §7a). laying.js refuses on
+               its own if the world could not actually dig a chamber. */
+            if (res.ok) {
+              /* The pile is what she dug with: it goes into the founding, the
+                 same five units a later clutch costs. Leaving it standing let
+                 the queen lay a second clutch the moment she climbed back out
+                 of the first, on food she had never gone back for. */
+              harvest.spend(clutchCost());
+              laying.begin(ant);
+            }
           }
         }
         break;
       }
+      case 'lay': {
+        if (held) {
+          layProgress += dt / LAY_SECONDS;
+          if (layProgress >= 1) {
+            layProgress = 0;
+            const laid = act.inPlace ? laying.layInPlace() : laying.begin(ant);
+            if (laid) {
+              harvest.spend(clutchCost());
+              if (act.inPlace) say(laying.eventText() || 'Elle pond.', 6);
+            }
+          }
+        }
+        break;
+      }
+      case 'sequence':
+        /* The cutscene is a cutscene, so E gets her out of it — same key, and
+           the only one the player has been taught. laying.skip() settles what
+           the sequence still owed before handing her back, so cutting it can
+           never lose the clutch it was there to show. */
+        if (pressed && laying.skip(ant)) say(laying.eventText() || 'Ponte.', 6);
+        break;
       case 'drop':
         if (pressed) {
           const kind = harvest.state.carrying.kind;
           if (harvest.drop(ant)) {
             say(harvest.stock() === 1
               ? `dépôt ouvert ici — ${KIND_LABEL[kind]} posée`
-              : `${KIND_LABEL[kind]} ajoutée au dépôt (${harvest.stock()}/${FOUND_STOCK})`);
+              : `${KIND_LABEL[kind]} ajoutée au dépôt (${harvest.stock()}/${clutchCost()})`);
           }
         }
         break;
@@ -142,6 +221,12 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   /** The contextual line: what E would do, or how far along the current hold
    *  is. Null when there is nothing to say. */
   function promptText(ant, act) {
+    if (act.kind === 'sequence') return laying.promptText();
+    if (act.kind === 'lay') {
+      if (layProgress > 0) return `Ponte… ${pct(layProgress)}`;
+      const verb = act.inPlace ? 'pondre ici' : 'descendre pondre';
+      return `E (maintenir) — ${verb} (${clutchCost()} unité${clutchCost() > 1 ? 's' : ''} du dépôt)`;
+    }
     if (act.kind === 'climb') return climbPromptText(ant, act.climbTarget);
     if (act.kind === 'return') return act.label;
     if (act.kind === 'drop') return `E — ${act.label}`;
@@ -160,14 +245,22 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
 
   /** The standing objective: what this whole prologue is for, in one line. */
   function objectiveText(ant) {
+    if (laying.active()) return 'La fondation : elle descend pondre.';
     if (isFounded()) {
       const o = nestOrigin();
       const d = Math.hypot(o.x - ant.x, o.z - ant.z);
       const where = d < 12 ? 'ici' : `à ${d.toFixed(0)} u ${bearingWord(ant.x, ant.z, o.x, o.z)}`;
-      return `Colonie fondée ${where}. Suite : la ponte (pas encore implémentée).`
-        + (foundingProvisional() ? ' [chambre non creusée]' : '');
+      const tail = foundingProvisional() ? ' [chambre non creusée]' : '';
+      const brood = laying.brood();
+      if (brood === 0) return `Colonie fondée ${where}. Objectif : descendre pondre.${tail}`;
+      if (!laying.canLayMore()) return `${brood} couvées — la chambre est pleine. Suite : les ouvrières.${tail}`;
+      const missing = clutchCost() - harvest.stock();
+      if (missing > 0) {
+        return `${brood} couvée${brood > 1 ? 's' : ''}. Objectif : ${missing} unité${missing > 1 ? 's' : ''} de plus pour la suivante.${tail}`;
+      }
+      return `${brood} couvée${brood > 1 ? 's' : ''}. Objectif : rentrer pondre — le nid est ${where}.${tail}`;
     }
-    const missing = FOUND_STOCK - harvest.stock();
+    const missing = clutchCost() - harvest.stock();
     if (harvest.state.carrying) {
       return harvest.state.cache
         ? `Objectif : rapporter au dépôt — encore ${missing} pour fonder`
@@ -187,6 +280,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   function holdProgress(act) {
     if (act.kind === 'harvest' && harvest.state.progress > 0) return harvest.state.progress;
     if (act.kind === 'found' && foundProgress > 0) return foundProgress;
+    if (act.kind === 'lay' && layProgress > 0) return layProgress;
     return null;
   }
 
@@ -213,6 +307,11 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
         const c = harvest.state.cache;
         return c ? { x: c.x, z: c.z, radius: 11, blocked: false } : null;
       }
+      case 'lay': {
+        if (act.inPlace) return { x: ant.x, z: ant.z, radius: 9, blocked: false };
+        const o = nestOrigin();
+        return o ? { x: o.x, z: o.z, radius: 9, blocked: false } : null;
+      }
       case 'climb': {
         const t = act.climbTarget;
         if (!t) return null;
@@ -226,8 +325,16 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   }
 
   return {
-    harvest, update, resolve, promptText, objectiveText, inventoryText, message,
+    harvest, laying, update, resolve, promptText, objectiveText, inventoryText, message,
     holdProgress, targetMark,
+    /** What a clutch costs right now, with the test pace already applied.
+     *  Exposed so the queen's panel (#53) shows the same number the prompt
+     *  does instead of deriving a second one that can drift from it. */
+    clutchCost,
+    /** True while the founding sequence, not the player, is driving the ant. */
+    busy: () => laying.active(),
+    /** The scripted camera shot for this frame, or null (camera.js). */
+    shot: (ant) => laying.shot(ant),
     isHold: (act) => !!HOLD_KINDS[act.kind],
     endFrame: () => harvest.endFrame(),
   };

@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { clamp, damp, lerp } from '../core/noise.js';
 import { profileR, groundY, getRoomBranches, QUEEN, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R } from '../world/index.js';
+import { floorUnder } from './legs.js';
 // wallPoint()/riseAt() are exported by world/underground.js but not re-exported
 // by the world barrel; imported directly rather than editing world/* (Atta's
 // files) this round. Asking for them on the barrel is in the round report.
 import { wallPoint } from '../world/underground.js';
+import { nestFootprint, boundaryBetween } from './nest.js';
 
 /* ==========================================================================
    Follow camera — ported from desiredCamera() in
@@ -227,7 +229,45 @@ function cavityAt(ant) {
   return { br, uAnt, corridorLen: corridorLen(br) };
 }
 
+/* The run-time nest (#40) is not the pre-built gallery: it has no
+   cross-section functions to sample, only the footprint the world publishes
+   (api-monde-gameplay.md §6). So the same *shape* of answer is built from the
+   only two things that footprint offers — is this point inside, and how much
+   room is there over the floor:
+     - horizontally, the eye is pulled back along the line to the ant until it
+       is inside again, and how far it had to move is the error fittedBoom()
+       already knows how to shorten a boom against;
+     - vertically, it is clamped between the floor and the ceiling, which
+       stays free (the #27 rule: being pushed under a low ceiling is what
+       makes a tunnel read as a tunnel, and never makes the shot illegal).
+   No new camera behaviour, then — the existing fit search, fed a cavity it
+   could not previously see. */
+const NEST_EYE_FLOOR = 1.8, NEST_EYE_CEIL = 1.0;
+function clampEyeToNest(eye, fp, ant) {
+  let moved = 0;
+  if (!fp.contains(eye[0], eye[2])) {
+    const [bx, bz] = boundaryBetween(fp, ant.x, ant.z, eye[0], eye[2]);
+    moved = Math.hypot(bx - eye[0], bz - eye[2]);
+    eye[0] = bx; eye[2] = bz;
+  }
+  const f = fp.floorY(eye[0], eye[2]);
+  const head = fp.headroom(eye[0], eye[2]);
+  eye[1] = clamp(eye[1], f + NEST_EYE_FLOOR, f + Math.max(NEST_EYE_FLOOR + 0.6, head - NEST_EYE_CEIL));
+  return moved;
+}
+
 function containCameraEye(eye, ant, cav) {
+  const fp = nestFootprint();
+  /* The whole excavation, roofed end and open cut alike. The cut was tried as
+     "outdoors" first and it is not: it is 26 across and 22 deep, so a boom of
+     any useful length lands outside it, and keeping the eye above the ground
+     *at its own position* then lifts it onto the meadow — which is a shot of
+     the lawn with the queen twenty units below the bottom of frame. Inside the
+     footprint either way, then; what the open cut buys is an infinite ceiling
+     (clampEyeToNest reads headroom, so it does not clamp what has no roof) and
+     therefore a camera that can rise out of the trench rather than one pressed
+     under a lid that is not there. */
+  if (fp && fp.contains(ant.x, ant.z)) return clampEyeToNest(eye, fp, ant);
   if (ant.z < TUNNEL_MOUTH - 2) {
     pushEyeOffQueen(eye);
     return clampEyeToCavity(eye, cav || cavityAt(ant));
@@ -298,15 +338,23 @@ export function desiredCamera(ant, camYaw, wantPitch, camDist) {
   // would look straight through it back down to the lawn
   const head = ant.climb
     ? [ant.x, ant.y + 2.0 * s, ant.z]
-    : [ant.x, groundY(ant.x, ant.z) + 2.6 * s, ant.z];
-  const inTunnel = ant.z < TUNNEL_MOUTH - 2;
+    : [ant.x, floorUnder(ant, ant.x, ant.z) + 2.6 * s, ant.z];
+  const fp = nestFootprint();
+  // "in the nest" for framing purposes means under its roof: the open cut is
+  // shot like the meadow it is carved into (see containCameraEye)
+  const inNest = !!fp && fp.contains(ant.x, ant.z);
+  // Infinity in the open cut, which makes dWant fall through to camDist: a
+  // trench open to the sky has no reason to pull the boom in
+  const nestHead = inNest ? fp.headroom(ant.x, ant.z) : 0;
+  const inTunnel = !inNest && ant.z < TUNNEL_MOUTH - 2;
+  const enclosed = inNest || inTunnel;
   const cav = inTunnel ? cavityAt(ant) : null;
-  const room = inTunnel ? currentRoomRadius(ant.x, ant.z) : TUNNEL_R;
+  const room = inTunnel ? currentRoomRadius(ant.x, ant.z) : inNest ? nestHead : TUNNEL_R;
   // resserrement automatique en tunnel étroit (#18): the floor follows the
   // avatar, the room term does not — a gallery is as wide as it is whoever
   // is walking down it
-  const dWant = inTunnel ? Math.min(camDist, Math.max(13.5 * s, room * 1.5)) : camDist;
-  const shot = inTunnel
+  const dWant = enclosed ? Math.min(camDist, Math.max(13.5 * s, room * 1.5)) : camDist;
+  const shot = enclosed
     ? fittedShot(head, camYaw, wantPitch, dWant, ant, cav)
     : { pitch: wantPitch, d: dWant };
   const eye = eyeAt(head, camYaw, shot.pitch, shot.d, s);
@@ -327,10 +375,19 @@ export function createCameraRig(camera) {
   // camAim, camera itself re-targets afterwards, once the ant has moved.
   const rig = { eye: null, aim: null };
 
-  function update(ant, camYaw, wantPitch, camDist, dt) {
-    const want = desiredCamera(ant, camYaw, wantPitch, camDist);
-    if (!rig.eye) { rig.eye = want.eye.slice(); rig.aim = want.aim.slice(); }
-    const rate = 6.5;
+  /* `shot` (optional) is a {eye, aim, cut} the caller has composed itself —
+     the founding sequence (player/laying.js), which puts the camera down a
+     shaft and inside a chamber the containment below knows nothing about
+     (that code answers for the *pre-built* gallery; a run-time nest is a hole
+     in the lawn, and containCameraEye would helpfully push the eye back up to
+     the meadow, leaving the shot pointed at the underside of the grass). A
+     scripted shot is therefore taken as final: damped like any other so the
+     hand-off in and out is smooth, but never re-clamped. `cut` snaps instead
+     of damping, for the two places the sequence changes vantage point. */
+  function update(ant, camYaw, wantPitch, camDist, dt, shot) {
+    const want = shot || desiredCamera(ant, camYaw, wantPitch, camDist);
+    if (!rig.eye || (shot && shot.cut)) { rig.eye = want.eye.slice(); rig.aim = want.aim.slice(); }
+    const rate = shot ? 5.0 : 6.5;
     for (let c = 0; c < 3; c++) {
       rig.eye[c] = damp(rig.eye[c], want.eye[c], rate, dt);
       rig.aim[c] = damp(rig.aim[c], want.aim[c], rate * 1.4, dt);
@@ -339,7 +396,7 @@ export function createCameraRig(camera) {
     // legal eyes isn't itself guaranteed to be legal once rooms have real
     // (doorway-pinched, non-convex) shapes — this is what keeps the eye out
     // of geometry while turning, not just once movement settles.
-    containCameraEye(rig.eye, ant);
+    if (!shot) containCameraEye(rig.eye, ant);
     camera.position.set(rig.eye[0], rig.eye[1], rig.eye[2]);
     camera.lookAt(new THREE.Vector3(rig.aim[0], rig.aim[1], rig.aim[2]));
   }

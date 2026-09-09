@@ -31,6 +31,8 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
   let interactPressed = false;
   // H toggles the controls panel — same edge-triggered treatment as E
   let helpPressed = false;
+  let menuPressed = false;
+  let castePressed = null;
 
   function isMoveKey(codes) {
     for (let i = 0; i < codes.length; i++) if (keys[codes[i]]) return true;
@@ -41,6 +43,11 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
     keys[e.code] = true;
     if (e.code === 'KeyE') interactPressed = true;
     if (e.code === 'KeyH') helpPressed = true;
+    if (e.code === 'KeyC') menuPressed = true;
+    // 5/6 choose the caste of the next clutch. Digits 1-4 belong to the
+    // graphics panel (core/quality.js), which owns its own listener.
+    if (e.code === 'Digit5') castePressed = 'worker';
+    if (e.code === 'Digit6') castePressed = 'digger';
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].indexOf(e.code) >= 0) e.preventDefault();
   }
   function onKeyUp(e) { keys[e.code] = false; }
@@ -115,9 +122,23 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
   }
 
   /** Consumes a pending H press, same contract as consumeInteract(). */
+  /** Consumes a pending C press, same contract as consumeInteract(). */
+  function consumeMenu() {
+    const v = menuPressed;
+    menuPressed = false;
+    return v;
+  }
+
   function consumeHelp() {
     const v = helpPressed;
     helpPressed = false;
+    return v;
+  }
+
+  /** Consumes a pending caste pick, or null. */
+  function consumeCaste() {
+    const v = castePressed;
+    castePressed = null;
     return v;
   }
 
@@ -135,5 +156,5 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
     domElement.removeEventListener('wheel', onWheel);
   }
 
-  return { state, readMoveIntent, consumeInteract, consumeHelp, isInteractHeld, dispose };
+  return { state, readMoveIntent, consumeInteract, consumeHelp, consumeMenu, consumeCaste, isInteractHeld, dispose };
 }

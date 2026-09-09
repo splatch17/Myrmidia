@@ -1,5 +1,9 @@
 # Myrmidia — journal de progression
 
+> **Nouveau : [`REPRISE.md`](REPRISE.md) est le dossier de reprise complet** —
+> objectifs, arbitrages actés, demande en cours, pièges. À lire **avant** ce
+> fichier-ci quand la session repart de zéro.
+
 Fichier de reprise. À lire en premier au début d'une session, à mettre à jour
 à la fin. Il répond à trois questions et rien d'autre : **où on en est**,
 **ce qui est cassé/en attente**, **quoi faire ensuite**.
@@ -12,15 +16,22 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-03
+## État au 2026-09-09 (tour 16)
 
 **Branche de travail :** `feature/threejs-migration`.
-**Pull request :** [#23](https://github.com/splatch17/Myrmidia/pull/23), ouverte
-contre `main`, mergeable. **Pas encore mergée** — le merge a été refusé par le
-classificateur d'auto-mode, il faut l'autoriser ou cliquer sur GitHub.
+**`main` :** la [PR #23](https://github.com/splatch17/Myrmidia/pull/23) est
+**mergée** (`0f1a28a`, 2026-09-03). Le moteur est sur `main`, le lien de test du
+README pointe dessus. Le travail continue sur la branche et repassera par une PR.
 **Stack :** Three.js 0.169 + Vite 5, projet npm à la racine `game/`.
 **Lien de test :** voir le tableau du `README.md` (build `game/dist/`, servi
 par raw.githack depuis la branche).
+
+> ### ⚠ La cadence de test est ACTIVE
+> `core/pace.js` divise toutes les attentes par 8 et tous les coûts par 5.
+> C'est volontaire pendant la phase de debug, mais **le rythme réel du jeu ne
+> peut pas être jugé avec ça allumé** — une galerie en cinq secondes est un
+> débogueur, pas un design. `P` puis `5` la coupe. À repasser en réel avant
+> tout arbitrage de game design.
 
 ### Pour reprendre en trois minutes
 
@@ -36,18 +47,33 @@ Puis **regarder les PNG**. Tous les défauts rattrapés depuis le round 3 l'ont
 
 ### Ce qui tourne aujourd'hui
 
-**Le prologue a une boucle, plus seulement un décor.** La reine apparaît seule
-sur la prairie au crépuscule. Elle récolte (maintien de E, ça prend du temps,
-elle **porte** visiblement ce qu'elle a pris), rapporte, dépose — et le premier
-dépôt fixe le site de la colonie. Au seuil atteint, sur un sol creusable, elle
-fonde : la première chambre est creusée **à l'exécution**, à l'endroit choisi.
+**Le prologue est complet, et prouvé de bout en bout sur captures.** La reine
+apparaît seule sur la prairie au crépuscule. Elle récolte (maintien de E, elle
+**porte** visiblement ce qu'elle a pris), rapporte, dépose — le premier dépôt
+fixe le site. Au seuil atteint, sur un sol creusable, elle creuse : la chambre
+est excavée **à l'exécution** à l'endroit choisi, elle descend son propre puits,
+**pond sa première couvée**, et pendant qu'elle est sous terre le monde bascule
+du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
+
+`node scripts/verify-harvest.mjs _s` rejoue tout et capture chaque étape.
+**Tous les tests passent.**
 
 | Domaine | État |
 |---|---|
-| Carte de surface | Écrite à la main, 398×250 jouables, 552×322 maillés, zéro aléatoire |
+| Carte de surface | Écrite à la main, **608×460 jouables**, 770×540 maillés, zéro aléatoire |
+| Eau | Rivière à l'ouest + **mare dans le creux est** — et `waterDepthAt()` a enfin une empreinte |
+| Ponte | Séquence scriptée de ~14 s : descente, ponte, bascule du ciel hors champ, remontée |
+| **Colonie** | La couvée éclot. Les ouvrières récoltent et rapportent sans le joueur. Rendu instancié : 6 ouvrières = 47 draw calls |
+| **Castes** | La reine choisit ce qu'elle pond (5 = ouvrières, 6 = creuseuses). Une caste est une ligne dans `avatar.js`, jamais un fichier. **La creuseuse se débloque à la 2e ponte** |
+| **Cadence de test** | `core/pace.js` : attentes /8, coûts /5 (plancher 1 unité). **ON par défaut** — `P` puis `5` pour la couper |
+| **Creuser** | **Un front de taille sur la paroi de la chambre, une jauge circulaire posée dessus, et au bout une salle — le hall.** L'excavation est une liste de salles et de liaisons (`world/excavation.js`), donc le tunnel suivant est une donnée, pas un troisième fichier qui a un avis sur où est le sol |
+| **Menu de la reine** | `C`. Ponte et caste, réserve et coût, effectifs, chantiers. Attaché au **drapeau `manages` du profil**, pas à « est-ce le joueur » — un ouvrier se le voit refuser, ce qui est le vrai critère de #53 |
+| ~~Première galerie~~ | **Les creuseuses creusent, jauge en digger-secondes, puis la galerie s'ouvre d'un coup — et on y descend à pied.** Rampe (`world/excavation.js`), chambre, ponte sur place, fond de galerie, remontée. Éclairée par trois lampes réparties sur la longueur, pas une au bout |
+| **Descendre / remonter** | `nestFootprint()` / `descentPath()` (contrat §6) côté monde, `player/nest.js` côté joueur. Pente pire cas 0,43 ; aucun à-pic > 0,11 sur 323 pas ; la paroi tient (`headroom()` finie = jamais une porte) |
+| Index spatial | Une grille uniforme sous toutes les requêtes de proximité. `nearestClimbable` ×42, une image à 20 fourmis passe de 3,43 ms à 0,10 ms |
 | Rivière | Bord ouest, plan d'eau ondulé, berge de sable, Fresnel vers le ciel |
 | Horizon | Deux rideaux de crêtes qui suivent la caméra en x/z |
-| Herbe | 1600 brins, largeur par instance, quille de normale + vrille, **ombre portée** (même fonction GLSL pour la passe visible et la passe de profondeur) |
+| Herbe | 3400 brins, largeur par instance, quille de normale + vrille, **ombre portée** (même fonction GLSL pour la passe visible et la passe de profondeur) |
 | Ressources | 3 espèces semées une fois, denses près de l'arbre et dans le creux, aucune dans l'eau |
 | Récolte | Approche → maintien → portage visible → dépôt. Réserve affichée |
 | Fondation | `foundNest()` creuse la 1re chambre au point choisi. L'ancien nid devient l'état « déjà fondé » |
@@ -55,7 +81,8 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 | Ciel | Deux rigs (prologue crépusculaire / colonie fondée) commutés par un scalaire `founded` |
 | Textures | 6 albédos triplanaires + `seed`. `lawn-soil` corrigé, ne vire plus au rouille |
 | Contours | Coque inversée sur les créatures, ~1,3 px constant à l'écran, ardoise dehors / noir chaud dedans |
-| Lisibilité | Panneau de commandes (H), jauge de maintien, **anneau au sol sous la cible de E** (miel = possible, rouge = refusé) |
+| Lisibilité | Panneau de commandes (H), jauge de maintien, anneau au sol sous la cible de E (décal doux additif, arc qui tourne) |
+| Réglages | **P** ouvre les graphismes : 1 résolution, 2 ombres, 3 herbe, 4 textures. Compteur d'images en bas à droite. Persisté en `localStorage` |
 | Nid pré-construit | **Désactivé** (`SHOW_PREBUILT_NEST = false` dans `world/index.js`). Il n'avait plus de rôle depuis que la colonie se creuse à l'exécution |
 | Perf | 145k tris, 18 programmes, 427 Ko VRAM textures, pire médiane 6,3 ms à hauteur de fourmi, 0 erreur console |
 
@@ -72,29 +99,38 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 | # | Défaut | Gravité |
 |---|---|---|
-| 1 | **La fondation n'a jamais été vue.** Les captures s'arrêtent à « Réserve : 3/5 ». Le code est là et compile, le moment ne l'est pas | **Bloquant** |
-| 2 | La bouche de l'ancien tunnel montre le ciel au travers quand le nid est réactivé : le tube élargi a son plafond à y=24, la couture de `terrain.js` a été taillée pour y=11 | Bloque la réactivation |
-| 3 | La reine reste sombre de corps. Le contour la détache mais sa chitine est à la même valeur que le sol | DA |
-| 4 | Le tramage de dissolution proche caméra est très visible sur les brins traversés | Petit mais voyant |
-| 5 | `RIG_PROLOGUE` a été retouché quatre fois à l'intégration. Chaque valeur est annotée contre celle de `ambiance-prologue.md`. **La DA n'a jamais arbitré** | À arbitrer |
-| 6 | Rayons de grimpe et de collision des tiges divisés par ~2,1 avec l'affinement des brins. Jamais jugé sur capture | À vérifier |
-| 7 | Points 4 à 7 de `design/herbe-brins.md` non câblés | Reste à faire |
-| 8 | Pas de bloom sur les émissifs — 3e volet de #28 | Reste à faire |
+| 1 | ~~On ne peut pas entrer dans la galerie (#40)~~ **Fait au tour 15**, et le tour 16 a corrigé ce qui restait pénible (#48, #49) | ✅ |
+| 1b | **Le hall est nu.** C'est un volume correct et éclairé, mais il ne porte encore aucun front de taille sur ses parois : rien à y faire une fois qu'on y est. Le modèle le supporte, les nombres attendent le brainstorm demandé | À faire |
+| 2 | **Les touches 5/6 sont committées sans capture.** Mon harnais jetable n'envoie aucune touche (H n'y bascule pas le panneau non plus) alors que `verify-harvest.mjs` y arrive. Défaut du script, pas du jeu — mais à prouver | À vérifier |
+| 2b | ~~La reine surexposée sous la lampe de la bouche~~ **Corrigé au tour 16** : `WARM_MOUTH_LIGHT` ramenée à `[0.46,0.26,0.10]`, le plancher d'ambiance à 0,55 portant désormais l'entrée | ✅ |
+| 3 | La séquence de ponte est scriptée : ~14 s sans contrôle. Acceptable une fois, pas répétable | Design |
+| 4 | La reine reste sombre de corps ; le contour la détache mais sa chitine est à la valeur du sol | DA |
+| 5 | `RIG_PROLOGUE` retouché quatre fois à l'intégration. **La DA n'a jamais arbitré** (Cephalotes coupé 3 tours de suite) | À arbitrer |
+| 6 | La bouche de l'ancien tunnel montre le ciel si `SHOW_PREBUILT_NEST` est réactivé | Bloque la colonie abandonnée |
+| 7 | `nearestClimbable()` et `harvest.target()` scannent encore linéairement | Perf |
+| 8 | Tramage de dissolution très visible ; points 4-7 de `herbe-brins.md` ; pas de bloom | Reste à faire |
 
 ## Prochaines étapes
 
-1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
-   capturer le moment. Tant qu'il n'est pas vu, il n'est pas livré.
-2. **#6 — la ponte**, et la bascule crépuscule → jour **à la première ponte,
-   pas au premier coup de pelle** (`design/ressources-et-fondation.md`).
-   `populateNest()` et `setFoundedMix()` existent, il n'y a qu'à s'en servir.
-3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
-   petit nid mort à trouver : entrée effondrée avec du relief, champignons
-   toujours luminescents (le champignon survit à la colonie). Corrige aussi le
-   défaut 2 au passage, puisque la bouche devient un éboulis et non un trou.
-4. **Lisibilité de la reine** (défaut 3) — mesurer, puis chiffrer.
-5. Bloom sélectif (défaut 8), points 4-7 de la spec des brins (défaut 7).
-6. **#34 — mode macro**, le nid en coupe vue de côté.
+L'objectif nommé par le porteur — **voir la première galerie se creuser et
+pouvoir y entrer** — est **atteint** (tour 15, `da6d7ce`). La rampe a été
+choisie plutôt que le puits, comme arbitré. Reste :
+
+1. **Le brainstorm sur l'économie du creusement**, que le porteur a annoncé
+   lui-même : combien de fourmis pour quel creusement, coût en
+   fourmis-secondes ou en effectif minimum, ce qu'on creuse après le hall, si
+   un tunnel se paye aussi en ressources. Rien n'est tranché à sa place ; les
+   75 fourmis-secondes du hall sont un point de départ.
+2. **Des fronts de taille sur les parois du hall**, une fois les nombres
+   décidés. Le modèle les supporte déjà (une liste, pas un cas particulier).
+3. ~~Le menu de gestion de la reine~~ ✅ fait. Ancien texte : (`castes-et-micro-macro.md` §2). Il
+   commence à exister dès qu'il y a deux castes à arbitrer, ce qui est le cas
+   depuis ce tour. Aujourd'hui le choix de caste est deux touches sans écran.
+3. **#34 — mode macro**, le nid en coupe vue de côté.
+4. **Contrôler n'importe quelle fourmi** — demande d'abord que le joueur cesse
+   d'être un cas particulier (#36, `etat-des-lieux.md` §2c).
+5. Finir la conversion à l'index (`nearestClimbable`, `harvest.target`).
+6. Lisibilité de la reine, arbitrage du rig, bloom, colonie abandonnée.
 
 ## Où sont les choses
 
@@ -136,7 +172,26 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
    brins (9,1 contre une reine de 7,0), et l'alésage du nid (couloir de 3,3
    pour une reine de 3,3 — infranchissable). Aucun ne lève d'erreur, aucun ne
    se voit sans mesurer. **Réflexe : quand une constante décrit une taille, se
-   demander contre quel corps elle a été écrite.** L'avatar est passé de
+   demander contre quel corps elle a été écrite.** Et au tour 15, la même
+   erreur **sous forme de prédicat** : `movement.js` demandait « ce bord est-il
+   une porte ? » par `groundY(bord) - floorY(bord)`, ce qui était juste tant
+   que `groundY()` ne répondait que la pelouse. Depuis #41 elle répond le sol
+   du nid dans toute l'empreinte, donc sur le bord elle comparait le sol à
+   lui-même, lisait zéro, et déclarait porte **chaque paroi**. Une constante
+   n'est pas seule à pouvoir être calibrée contre un monde qui a changé — un
+   test l'est aussi.
+7. **Un harnais qui suit la ligne centrale ne touche jamais un mur.** L'alésage
+   de la galerie a publié 3,1 de demi-largeur marchable pour une reine de rayon
+   3,3 pendant deux tours, et trois harnais verts n'ont rien vu — ils visaient
+   tous des points de la ligne médiane. **Un test de couloir doit viser le
+   mur**, pas le milieu. (Et c'est la 4e occurrence du piège 6.)
+8. **Un arc doit contenir ses propres extrémités.** `rampOffset()` rejetait
+   `u < 0` sans tolérance ; `u` étant reconstruit par un `atan2` et un wrap, le
+   point de départ tombait à ±1e-16 selon le site. Une fois sur deux le seuil
+   sortait de la rampe et `descentPath()` annonçait la profondeur de la chambre
+   à la place — une porte 18 unités sous la prairie, sur la moitié des sites
+   seulement. **Toute paramétrisation reconstruite par trigonométrie a besoin
+   d'un epsilon à ses bornes.** L'avatar est passé de
    l'ouvrière (rayon 1,5) à la reine (3,3, `scale` 2,2) au tour 6, et tout ce
    qui n'a pas suivi est un défaut latent.
 
@@ -159,8 +214,14 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
   reflet) ont tous été trouvés en regardant les images, aucun en relisant le
   code.
 - **Les harnais de vérification :** `game/scripts/verify-terrain.mjs` (12 vues
-  + perf + mémoire), `verify-room-access.mjs` (accès aux 3 salles),
-  `verify-textures.mjs`. Chromium **doit** être lancé avec
+  + perf + mémoire), `verify-descent.mjs` (la rampe : pente, à-pics, rien en
+  travers, 14 vues), `verify-gallery-walk.mjs` (la marche complète, sur vraies
+  touches, **y compris en appui contre les parois**), `verify-dig.mjs` (le
+  front de taille, la jauge regardée se remplir, le hall),
+  `verify-queen-menu.mjs` (le menu, et surtout **son refus à une non-reine**),
+  `verify-room-access.mjs`, `verify-textures.mjs`. **Un seul à la fois.**
+- **Publication :** la CI construit et publie sur poussée vers `preview`
+  (`git push origin HEAD:preview`). **`dist/` n'est plus committé.** Chromium **doit** être lancé avec
   `--use-gl=angle --use-angle=d3d11`, sinon on mesure le rasteriseur logiciel.
 - **Piège récurrent :** tout albédo doit porter
   `tex.colorSpace = THREE.SRGBColorSpace`. L'oubli ne lève aucune erreur, il
@@ -182,6 +243,14 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 16 | **Descente raccourcie, front de taille + jauge circulaire, le hall, le menu de la reine.** Les parois glissent, la galerie n'est plus plus étroite que la reine | `3175592`, `f3a5015` |
+| 15 | **On entre dans la galerie et on en ressort à pied**, rampe au lieu du puits, galerie éclairée sur sa longueur, palette d'avatar de la DA | `da6d7ce` |
+| 14 | Cadence de test, déblocage de la creuseuse à la 2e ponte | `4b0adb2` |
+| 13 | **Choix de caste à la ponte, creuseuses, jauge, première galerie qui s'ouvre** | `cdd6d5b`, `254b189` |
+| 12 | **Éclosion et ouvrières qui récoltent seules**, rendu instancié | `15c9e7b` |
+| 11 | Index spatial sous toutes les requêtes de proximité ; analyse du projet | `6c62128`, `3b13267` |
+| 10 | **Première ponte et prologue prouvé de bout en bout** ; mare à l'est ; `waterDepthAt()` corrigé ; ombres de l'herbe à un tiers du prix | `b0b5e2f`, `53b1a9c` |
+| 9 | Panneau de réglages graphiques + compteur d'images, anneau de cible refait en décal doux, carte ×2,7 avec 7 nouveaux reliefs écrits à la main | `25086bc` |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
 | 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |
 | 6 | Boucle de récolte, portage, fondation à l'exécution ; ressources et ombre côté monde ; herbe affinée ; sol corrigé | `6ca9546`, `379bd0e`, `f5f9c5a`, `24a1bc3`, `9a0faec` |

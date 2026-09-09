@@ -17,7 +17,8 @@ import { shadeAt } from './shade.js';
 import { RESOURCE_NODES, harvestNode, nodesNear, buildResources } from './resources.js';
 import {
   initFounding, canFoundAt, foundNest, nestOrigin, getFoundedNest,
-  populateNest, sealNest, updateFounding,
+  populateNest, sealNest, updateFounding, digFaces, payDigFace, dugRooms,
+  nestFootprint, descentPath,
 } from './founding.js';
 import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
 
@@ -82,6 +83,7 @@ export {
   shadeAt,
   RESOURCE_NODES, harvestNode, nodesNear,
   canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
+  digFaces, payDigFace, dugRooms, nestFootprint, descentPath,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
 
@@ -159,10 +161,15 @@ export function createWorld() {
   const dug = new THREE.Group();
   dug.name = 'dug';
   group.add(dug);
-  initFounding(dug);
+  /* The lawn and the grass are handed over because a dig has to cut through
+     them: the meadow is one grid built here, at load time, and the nest is
+     excavated into it later. Without this the cut is roofed by the lawn and
+     there is nothing to walk into — see openTheMeadow() for the capture that
+     made that obvious. */
+  initFounding(dug, { lawn, grass });
 
   function update(dt, elapsed, camera) {
-    grass.update(dt, elapsed);
+    grass.update(dt, elapsed, camera);
     updateFounding(dt);
     queen.update(elapsed);
     water.update(elapsed);
@@ -177,6 +184,10 @@ export function createWorld() {
     group,
     update,
     grassFootprints: grass.footprints,
+    // the field itself, so core/quality.js can drive its shadow-casting
+    // range (see grass.js's uCast* uniforms — that range is the frame's
+    // single biggest lever) without walking the scene graph for it
+    grass,
     resources: resources.nodes,
     rooms: underground.rooms,
     doorLights: underground.doorLights,

@@ -65,7 +65,11 @@ import { nrm3 } from '../core/vecmath.js';
 export const RIG_PROLOGUE = {
   sunDir: nrm3([-300, 120, 195]),   // elevation 18.5 deg, azimuth from -x/+z
   sunColor: 0xe8b98c,
-  sunIntensity: 5.4,                // spec 1.9 — see the note on grazing light
+  sunIntensity: 6.1,                // spec 1.9 — see the note on grazing light.
+                                    // 6.1 = sin(51 deg)/sin(18.5 deg) * 2.5:
+                                    // the prologue sun grazes, so it needs
+                                    // that ratio to land the same lambert
+                                    // term on flat ground as the day rig.
   hemiSky: 0x6e7fa8,
   hemiGround: 0x4a4530,
   hemiIntensity: 1.15,              // spec 0.62 — see the shadow note below

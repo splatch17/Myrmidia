@@ -104,6 +104,75 @@ float back = pow(max(dot(normalize(vViewDir), -uSunDir), 0.0), 3.0);
 outgoingLight += back * 0.55 * vec3(0.78, 0.92, 0.34) * vTipMask;
 ```
 
+### 1f. Règle de substrat — une créature ne peut pas être à la valeur de son sol
+
+Round 15, mesuré sur capture (nid fondé en (140, 90), rig `RIG_FOUNDED`, échantillon médian d'un disque de 9 px) : **reine L = 27,6 contre le tertre L = 31,9 sur lequel elle se tient** — rapport 0,87. Elle est *plus sombre* que son sol, teinte comprise (r/g 2,5 pour le sol, 2,35 pour elle). Le contour l'attrape, la peinture non. C'est le défaut n°4 de `PROGRESS.md`, chiffré.
+
+L'origine n'est pas l'éclairage, elle est dans l'albedo : la carapace est peinte **sous sa propre entrée de palette**. Chitine de référence `#E0A752` = **L 173** ; `queen.chitinA` = `#b07226` = **L 122**, soit 30 % en dessous. Les valeurs sombres sont pires : `queen.chitinB` et `queen.limb` sont à **L 65**, contre un tertre de terre fraîche à **L 85** et une paroi de galerie à **L 55-70**.
+
+**La règle.** Deux substrats de référence, en luminance d'albedo : **terre remuée L 85** (`C_SOIL_A`, tertre, sol de chambre) et **paroi de galerie L 60**. Pour chaque caste, contre le substrat sur lequel on la voit le plus souvent :
+
+- valeur la plus claire de la carapace ≥ **1,8×** le substrat ;
+- valeur la plus sombre ≥ **1,1×** — une ombre est une couleur, pas un trou (§1c), et une carapace qui descend sous son sol est un trou.
+
+Cibles, à câbler dans `player/avatar.js` (`colors: {...}`). La hiérarchie de caste passe de « la creuseuse est sombre » à « la creuseuse est **terne** » : elle reste la moins claire des trois (124 < 146 < 169) mais elle cesse d'être sous la terre qu'elle creuse.
+
+| | Actuel | L | **Cible** | **L** |
+|---|---|---|---|---|
+| `queen.chitinA` | `0xb07226` | 122 | **`0xdda254`** | **169** |
+| `queen.chitinB` | `0x5e3d16` | 65 | **`0x8f5a25`** | **97** |
+| `queen.limb` | `0x5e3d16` | 65 | **`0x94612a`** | **104** |
+| `queen.mandible` | `0xb07226` | 122 | **`0xe8c078`** | **195** |
+| `worker.chitinA` | `0x8b5a24` | 97 | **`0xc98a3c`** | **146** |
+| `worker.chitinB` | `0x432d15` | 48 | **`0x855828`** | **94** |
+| `worker.limb` | `0x6b4420` | 74 | **`0x8a5b28`** | **97** |
+| `digger.chitinA` | `0x6d4520` | 75 | **`0xa8763a`** | **124** |
+| `digger.chitinB` | `0x2f2010` | 34 | **`0x805426`** | **90** |
+| `digger.limb` | `0x4a2f16` | 51 | **`0x7a5227`** | **87** |
+| `worker.mandible`, `digger.mandible`, tous les `eye` | — | — | **inchangés** | — |
+
+Le rapport clair/sombre par caste reste entre 1,4 et 1,75, donc le corps continue de se modeler : on remonte le plancher, on n'aplatit pas.
+
+**Critère de vérification :** échantillonner un pixel du thorax et un pixel du sol à un corps de distance, dans la même image. La fourmi doit être **au moins 1,6× le sol**. En dessous, c'est l'albedo qu'on corrige, jamais la lumière — éclaircir la scène remonte les deux ensemble et ne change rien au rapport.
+
+### 1g. Valeurs de l'entrée du nid, vue de la pelouse
+
+Mesuré au-dessus du nid fondé, `RIG_FOUNDED` : pelouse **L 135**, tertre **L 34** (0,25× la pelouse) — ce contraste-là est **juste et ne doit pas bouger** : 4:1 en valeur plus un saut de teinte jaune-vert → orange, lisible à 90 unités.
+
+Ce qui manque est la bouche. Cible : **la bouche est l'objet le plus sombre de la carte de surface**, L ≤ 12 — soit ≥ 3:1 contre le tertre et ≥ 11:1 contre la pelouse. L'ombre portée d'un brin plafonne autour de L 25 : un trou à L 12 est alors le seul vrai noir du plein air, et le noir sur une pelouse claire se lit comme de la profondeur sans une ligne d'interface.
+
+Deux conséquences :
+
+1. **`WARM_MOUTH_LIGHT` (`world/founding.js`) descend au lieu de monter.** Aujourd'hui `[1.05, 0.62, 0.24]` posée à `mouthY + 1.0`, c'est-à-dire *au-dessus* de la lèvre : elle éclaire le bord même qui doit rester noir. Cible : **`[0.85, 0.48, 0.17]` à `mouthY - 2.5`**. Son rôle n'est pas d'éclairer l'entrée, c'est d'être une lueur *au fond* d'un trou noir — « habité » plutôt que « fosse ouverte ». Quelques dizaines de pixels de braise ne cassent pas la règle L ≤ 12 sur l'ouverture.
+2. **La silhouette doit être une encoche, pas un anneau.** `RIM_H = 1.6` contre une reine de rayon 3,3 : la lèvre fait la moitié d'un rayon de reine, donc à hauteur d'œil de fourmi elle n'occulte rien et le cratère se lit comme une plaque posée à plat (capture `A2`), tandis que vue de dessus c'est un beignet (capture `C1`). Un trou dans une surface plate est invisible depuis un point de vue plat ; **une encoche sombre dans un bord surélevé ne l'est pas**. Donc : `RIM_H` **1,6 → 4,0** (1,2 rayon de reine, assez pour masquer ses pattes depuis l'extérieur), et la rampe de #40 perce cette lèvre **d'un seul côté**, en une entaille de 8 à 10 unités de large orientée sur la pente horizontale déjà calculée par `buildShell` (`az`). Le cratère devient un **C**, pas un **O**.
+3. Les parois de l'entaille sont la terre la plus sombre du tertre : **L ≈ 20 en haut de la coupe, tombant vers L ≤ 12 à l'entrée de la gorge**. C'est ce dégradé qui fait lire la rampe comme *descendant*, plutôt que comme une bande peinte sur le tertre.
+
+Enfin, le bord du tertre se termine aujourd'hui sur un cercle géométrique net (capture `C1`) : sur le quart extérieur de `MOUND_R`, faire tendre la couleur du tertre vers le sol de la pelouse et descendre le mélange vers `C_CHITIN` de **0,12 → 0,04**. Un déblai s'amincit, il n'est pas estampillé.
+
+### 1h. La première galerie — trois lampes, pas une
+
+Mesuré dans la galerie de #39, caméra à 10 unités de la chambre, regard vers le fond : plafond **L 1,4**, paroi opposée à la lampe **L 3,8**, paroi côté lampe **L 22**, sol au loin **L 44**, et un **disque de ciel à L ≈ 200** au bout du tunnel. La galerie n'est pas « sombre », elle est **bicolore** : 60 % de l'image sous L 8, et un trou de jour de 5,5 unités de large en face. Un tunnel où l'on n'y voit rien n'est pas une récompense — mais l'exposition n'est pas le levier, la répartition l'est.
+
+Cible : **aucune surface que le joueur doit lire ne descend sous L 18**, les parois tiennent **L 25-90**, les flaques de lampe montent à **L 120-150**. Cinq pour un à l'intérieur du tunnel : encore franchement sombre à côté d'une pelouse à L 135, mais lisible.
+
+Dans l'ordre d'effet :
+
+1. **Boucher le fond de `buildGallery` (`world/founding.js`).** Les anneaux sont cousus entre eux et le dernier n'a pas d'éventail de capuchon — le tube est donc **ouvert sur le ciel**, rayon `GALLERY_R × 0,55` = 2,75. Aucun réglage de lumière ne vaut tant que la valeur la plus haute de l'image est un morceau de ciel au bout d'une galerie. Ce n'est pas un chiffre de DA, c'est un capuchon de triangles.
+2. **`AMBIENT_FLOOR` (`world/lighting.js`) 0,30 → 0,55.** C'est le seul terme qui touche le plafond et la paroi détournée, qu'aucune lampe ne regarde. Mesuré : ces surfaces sont du `indirectDiffuse × 0,30` pur, donc elles montent au prorata — paroi détournée 3,8 → ~7, plafond 1,4 → ~2,6. **Ça ne suffit pas et ça ne peut pas suffire** : le remplissage souterrain vaut `hemiSky × 0,85 × plancher`, avec un hémisphérique réglé pour une pelouse. Au-delà de ~0,6 le nid cesse de se lire comme souterrain ; 0,55 est le plafond de ce levier. Le reste doit venir des lampes, ce qui est la doctrine déjà actée (§1d, beaucoup de petites lampes locales).
+3. **Trois lampes le long de la galerie, à la place de l'unique lampe de fond.** L'atténuation est `1/(1 + 0,017 d²)` : à 23 unités elle vaut **0,10**, à 46 unités **0,027**. Une seule lampe posée au bout d'un tunnel de 46 unités livre donc 10 % de sa radiance au milieu et 2,7 % à l'entrée — c'est *tout* le noir mesuré, et aucune couleur ne le rattrapera. Aux abscisses **t = 0,18 / 0,55 / 0,92** de `GALLERY_LEN`, à `c.y + GALLERY_R × 0,55 + 1,5` (juste sous l'axe du plafond : la flaque tombe au sol, le rebond prend le plafond) :
+
+| t | Radiance | Rôle |
+|---|---|---|
+| 0,18 | **`[0.95, 0.56, 0.22]`** | le seuil, côté chambre |
+| 0,55 | **`[0.72, 0.42, 0.16]`** | le creux — volontairement la plus faible : c'est le noir *entre* les flaques qui fait le lieu |
+| 0,92 | **`[1.15, 0.66, 0.24]`** | le front de taille, point le plus chaud de la galerie |
+
+Au pire point (11 unités d'une lampe) l'atténuation vaut 0,33, soit **3,3× le milieu de tunnel actuel**. Coût : trois entrées de plus dans un pool qui n'en téléverse jamais que `LIGHT_SLOTS = 8`, les plus proches — zéro coût par image, pas de nouvelle passe.
+
+**Et le dégradé raconte quelque chose, à l'envers du puits.** Le puits fait descendre le jour froid de la bouche vers la chambre (`nestDaylight`). La galerie, elle, part *à plat* de la chambre : le jour n'y entre jamais, donc son dégradé est entièrement fabriqué par les lampes, et il doit aller du **neutre-froid côté chambre vers le chaud du front de taille**. Entrer dans la galerie, c'est marcher vers la chaleur et vers le travail en cours — le même principe d'îlot chaud dans un couloir froid que la chambre de la reine, un cran plus bas.
+
+Détail de propreté : la lampe du fond réutilise `WARM_MOUTH_LIGHT`, qui est spécifiée comme « le seul point chaud de la carte extérieure ». Lui donner sa constante, **`DIG_FACE_LIGHT = [1.15, 0.66, 0.24]`**, pour que le repère extérieur puisse bouger sans déplacer le tunnel.
+
 ---
 
 ## 2. Rampe de lumière (toon ramp)
@@ -237,6 +306,15 @@ Les PNG produits ont été redécodés et l'écart moyen entre les colonnes/lign
 Résultat : rapport raccord/moyenne entre **0,70 et 1,44** sur les deux axes pour cinq des six textures — pas de raccord. Le seul chiffre haut est le raccord vertical de `chitin` à **×2,38** ; vérification ciblée : les huit frontières de rangées de plaques *à l'intérieur* de la texture donnent 42-44, et le raccord donne 37 — **le raccord est plus doux que les frontières internes du motif**. Ce n'est pas un défaut de pavage, c'est le motif lui-même.
 
 Limite connue et reportée du round précédent, inchangée : `fleckMask` (mouchetures de mousse, grains) ne fait pas de recherche sur les cellules voisines, donc une moucheture tombant pile sur u=0 ou u=1 peut se couper. Rayons < 0,42 cellule et densités 6-45 % ; non observé sur les six textures. À corriger seulement si une capture le montre.
+
+**Round 15 — le raccord n'était pas le problème, la répétition l'était.** Sur la première capture d'un nid fondé (`C1`, tertre de 34 unités vu de dessus), `tunnel-dirt` se lit comme un **motif imprimé** : à `DIRT_TILE = 5,0` la tuile se répète près de sept fois en travers du tertre, et l'œil trouve le motif avant de trouver la surface. Le pavage est correct au sens du §5 ci-dessus — c'est la *reconnaissabilité* de la tuile qui est en cause, et deux traits la portaient :
+
+- les grains étaient peints sur la rampe `STONE` (gris froid) : dans une tuile de terre chaude, ils étaient à la fois l'élément **le plus clair et le plus désaturé**, donc le repère parfait pour repérer une copie. Corrigé : rampe **`GRIT`** dédiée (`#493626` / `#8A755A` / `#BFA57E`), sur l'axe chaud, et couverture **0,88 → 0,66**. Le rapport grain/paroi passe de **1,9× à ~1,35×**.
+- le bruit `broad` en 3×3 donnait à chaque tuile une **tache de valeur d'environ 1,7 unité**, identique tous les 5 unités. Corrigé : **0,24 → 0,10**, la part rendue au grain fin (0,22 → 0,26). La variation de valeur à grande échelle sur une paroi est le travail de la *géométrie* (couleurs sommet, ombre de creux cuite) — la texture s'arrête à la motte.
+
+Coût VRAM : **nul**. Même 128×128, même format ; seul le contenu change.
+
+**Ce qui reste, et qui n'est pas de mon ressort.** La *période* de répétition, elle, est `DIRT_TILE` dans `world/texturing.js`. À 5,0, un tertre en montre sept copies. Deux issues possibles, à trancher par Atta sur capture : monter `DIRT_TILE` à ~8 pour les grandes surfaces horizontales (le tertre) tout en gardant 5,0 sur les parois, ou décaler l'échantillonnage triplanaire par un hash de cellule monde. La texture, elle, a fait ce qu'elle pouvait faire seule.
 
 ---
 

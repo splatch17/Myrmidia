@@ -5,14 +5,19 @@ import {
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, setFoundedMix, foundedMix,
   nestOrigin, canFoundAt, foundNest, populateNest, sealNest, getFoundedNest,
   pitFactorAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
+  MUSHROOMS, ROCKS, TERRAIN_BOUNDS,
+  digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundSlope,
 } from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
 import { setOutlineZone } from './core/outline.js';
+import { createQualityPanel } from './core/quality.js';
+import { indexWorld, worldQuery } from './core/worldIndexBridge.js';
+import { attachSpatialIndex, status as spatialStatus } from './player/spatial.js';
 
 // Entry point for the Three.js/Vite migration (see design docs for the full
 // vision). Atta's world (underground gallery + side rooms, lawn, grass, tree
-// — see world/index.js) plus Cataglyphis's player controller (movement,
+// , see world/index.js) plus Cataglyphis's player controller (movement,
 // camera, IK legs, underground/lawn collision — see player/index.js) are
 // wired in below. Nothing here is final art; NPCs/harvest loop/HUD are a
 // later pass (see the agent notes for what's in vs. out of scope this round).
@@ -143,6 +148,13 @@ window.__world6 = {
   shadeAt, canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
   harvestNode, get nodes() { return RESOURCE_NODES; }, foundedMix, sunDir,
   waterDepthAt, distanceToWater,
+  /* Round 15 (#41). The descent has to be provable without a controller —
+     the whole point of the contract's dependency direction — so the three
+     functions design/api-monde-gameplay.md 6 adds are reachable from a
+     harness that never presses a key: scripts/verify-descent.mjs digs,
+     walks descentPath() and ray-casts the result. THREE itself is exposed
+     for that ray-cast; there is no second copy of the library to import. */
+  digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundY, groundSlope, THREE,
 };
 
 renderer.setResizeCallback((aspect) => {
@@ -169,9 +181,12 @@ function frame() {
   // then the player (writes this frame's antState/camera for next frame).
   world.update(dt, t, camera);
   player.update(dt, t);
+  // the camera is final only now, and the dig ring is projected against it
+  player.syncDigDial(dt);
 
   applyEnvironment();
   renderer.render(scene, camera);
+  quality.update(dt);
 }
 
 /* How much of the view is "inside the nest": 1 deep in the gallery, 0 out on
@@ -251,6 +266,29 @@ function applyEnvironment() {
   trackSun(camera);
 }
 
+/* After the world and the player exist: it walks the scene to find the grass
+   and the textured materials it toggles. */
+/* Fill the shared spatial index and hand it to player/**, before the first
+   frame — every proximity query in the game runs through it, and the fallback
+   it would otherwise use is the linear scan this whole change exists to
+   remove (design/etat-des-lieux.md 2b). */
+const indexStats = indexWorld({
+  grassFootprints: world.grassFootprints,
+  mushrooms: MUSHROOMS,
+  rocks: ROCKS,
+  bounds: { x0: TERRAIN_BOUNDS.x0, x1: TERRAIN_BOUNDS.x1, z0: TERRAIN_BOUNDS.z0, z1: TERRAIN_BOUNDS.z1 },
+});
+/* ?nospatial=1 detaches the index and puts every proximity query back on its
+   linear scan. This is not a setting — it is the A/B that has to exist for a
+   change whose entire acceptance criterion is "identical behaviour, less CPU".
+   Without it, a silent difference in what the index answers looks exactly like
+   a gameplay bug introduced somewhere else. */
+const NO_SPATIAL = typeof location !== 'undefined' && /[?&]nospatial=1/.test(location.search);
+if (!NO_SPATIAL) attachSpatialIndex(worldQuery, 'world');
+window.__spatial = () => ({ ...spatialStatus(), ...indexStats });
+
+const quality = createQualityPanel({ renderer, sun, scene });
+
 renderer.setAnimationLoop(frame);
 // named and exposed so a verification driver can stop the loop, time a burst
 // of renders of one fixed view, and start it again (scripts/verify-textures.mjs)
@@ -267,6 +305,7 @@ window.__renderView = (eye, target, elapsed = 0) => {
   camera.lookAt(target[0], target[1], target[2]);
   camera.updateMatrixWorld();
   world.update(1 / 60, elapsed, camera);
+  if (player.syncDigDial) player.syncDigDial(0);
   applyEnvironment();
   renderer.render(scene, camera);
 };
