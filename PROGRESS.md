@@ -1,5 +1,9 @@
 # Myrmidia — journal de progression
 
+> **Nouveau : [`REPRISE.md`](REPRISE.md) est le dossier de reprise complet** —
+> objectifs, arbitrages actés, demande en cours, pièges. À lire **avant** ce
+> fichier-ci quand la session repart de zéro.
+
 Fichier de reprise. À lire en premier au début d'une session, à mettre à jour
 à la fin. Il répond à trois questions et rien d'autre : **où on en est**,
 **ce qui est cassé/en attente**, **quoi faire ensuite**.
