@@ -103,6 +103,12 @@ export const WORKER = {
 export const FOUNDING_QUEEN = {
   id: 'queen',
   label: 'reine fondatrice',
+  /* She gets the management panel (#53). A flag on the caste, not a check for
+     "is this the player": design/castes-et-micro-macro.md §3 arbitrates that
+     control is an attribute and that the HUD depends on WHO is controlled, so
+     the day the player hops into a forager the panel has to go away on its
+     own. Absent on WORKER and DIGGER, which is the whole test. */
+  manages: true,
   scale: 2.2,
   legs: QUEEN_LEGS,
   body: QUEEN_BODY,

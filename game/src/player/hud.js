@@ -63,6 +63,7 @@ const CONTROLS = [
   ['Molette', 'reculer / rapprocher la vue'],
   ['E', 'action — appui court, ou maintenu quand la barre apparaît'],
   ['5 / 6', 'prochaine ponte : ouvrières / fouisseuses'],
+  ['C', 'gestion de la reine — ponte, effectifs, chantiers'],
   ['P', 'graphismes — et la cadence de test (raccourcit les attentes)'],
   ['H', 'afficher / masquer cette aide'],
 ];

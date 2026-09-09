@@ -327,6 +327,10 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   return {
     harvest, laying, update, resolve, promptText, objectiveText, inventoryText, message,
     holdProgress, targetMark,
+    /** What a clutch costs right now, with the test pace already applied.
+     *  Exposed so the queen's panel (#53) shows the same number the prompt
+     *  does instead of deriving a second one that can drift from it. */
+    clutchCost,
     /** True while the founding sequence, not the player, is driving the ant. */
     busy: () => laying.active(),
     /** The scripted camera shot for this frame, or null (camera.js). */

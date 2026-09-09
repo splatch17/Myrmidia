@@ -211,11 +211,21 @@ async function main() {
   }, [spawn0.x, spawn0.z]);
   if (node) {
     await walkTo([node.x, node.z], { arriveDist: 5, label: 'to node' });
+    /* Held until she is actually carrying, not for a fixed 2800 ms. The hold
+       is a paced in-game timer and the loop caps dt at 50 ms, so a wall-clock
+       duration under-delivers exactly when the machine is busy — PROGRESS.md
+       trap 5, and it is what made this step fail on some runs and pass on
+       others with nothing changed. */
     await page.keyboard.down('KeyE');
-    await page.waitForTimeout(2800);
+    const holdUntil = Date.now() + 12000;
+    let got = await readAnt();
+    while (!got.carrying && Date.now() < holdUntil) {
+      await page.waitForTimeout(200);
+      got = await readAnt();
+    }
     await page.keyboard.up('KeyE');
     await page.waitForTimeout(250);
-    let got = await readAnt();
+    got = await readAnt();
     console.log('  carrying', got.carrying);
     if (got.carrying) {
       await page.keyboard.down('KeyE'); await page.waitForTimeout(120); await page.keyboard.up('KeyE');

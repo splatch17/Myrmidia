@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
 import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath } from '../world/index.js';
-import { PLAYER_AVATAR, collideRadius } from './avatar.js';
+import { PLAYER_AVATAR, collideRadius, profileById } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
 import { buildAntMesh } from './antMesh.js';
 import { createInput } from './input.js';
+import { createQueenMenu } from './queenMenu.js';
 import { createCameraRig } from './camera.js';
 import { computeWishDir, stepAnt } from './movement.js';
 import { stepClimb, GRASS } from './climb.js';
@@ -95,6 +96,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   // input.js, which with a spawn facing west would open the game on a side
   // view of the queen instead of on the meadow she is looking at
   input.state.camYaw = SPAWN_YAW;
+  const queenMenu = createQueenMenu();
   const cameraRig = createCameraRig(camera);
 
   /* Screen position of the dig gauge (#51). The projection lives here rather
@@ -202,6 +204,10 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        entered this frame is walked this frame (the order the old prototype's
        frame() used). */
     if (input.consumeHelp()) hud.toggleControls();
+    /* The panel is offered to the PROFILE, not to the player (#53). A caste
+       without `manages` gets nothing from this key, which is what makes the
+       flag load-bearing rather than decorative. */
+    if (input.consumeMenu()) queenMenu.toggle(profile);
     const pick = input.consumeCaste();
     if (pick) {
       if (casteUnlocked(pick)) {
@@ -254,6 +260,23 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     if (casteMsgTimer > 0) { casteMsgTimer -= dt; if (casteMsgTimer <= 0) casteMsg = null; }
     hud.setEvent(casteMsg || interaction.message());
     hud.setHold(interaction.holdProgress(act));
+    queenMenu.render(profile, {
+      caste,
+      casteUnlocked,
+      casteLabel: (id) => profileById(id).label,
+      reserve: interaction.harvest.stock(),
+      cost: interaction.clutchCost(),
+      brood: interaction.laying.brood(),
+      counts: {
+        worker: colony.state.workers.filter((w) => w.profileId !== 'digger').length,
+        digger: colony.state.workers.filter((w) => w.profileId === 'digger').length,
+        eggs: colony.state.eggs.length,
+      },
+      rooms: dugRooms(),
+      faces: digFaces().map((f) => ({
+        ...f, diggers: colony.state.faceWork.get(f.id) || 0,
+      })),
+    });
     /* The dig gauge is NOT drawn here. It is projected against the camera, and
        the camera is not final until cameraRig.update() further down — so main
        .js calls syncDigDial() once the camera is where the frame will be
@@ -334,6 +357,12 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // be cut. The cut itself is a real keypress.
     window.__beginLaying = () => interaction.laying.begin(ant);
     window.__caste = () => ({ caste, msg: casteMsg, unlocked: casteUnlocked('digger') });
+    window.__queenMenu = (profileId) => ({
+      open: queenMenu.isOpen(),
+      // asked of a profile by id, so a harness can prove the panel is refused
+      // to a forager without #36 existing yet
+      availableFor: queenMenu.availableFor(profileId ? profileById(profileId) : profile),
+    });
     // the founding verdict + the sentence it produces, so the harness can
     // check the refusals for ground the queen would have to walk minutes to
     // reach (#33), and the waterline the movement clamp now follows (#4)
@@ -350,6 +379,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   function dispose() {
     input.dispose();
     hud.dispose();
+    queenMenu.dispose();
     marker.dispose();
     crowd.dispose();
     props.dispose();
