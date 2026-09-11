@@ -4,6 +4,7 @@ import { TREE } from '../world/index.js';
 import { createHarvest, FOUND_STOCK, CACHE_RADIUS } from './harvest.js';
 import { KIND_LABEL, nodesAreProvisional } from './resources.js';
 import { canFound, found, refusalText, isFounded, provisional as foundingProvisional, FOUND_SECONDS, nestOrigin, bearingWord } from './founding.js';
+import { EGG_COST } from './brood.js';
 
 /* ==========================================================================
    One key, several verbs (#29/#33).
@@ -164,7 +165,13 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
       const o = nestOrigin();
       const d = Math.hypot(o.x - ant.x, o.z - ant.z);
       const where = d < 12 ? 'ici' : `à ${d.toFixed(0)} u ${bearingWord(ant.x, ant.z, o.x, o.z)}`;
-      return `Colonie fondée ${where}. Suite : la ponte (pas encore implémentée).`
+      // #6 §2: this is the only place in the game that ever tells the player
+      // P exists — the H panel only teaches it to whoever thinks to open it.
+      const need = Math.max(0, EGG_COST - harvest.stock());
+      const layHint = need > 0
+        ? `encore ${need} unité${need > 1 ? 's' : ''} de réserve avant de pouvoir pondre`
+        : 'la réserve suffit pour pondre';
+      return `Colonie fondée ${where}. Suite : pondre (P) dans le couvoir — ${layHint}.`
         + (foundingProvisional() ? ' [chambre non creusée]' : '');
     }
     const missing = FOUND_STOCK - harvest.stock();

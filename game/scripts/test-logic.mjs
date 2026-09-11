@@ -30,6 +30,10 @@ const terrain = await import('../src/world/terrain.js');
 const underground = await import('../src/world/underground.js');
 const founding = await import('../src/world/founding.js');
 const avatar = await import('../src/player/avatar.js');
+// brood.js is plain logic (no THREE, no DOM, no world/** import — see its
+// header) so it needs none of the loader's stubbing: a direct import, same
+// as any other module under plain node.
+const brood = await import('../src/player/brood.js');
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -128,6 +132,99 @@ console.log('groundY() continuity at the gallery-mouth seam:');
     const below = terrain.groundY(x, terrain.TUNNEL_MOUTH - eps);
     const jump = Math.abs(above - below);
     check(`no step at x=${x}`, jump < STEP_TOLERANCE, `|Δy|=${jump.toFixed(2)} over 2*${eps}`);
+  }
+}
+
+console.log('egg laying and incubation (#6 §2), against a fake harvest cache:');
+{
+  // Same shape player/harvest.js's createHarvest().state.cache produces —
+  // this test never imports harvest.js (brood.js does not either), it only
+  // has to agree on the object shape the two already share in production.
+  const fakeCache = (total, items) => ({ x: 0, y: 0, z: 0, items, total });
+  const FOUNDED = { founded: true, inChamber: true };
+
+  {
+    const b = brood.createBroodState(2);
+    const cache = fakeCache(brood.EGG_COST + 1, { graine: brood.EGG_COST + 1 });
+    const before = cache.total;
+    const res = brood.lay(b, cache, FOUNDED);
+    check('a successful lay reports ok', res.ok === true, JSON.stringify(res));
+    check('a successful lay debits exactly EGG_COST from the cache',
+      cache.total === before - brood.EGG_COST,
+      `total went from ${before} to ${cache.total}, expected ${before - brood.EGG_COST}`);
+    check('a successful lay starts one clutch incubating', brood.broodCount(b) === 1);
+  }
+
+  {
+    const b = brood.createBroodState(2);
+    const cache = fakeCache(brood.EGG_COST - 1, { graine: brood.EGG_COST - 1 });
+    const res = brood.lay(b, cache, FOUNDED);
+    check('too little in the cache is refused', res.ok === false);
+    check('...with the not-enough-food reason', res.reason === brood.LAY_REASON.NOT_ENOUGH_FOOD, res.reason);
+    check('...and the cache is untouched by the refusal', cache.total === brood.EGG_COST - 1, cache.total);
+    check('...and nothing started incubating', brood.broodCount(b) === 0);
+  }
+
+  {
+    // Refused with no nest / out of the chamber: same "never touch the
+    // cache" guarantee, checked on the other two rungs of the ladder too.
+    const b = brood.createBroodState(2);
+    const cache = fakeCache(99, { graine: 99 });
+    const r1 = brood.lay(b, cache, { founded: false, inChamber: false });
+    check('no nest yet is refused with no-nest', r1.ok === false && r1.reason === brood.LAY_REASON.NO_NEST, r1.reason);
+    const r2 = brood.lay(b, cache, { founded: true, inChamber: false });
+    check('founded but out of the chamber is refused with too-far', r2.ok === false && r2.reason === brood.LAY_REASON.TOO_FAR, r2.reason);
+    check('neither refusal touched the cache', cache.total === 99, cache.total);
+  }
+
+  {
+    // Fill the couvoir to capacity, confirm the next lay is refused without
+    // spending anything, then let one clutch hatch and confirm a slot opens
+    // back up.
+    const cap = 2;
+    const b = brood.createBroodState(cap);
+    const cache = fakeCache(brood.EGG_COST * (cap + 2), { graine: brood.EGG_COST * (cap + 2) });
+    for (let i = 0; i < cap; i++) brood.lay(b, cache, FOUNDED);
+    check(`${cap} lays fill the brood to capacity`, brood.broodCount(b) === cap);
+
+    const totalBeforeRefusal = cache.total;
+    const full = brood.lay(b, cache, FOUNDED);
+    check('a full brood room refuses the next lay', full.ok === false && full.reason === brood.LAY_REASON.BROOD_FULL, full.reason);
+    check('...without spending anything', cache.total === totalBeforeRefusal, cache.total);
+
+    // Advance every clutch just past EGG_INCUBATION_SECONDS: all cap of them
+    // hatch at once (they were all laid on the same tick above).
+    const hatched = brood.update(b, brood.EGG_INCUBATION_SECONDS + 0.01);
+    check(`all ${cap} clutches hatch once incubation has elapsed`, hatched === cap, hatched);
+    check('hatching frees the brood room back to zero in progress', brood.broodCount(b) === 0);
+    check('hatching credits workersAvailable', b.workersAvailable === cap, b.workersAvailable);
+    // The exact regression the ambiance report caught: laidTotal (what
+    // populateNest(n) must be driven by, so a lit lamp stays lit) must NOT
+    // follow clutches.length/broodCount() (what capacity/refusal is measured
+    // against) back down when eggs hatch. Conflating the two would turn a
+    // lamp off every time the colony's ponte succeeds.
+    check('...but the cumulative laid count does not drop with it', b.laidTotal === cap, b.laidTotal);
+
+    const reopened = brood.lay(b, cache, FOUNDED);
+    check('laying is possible again once a slot is free', reopened.ok === true, JSON.stringify(reopened));
+    check('...and the cumulative count keeps climbing past a hatch',
+      b.laidTotal === cap + 1 && brood.broodCount(b) === 1,
+      `laidTotal=${b.laidTotal} broodCount=${brood.broodCount(b)}`);
+  }
+
+  {
+    // Incubation timing: not before, hatches at/after.
+    const b = brood.createBroodState(1);
+    const cache = fakeCache(brood.EGG_COST, { graine: brood.EGG_COST });
+    brood.lay(b, cache, FOUNDED);
+    const early = brood.update(b, brood.EGG_INCUBATION_SECONDS - 1);
+    check('an egg does not hatch before its incubation time', early === 0 && brood.broodCount(b) === 1, early);
+    check('nextHatchIn() counts down and does not go negative',
+      brood.nextHatchIn(b) !== null && brood.nextHatchIn(b) <= 1 && brood.nextHatchIn(b) >= 0,
+      brood.nextHatchIn(b));
+    const late = brood.update(b, 1.01);
+    check('the same egg hatches once the remaining second elapses', late === 1 && brood.broodCount(b) === 0, late);
+    check('nextHatchIn() is null once nothing is incubating', brood.nextHatchIn(b) === null);
   }
 }
 

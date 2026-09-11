@@ -14,6 +14,11 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ## État au 2026-09-05
 
+> **Le tour le plus récent est le 10 (2026-09-11, la ponte).** Sa section est
+> plus bas, juste avant « Défauts connus ». Ce qui suit ici est l'état du
+> tour 9, conservé parce qu'il décrit encore correctement la stack et la
+> procédure de reprise.
+
 **PR #23 mergée dans `main`** (`0f1a28a`). La ligne « pas encore mergée » de
 la précédente version de ce fichier est obsolète — `git log main` le confirme.
 Ce round (nocturne, autonome, sans capture possible — voir plus bas) travaille
@@ -114,8 +119,113 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 - Pas de mode macro (le nid en coupe, vue de côté).
 - Pas de post-process (bloom, contours).
-- Pas de repop des ressources, pas d'ouvrières, pas de ponte.
+- Pas de repop des ressources, pas d'ouvrières. ~~Pas de ponte~~ — la ponte
+  existe depuis le tour 10, mais elle n'a jamais été vue tourner.
 - La bascule visuelle prologue → colonie fondée est câblée mais **jamais vue**.
+
+---
+
+## Round du 2026-09-11 (tour 10 — nocturne, VPS ARM sans GPU)
+
+**Ticket travaillé : #6 — Prologue de la reine seule et mécanisme de ponte.**
+Le §1 (prologue) était livré depuis le round 6 ; ce round livre le **§2, la
+ponte**. Choisi parce que « Prochaines étapes » le désignait, parce qu'il
+débloque #37/#36/#38/#7, et surtout parce que son cœur — coût, capacité,
+incubation, point de bascule — est de la **logique pure**, donc la seule
+chose vérifiable sur une machine sans GPU. Aucun `verify-*.mjs` n'a été lancé.
+
+### Où on en est
+
+**La reine pond.** `P` dans la chambre fondée dépose une couvée, qui coûte
+`EGG_COST = 3` unités de réserve (n'importe quelle espèce), incube
+`EGG_INCUBATION_SECONDS = 25` s, puis éclôt.
+
+| Fichier | Rôle |
+|---|---|
+| `player/brood.js` **(nouveau)** | Le cœur. **Module pur** : ni THREE, ni DOM, ni `world/**`. Tout lui est passé en argument, ce qui permet à `test-logic.mjs` de l'importer **directement**, sans le hook de résolution ni le stub de `texturing.js` |
+| `player/index.js` | La touche `P`, la porte « est-elle dans le couvoir », `populateNest()`, la rampe `founded` |
+| `player/hud.js` | Ligne couvain : réserve, `n`/capacité, prochaine éclosion, ouvrières écloses, phrase de refus |
+| `player/interaction.js` | L'objectif permanent enseigne `P` **au moment où elle devient utile**, et dit s'il manque de la réserve |
+| `main.js` | **A cessé de piloter `setFoundedMix()`** — voir ci-dessous |
+
+Deux décisions d'arbitrage prises pendant le round, toutes deux contre ce que
+le code faisait :
+
+1. **`main.js` ne déclenche plus la bascule crépuscule → jour.** Il la lançait
+   dès que `nestOrigin()` devenait vrai, c'est-à-dire **au coup de pelle** —
+   exactement ce que `design/ressources-et-fondation.md` §7a interdit. La rampe
+   (6 s) vit maintenant dans `player/index.js` et part à la **première ponte**,
+   parce que c'est le joueur qui connaît l'événement. Un seul écrivain du
+   scalaire, plus deux. `main.js` porte un commentaire qui dit où elle est
+   partie et pourquoi.
+2. **`populateNest()` reçoit les pontes _cumulées_ (`brood.laidTotal`), pas les
+   couvées en cours.** Le premier câblage lui passait `broodCount()` : chaque
+   éclosion aurait donc **éteint une lampe**, et la chambre serait devenue noire
+   à mesure que la colonie réussit — l'inverse de l'arc de
+   `ambiance-prologue.md` §2c (« chaque ponte *ajoute* sa lampe »). Les deux
+   notions sont désormais distinctes et le restent : un couvain plein est
+   temporaire, une lampe allumée est acquise.
+
+**Tests : 38 passent, 0 échouent** (15 avant ce round), `npx vite build` passe.
+Le harnais a été validé **en négatif** : la garde tout-ou-rien de la dépense a
+été cassée volontairement, 4 tests sont tombés — dont la réserve à **−1** —
+puis la garde a été restaurée et le 38/0 re-vérifié.
+
+### Ce qui est cassé ou en attente
+
+- **Rien de tout ça n'a été vu.** C'est la limite entière de ce round.
+- **#6 n'est pas fermé.** Le mécanisme est là, mais deux choses manquent : le
+  rebranchement des 3 ouvrières PNJ comme *résultat* de la ponte (c'est #36 +
+  #37, tickets à part, frontière documentée dans l'en-tête de `brood.js` :
+  l'éclosion incrémente `workersAvailable` et rien d'autre), et la
+  confirmation à l'œil. Le point ouvert « caste au hasard ou au choix » reste
+  ouvert, c'est #38.
+- **Constante recopiée à la main — défaut latent de la famille #6 des
+  « Pièges ».** `BROOD_ROOM_CAPACITY = 6` dans `player/index.js` duplique
+  `MAX_BROOD` de `world/founding.js`, que le baril `world/index.js` n'exporte
+  pas. Si `MAX_BROOD` change, le joueur pourra pondre une couvée que la
+  chambre ne sait pas afficher, **sans aucune erreur**. Correctif à un ligne :
+  exporter `MAX_BROOD` et le lire. À faire au prochain round côté Atta.
+- **Le build publié (`game/dist/`) est resté à celui du tour 9 — délibérément.**
+  `dist/` est dans `.gitignore` alors que son contenu est *suivi* (force-ajouté
+  autrefois). `npx vite build` supprime donc l'ancien bundle, que git voit
+  partir, et écrit le nouveau, que git ignore : commiter en l'état aurait
+  publié un `index.html` pointant vers un fichier absent, c'est-à-dire une page
+  blanche au bout du lien de test du README. J'ai remis `dist/` à son contenu
+  commité. **Conséquence : le lien de test ne montre pas la ponte.** Pour la
+  voir, rebuilder localement, puis `git add -f game/dist` — ou, mieux, régler
+  la contradiction une bonne fois (soit `dist/` suivi et sorti du `.gitignore`,
+  soit publié par une action CI plutôt que commité à la main).
+- **`verify-round6.mjs` ne montrera plus jamais l'état « jour ».** Son seam
+  `window.__world6` fonde le nid sans contrôleur joueur ; personne n'anime donc
+  plus `foundedMix()` sur ce chemin, et la valeur reste à 0. C'est le bon repli
+  (mode prologue), mais ce harnais ne peut plus servir à juger l'éclairage
+  post-fondation.
+
+### À juger à l'œil, sur une machine avec GPU
+
+Par ordre d'importance :
+
+1. **La bascule découverte à la remontée.** Jouer la boucle entière — récolter,
+   fonder, descendre, pondre, ressortir — et vérifier que le monde a changé
+   *pendant* qu'on était dans le noir. C'est tout l'intérêt de l'arbitrage §7a
+   et c'est la seule chose qu'aucun test ne peut prouver.
+2. La première lampe chaude à la première ponte, une de plus par ponte, la
+   perle à la 4ᵉ (`populateNest`).
+3. La ligne HUD du couvain : placement (`bottom:14px`, serrée contre le bord)
+   et son ambre chaud contre le reste de la colonne.
+4. Le rayon de 14 unités qui décide « elle est dans le couvoir » — contre une
+   reine longue d'environ 24,5 unités. Aucun test ne dit si `P` répond là où
+   le joueur s'y attend.
+
+### Quoi faire ensuite
+
+1. **Voir la ponte** (point 1 ci-dessus) — et voir la fondation par la même
+   occasion, défaut 1, jamais levé depuis trois rounds.
+2. Exporter `MAX_BROOD` et supprimer la constante recopiée.
+3. **#36 puis #37** : la couche d'entités, branchée sur
+   `brood.workersAvailable`. Le compteur les attend.
+4. Le reste de la liste ci-dessous est inchangé.
 
 ---
 
@@ -136,9 +246,10 @@ fonde : la première chambre est creusée **à l'exécution**, à l'endroit choi
 
 1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
    capturer le moment. Tant qu'il n'est pas vu, il n'est pas livré.
-2. **#6 — la ponte**, et la bascule crépuscule → jour **à la première ponte,
-   pas au premier coup de pelle** (`design/ressources-et-fondation.md`).
-   `populateNest()` et `setFoundedMix()` existent, il n'y a qu'à s'en servir.
+2. ~~**#6 — la ponte**~~ — **fait au tour 10**, y compris la bascule déplacée
+   à la première ponte (§7a). Reste à la **voir**, et à exporter `MAX_BROOD`.
+   Puis **#36/#37** : la couche d'entités, branchée sur
+   `brood.workersAvailable` qui les attend déjà.
 3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
    petit nid mort à trouver : entrée effondrée avec du relief, champignons
    toujours luminescents (le champignon survit à la colonie). Corrige aussi le
@@ -242,6 +353,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 10 | **La ponte** (#6 §2) : `player/brood.js` pur, coût en réserve, incubation, capacité de couvoir, HUD, touche `P`. Bascule crépuscule → jour déplacée du coup de pelle à la **première ponte** (§7a) : `main.js` cesse de piloter `setFoundedMix()`. Tests 15 → 38. Round nocturne sur VPS sans GPU, rien de vu | *(voir la note de round)* |
 | 9 | Harnais de tests non graphiques (`test-logic.mjs`) — géométrie/confinement de `world/**` vérifiés en pur Node, sans GPU. Round nocturne sur VPS sans GPU, aucun rendu touché | *(non commité par l'agent — voir note de round ci-dessus)* |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |
 | 7 | Ombres portées de l'herbe, contours sur les créatures, prologue sorti de la sous-exposition | `ef63596` |

@@ -1,3 +1,4 @@
+import * as world from '../world/index.js';
 import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
 import { groundY, distanceToWater } from '../world/index.js';
@@ -14,20 +15,36 @@ import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
 import { createInteraction } from './interaction.js';
 import { createProps } from './props.js';
 import { resourceNodes } from './resources.js';
-import { nestOrigin, canFound, refusalText } from './founding.js';
+import { nestOrigin, canFound, refusalText, isFounded } from './founding.js';
 import { createHud } from './hud.js';
 import { createTargetMarker } from './marker.js';
 import { dampAngle } from './mathUtil.js';
+import {
+  createBroodState, lay as layEgg, update as updateBrood, nextHatchIn,
+  broodCount, layRefusalText, EGG_COST,
+} from './brood.js';
+
+/* design/api-monde-gameplay.md's consumption rule: player/** reads the
+   world's exports through a namespace copy, never `world.foo` directly, so a
+   not-yet-shipped export is a plain `undefined` to branch on rather than a
+   bundler error. Used below only for the founding-chamber/populateNest/
+   setFoundedMix reads the #6 ponte needs — the pre-existing groundY/
+   distanceToWater imports above predate this file's involvement with that
+   rule and are left alone (not this ticket's scope). */
+const W = { ...world };
 
 /**
  * Wires up the whole player: ant state, IK mesh, input, camera, movement +
  * underground/lawn collision (#21), decor non-penetration (#4/#16), stem/tree
  * climbing (#5), the site reading the founding queen walks around with (#32),
- * and the harvest/founding loop (#29/#33 — interaction.js owns which verb the
+ * the harvest/founding loop (#29/#33 — interaction.js owns which verb the
  * interact key means, this file only routes input into it and its text out to
- * the HUD). Call update(dt, elapsed) once a frame, after world.update() so the
- * ant walks on this frame's terrain, before renderer.render() so the camera
- * it moved is the one that gets drawn.
+ * the HUD), and the ponte (#6 §2 — brood.js owns the pure cost/incubation
+ * logic, this file is the only thing that calls it: the P key, the founded
+ * ramp it starts, and populateNest(n)). Call update(dt, elapsed) once a
+ * frame, after world.update() so the ant walks on this frame's terrain,
+ * before renderer.render() so the camera it moved is the one that gets
+ * drawn.
  */
 
 /* Where the game opens (design/boucle-de-jeu.md §0, #32): out on the lawn,
@@ -63,6 +80,23 @@ const SPAWN_YAW = -Math.PI / 2; // facing -X: the meadow, the bowl and the far t
 // it, rare enough that the grass scans in siteQuality.js never show up in a
 // frame budget
 const SITE_INTERVAL = 0.25, SITE_MOVE = 3;
+
+/* #6 §2 — the ponte. Capacity mirrors world/founding.js's own MAX_BROOD (6):
+   that file pre-builds exactly six hidden brood piles per chamber and
+   populateNest(n) can only ever reveal up to that many, so a brood state
+   allowed to grow past it would incubate eggs the couvoir has no pile left
+   to show — a lay that "succeeds" but is invisible underground. MAX_BROOD is
+   not exported by the world barrel today, so this literal has to be kept in
+   sync by hand until it is (see the session report). */
+const BROOD_ROOM_CAPACITY = 6;
+
+// design/ressources-et-fondation.md §7a: "anime founded sur 6 s" — the same
+// literal main.js's own FOUND_FADE already carries. Duplicated here (not
+// imported) because main.js currently starts *its* ramp from foundNest()
+// (the dig) rather than from the first ponte, which this file's ramp is
+// supposed to fix — see the session report on why that conflict is not
+// resolved by this ticket alone.
+const FOUND_FADE_SECONDS = 6.0;
 
 export function createPlayerController({ scene, camera, domElement, profile = PLAYER_AVATAR }) {
   const ant = makeAnt(SURFACE_START[0], 0, SURFACE_START[1], profile);
@@ -102,6 +136,57 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   // input from (mirrors the old prototype's camReady snap-in) — see
   // movement.js's computeWishDir() for why this ordering matters.
   cameraRig.update(ant, input.state.camYaw, input.state.wantPitch, input.state.camDist, 0);
+
+  /* #6 §2 — the ponte. P rather than E: E is already a whole priority ladder
+     (interaction.js), and "pondre" is a new verb with no ambiguity to
+     resolve (unlike climb/harvest/drop/found, it never competes with
+     anything else the queen could mean by pressing a key) — a dedicated key
+     is simpler than teaching the ladder a fifth rung. Listened for directly
+     here rather than through input.js, which owns only the verbs that
+     existed before this ticket; adding a generic "named key" API to it for
+     one caller would be speculative. Edge-triggered, same contract as
+     input.js's own consumeInteract()/consumeHelp(). */
+  const brood = createBroodState(BROOD_ROOM_CAPACITY);
+  let pontePressed = false;
+  function onPonteKey(e) { if (e.code === 'KeyP') pontePressed = true; }
+  window.addEventListener('keydown', onPonteKey);
+  function consumePonte() { const v = pontePressed; pontePressed = false; return v; }
+
+  let layMessage = null, layMessageTimer = 0;
+  // Seconds elapsed since the FIRST successful lay, or null before it — the
+  // founded-mix ramp's own clock (design/ressources-et-fondation.md §7a: the
+  // switch starts at the first ponte, not at foundNest()'s dig). See the
+  // session report: main.js currently starts *its* copy of this ramp from
+  // the dig instead and will keep overwriting whatever this drives every
+  // frame, until that trigger is moved there — this file's ramp is written
+  // correctly regardless, so it is one line away from working once that is
+  // fixed.
+  let foundedRampT = null;
+
+  /** Is the queen standing in the founded chamber right now? Planar distance
+   *  to the chamber centre is enough of a gate for a prototype verb (same
+   *  generosity as harvest.js's own CACHE_RADIUS check) — the shaft leading
+   *  down to it is much narrower (SHAFT_R=4.2 in world/founding.js) than the
+   *  chamber itself (ROOM_R=14), so a queen inside that radius is for all
+   *  practical purposes inside the room, not still in the shaft above it. */
+  function inBroodChamber(ant) {
+    const nest = typeof W.getFoundedNest === 'function' ? W.getFoundedNest() : null;
+    if (!nest) return false;
+    return Math.hypot(ant.x - nest.chamber.x, ant.z - nest.chamber.z) <= nest.chamber.r;
+  }
+
+  /** The brood HUD line: steady-state couvain/incubation/hatch readout,
+   *  replaced for a few seconds by whatever the last P press just said (a
+   *  success, a refusal, or nothing pressed at all — a hatch landing on its
+   *  own gets the same courtesy, see the `hatched` block in update()). */
+  function broodStatusText() {
+    const next = nextHatchIn(brood);
+    const nextTxt = next === null ? '' : ` · prochaine éclosion : ${Math.ceil(next)} s`;
+    const line = `Couvain : ${broodCount(brood)}/${brood.capacity}${nextTxt}`
+      + ` · ouvrières écloses : ${brood.workersAvailable}`;
+    if (layMessageTimer > 0) return `${line} — ${layMessage}`;
+    return `${line} · P (dans le couvoir) — pondre, coûte ${EGG_COST}`;
+  }
 
   let siteTimer = 0, siteAt = null, site = null, nestCard = null;
 
@@ -159,12 +244,58 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
 
     props.update(ant, interaction.harvest.state);
 
+    /* #6 §2 — the ponte, independent of E's ladder above (see the block that
+       declares `brood` for why). Read before movement/props above have any
+       bearing on it and before the HUD calls below need its result. */
+    if (consumePonte()) {
+      const res = layEgg(brood, interaction.harvest.state.cache, {
+        founded: isFounded(), inChamber: inBroodChamber(ant),
+      });
+      layMessageTimer = 3.2;
+      if (res.ok) {
+        layMessage = `Un œuf est pondu (${EGG_COST} unités prélevées sur la réserve).`;
+        if (foundedRampT === null) foundedRampT = 0; // starts the ramp — see its declaration
+      } else {
+        layMessage = `Pondre : ${layRefusalText(res.reason)}`;
+      }
+    }
+    // A hatch this frame gets its own line, but never steps on a fresher
+    // lay/refusal line from the block above (same frame, same priority the
+    // press just claimed).
+    const hatched = updateBrood(brood, dt);
+    if (hatched > 0 && layMessageTimer <= 0) {
+      layMessage = hatched === 1
+        ? 'Un œuf a éclos : une ouvrière est prête.'
+        : `${hatched} œufs ont éclos : autant d'ouvrières prêtes.`;
+      layMessageTimer = 3.2;
+    }
+    if (layMessageTimer > 0) layMessageTimer -= dt;
+
+    // design/ambiance-prologue.md §2c: "chaque ponte ajoute sa lampe" — driven
+    // by laidTotal (never decreasing), NOT by broodCount()/clutches.length
+    // (currently incubating, which drops on every hatch). The latter was
+    // tried first and was exactly backwards: a colony succeeding at hatching
+    // would have gone dark one lamp at a time — see brood.js's laidTotal doc.
+    // Clamped to what the chamber can actually show (populateNest(n) only
+    // ever reveals up to world/founding.js's MAX_BROOD, mirrored here by
+    // BROOD_ROOM_CAPACITY==brood.capacity); populateNest() is a no-op before
+    // founding regardless.
+    if (typeof W.populateNest === 'function') {
+      W.populateNest(Math.min(brood.laidTotal, brood.capacity));
+    }
+
+    if (foundedRampT !== null) {
+      foundedRampT = Math.min(FOUND_FADE_SECONDS, foundedRampT + dt);
+      if (typeof W.setFoundedMix === 'function') W.setFoundedMix(foundedRampT / FOUND_FADE_SECONDS);
+    }
+
     refreshSite(dt);
     hud.setPrompt(interaction.promptText(ant, act));
     hud.setObjective(interaction.objectiveText(ant));
     hud.setStock(interaction.inventoryText());
     hud.setEvent(interaction.message());
     hud.setHold(interaction.holdProgress(act));
+    hud.setBrood(isFounded() ? broodStatusText() : null);
     /* The ring reads the same `act` the prompt does, so what is circled and
        what is named can never be two different things. */
     const mark = interaction.targetMark(ant, act);
@@ -207,9 +338,17 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // reach (#33), and the waterline the movement clamp now follows (#4)
     window.__canFound = (x, z) => { const v = canFound(x, z); return { ...v, text: refusalText(v.reason) }; };
     window.__toWater = distanceToWater;
+    // #6: so a harness can lay/advance without a real keyboard, and read the
+    // verdict/state the HUD is built from.
+    window.__brood = brood;
+    window.__lay = () => layEgg(brood, interaction.harvest.state.cache, {
+      founded: isFounded(), inChamber: inBroodChamber(ant),
+    });
+    window.__inBroodChamber = () => inBroodChamber(ant);
   }
 
   function dispose() {
+    window.removeEventListener('keydown', onPonteKey);
     input.dispose();
     hud.dispose();
     marker.dispose();
