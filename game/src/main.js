@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { createRenderer, createCamera } from './core/renderer.js';
 import {
   createWorld, containUnderground, profileR, groundY, applyNestShading, TREE,
-  RIG_PROLOGUE, RIG_FOUNDED, sunDir, setFoundedMix, foundedMix,
+  RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix,
   nestOrigin, canFoundAt, foundNest, populateNest, sealNest, getFoundedNest,
   pitFactorAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
 } from './world/index.js';
@@ -213,23 +213,18 @@ function nestness(cam, ant) {
   return Math.max(tube, pit);
 }
 
-/* 0 = prologue, 1 = founded, animated once over FOUND_FADE seconds when the
-   nest appears. Read from the world rather than set by a gameplay call, so
-   this file keeps not knowing who founded or why. */
-const FOUND_FADE = 6.0;
-let foundedAt = null;
-function advanceFoundedMix() {
-  const now = performance.now() / 1000;
-  if (foundedAt === null && nestOrigin()) foundedAt = now;
-  if (foundedAt !== null) setFoundedMix(clamp((now - foundedAt) / FOUND_FADE, 0, 1));
-}
+/* 0 = prologue, 1 = founded. The ramp used to be driven from here, on
+   nestOrigin() (i.e. the moment foundNest() digs) — wrong per §7a of
+   design/ressources-et-fondation.md: the reveal must wait for the first
+   egg, not the excavation. player/index.js now owns the ramp and calls
+   world.setFoundedMix() itself once the first lay succeeds; this file only
+   reads the resulting scalar below. */
 
 /* Fog / sky / exposure / hemisphere fill, commuted between "in the nest" and
    "out on the lawn" by one scalar. Split out of frame() so a verification
    driver can render a free-flown camera through exactly the same environment
    the game uses, instead of a differently-lit approximation of it. */
 function applyEnvironment() {
-  advanceFoundedMix();
   const f = foundedMix();
   outSky.copy(cP.sky).lerp(cF.sky, f);
   outGround.copy(cP.ground).lerp(cF.ground, f);

@@ -17,6 +17,12 @@
      #event      — a short-lived line for what just happened (took a seed,
                    founded the colony)
      #hold       — a bar that fills while a held action runs, under #prompt
+     #broodinfo  — the ponte (#6 §2): couvain in progress / capacity, time to
+                   the next hatch, workers hatched, and (for a few seconds)
+                   whatever the last P press just said — success or refusal.
+                   Empty before the colony is founded, there being nothing to
+                   report yet. brood.js decides *what* happened; this file
+                   only ever prints the sentence player/index.js hands it.
      #controls   — the key bindings, open at first launch, toggled with H
 
    The controls panel is not decoration. The player's report on the previous
@@ -46,7 +52,7 @@ function el(id, style) {
 function nullHud() {
   return {
     setSite() {}, setPrompt() {}, setObjective() {}, setStock() {}, setEvent() {},
-    setHold() {}, toggleControls() {}, closeControls() {}, dispose() {},
+    setHold() {}, setBrood() {}, toggleControls() {}, closeControls() {}, dispose() {},
   };
 }
 
@@ -61,6 +67,7 @@ const CONTROLS = [
   ['Souris (glisser)', 'tourner la caméra'],
   ['Molette', 'reculer / rapprocher la vue'],
   ['E', 'action — appui court, ou maintenu quand la barre apparaît'],
+  ['P', 'pondre (dans le couvoir, une fois la colonie fondée)'],
   ['H', 'afficher / masquer cette aide'],
 ];
 
@@ -82,6 +89,13 @@ export function createHud() {
   const stock = el('stock', 'left:12px;bottom:70px;opacity:0.85;');
   const site = el('siteinfo', 'left:12px;bottom:52px;');
   const detail = el('sitedetail', 'left:12px;bottom:34px;opacity:0.62;font-size:12px;');
+  /* Below everything else: it only has anything to say once the colony is
+     founded (player/index.js gates it on isFounded()), by which point the
+     site card above has already stopped changing every step — this is the
+     line that is still moving after that. Warm amber rather than the sand
+     tone the rest of the column uses, echoing the brood lamps' own colour
+     (world/founding.js's BROOD_LIGHT) rather than inventing a fourth tint. */
+  const brood = el('broodinfo', 'left:12px;bottom:14px;font-size:12px;color:#e8c98f;');
 
   /* The hold bar sits directly under the prompt that names the action, so the
      sentence and the progress are read as one thing. Two nested divs rather
@@ -102,7 +116,7 @@ export function createHud() {
   let controlsOpen = true;
 
   let lastSite = null, lastDetail = null, lastPrompt = null;
-  let lastObjective = null, lastStock = null, lastEvent = null;
+  let lastObjective = null, lastStock = null, lastEvent = null, lastBrood = null;
 
   // every setter writes only on change: these run every frame, and
   // reassigning textContent unconditionally dirties layout for nothing
@@ -130,6 +144,8 @@ export function createHud() {
     setStock(text) { lastStock = setText(stock, text, lastStock); },
     /** short-lived "what just happened" line */
     setEvent(text) { lastEvent = setText(event, text, lastEvent); },
+    /** the ponte readout (#6 §2) — null before the colony is founded */
+    setBrood(text) { lastBrood = setText(brood, text, lastBrood); },
     /** 0..1 while a held action runs, null when none is. */
     setHold(progress) {
       const on = progress !== null && progress > 0.001;
@@ -149,7 +165,7 @@ export function createHud() {
       controls.style.display = 'none';
     },
     dispose() {
-      for (const n of [objective, stock, site, detail, prompt, event, holdOuter, controls]) {
+      for (const n of [objective, stock, site, detail, prompt, event, brood, holdOuter, controls]) {
         if (n.parentNode) n.parentNode.removeChild(n);
       }
     },
