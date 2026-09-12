@@ -2,7 +2,7 @@ import { clamp, lerp, damp } from '../core/noise.js';
 import { nrm3, cross3, add3, sub3, scl3 } from '../core/vecmath.js';
 import { groundY, groundNormal, TREE, treeWalkBranch } from '../world/index.js';
 import { bladeClimbBasis } from '../world/blade.js';
-import { GRASS } from './climb.js';
+import { grassBlades } from './climb.js';
 import { PLAYER_AVATAR, legLengths, strideOf } from './avatar.js';
 
 /* ==========================================================================
@@ -59,7 +59,7 @@ export function antBasis(a) {
       const wb = treeWalkBranch.basis(a.climb.u);
       return { side: wb.side, up: wb.up, fwd: wb.fwd };
     }
-    const cb = bladeClimbBasis(GRASS[a.climb.i], a.climb.t);
+    const cb = bladeClimbBasis(grassBlades()[a.climb.i], a.climb.t);
     // local Y (up) -> away from the blade face, local Z (fwd) -> up the
     // blade, local X (side) -> across the blade's width — legs land on the
     // flat face.

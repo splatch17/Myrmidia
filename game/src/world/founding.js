@@ -61,7 +61,11 @@ const WARM_MOUTH_LIGHT = [1.05, 0.62, 0.24];   // ambiance §2b: the one warm
 const BROOD_LIGHT = [0.85, 0.55, 0.22];        // ambiance §2c plan 5
 const GLOW_LIGHT = [1.95, 1.20, 0.52];         // ambiance §2c plan 6
 
-const MAX_BROOD = 6;
+/* Exported (and re-exported by world/index.js) because player/index.js needs
+   the same number to size the brood room's capacity, and used to carry its
+   own hand-copied BROOD_ROOM_CAPACITY = 6 — a silent divergence waiting to
+   happen (PROGRESS.md, tour 10). One owner, one value. */
+export const MAX_BROOD = 6;
 
 /* ---- state --------------------------------------------------------------- */
 

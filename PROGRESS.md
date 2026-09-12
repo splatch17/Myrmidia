@@ -14,10 +14,11 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ## État au 2026-09-05
 
-> **Le tour le plus récent est le 10 (2026-09-11, la ponte).** Sa section est
-> plus bas, juste avant « Défauts connus ». Ce qui suit ici est l'état du
-> tour 9, conservé parce qu'il décrit encore correctement la stack et la
-> procédure de reprise.
+> **Le tour le plus récent est le 11 (2026-09-12, l'index spatial).** Sa
+> section est plus bas, juste avant « Défauts connus », précédée de celle du
+> tour 10 (la ponte). Ce qui suit ici est l'état du tour 9, conservé parce
+> qu'il décrit encore correctement la stack et la procédure de reprise —
+> **sauf le lien de test, qui est cassé : voir le tour 11.**
 
 **PR #23 mergée dans `main`** (`0f1a28a`). La ligne « pas encore mergée » de
 la précédente version de ce fichier est obsolète — `git log main` le confirme.
@@ -229,6 +230,138 @@ Par ordre d'importance :
 
 ---
 
+## Round du 2026-09-12 (tour 11 — nocturne, VPS ARM sans GPU)
+
+**Ticket travaillé : #35 — « Index spatial partagé : supprimer les balayages
+linéaires par image ».**
+
+Pourquoi lui et pas #36 que le tour 10 désignait : #36 dit noir sur blanc
+« **Dépend de #35** », et son critère de fin exige des captures et des chiffres
+de perf GPU — impossible ce round. #35, lui, est de l'algorithmique pure :
+c'est le seul maillon de la chaîne #35 → #36 → #37 → #38 entièrement
+vérifiable sans écran, et il débloque les trois autres. Aucun `verify-*.mjs`
+n'a été lancé.
+
+### Où on en est
+
+**Plus aucune requête de proximité ne balaie la carte entière.** Une grille
+uniforme unique porte les 1862 objets statiques (1600 brins, 83 champignons,
+34 cailloux, 145 nœuds de ressources), et les cinq appelants qui balayaient
+par image l'interrogent.
+
+| Fichier | Rôle |
+|---|---|
+| `core/spatialIndex.js` **(nouveau)** | La grille. **Module pur : aucun `import` du tout** — ni THREE, ni DOM, ni `world/**`. Comme `player/brood.js` au tour 10, `test-logic.mjs` l'importe directement, sans le hook de résolution ni le stub de `texturing.js` |
+| `world/index.js` | Construit **un seul** index partagé au `createWorld()`. Expose `worldIndex`, `getGrassFootprints()` et enfin `MAX_BROOD` |
+| `player/climb.js` | `nearestClimbable()` : 1600 brins par image → une requête. Exporte `grassBlades` |
+| `player/resources.js`, `harvest.js` | `nodeInReach()` indexé, et le **second** balayage par image (la recherche de `activeId` pendant la récolte) remplacé par une Map |
+| `player/decorCollision.js` | `forEachCollider()` indexé, champignons/cailloux/brins |
+| `player/siteQuality.js` | `probeShade()` / `probeFood()` |
+| `scripts/bench-spatial.mjs` **(nouveau)** | Micro-mesure CPU pur Node (`npm run bench:spatial`) |
+
+**Cellule de 12 unités**, écrite contre les portées réelles pour la **reine**
+(rayon 3,3, `scale` 2,2) : `reach()` = 9,9 ; grimpe d'arbre 13,2 ; récolte ≈ 8 ;
+collision décor ≈ 7 (jusqu'à ~14 pour un chapeau grossi). Toute requête par
+image touche donc un bloc 2×2 ou 3×3. Mesuré : 642 cellules, 2,9 entrées par
+cellule en moyenne, 15 au pire. C'est le piège n°6 traité en face : le chiffre
+est annoté contre le corps qui l'a fixé.
+
+**Mesures CPU (pur Node, aucun Chromium, aucun GPU), checksums identiques
+balayage/index dans les quatre cas :**
+
+| Requête | Balayage | Indexée | Gain |
+|---|---|---|---|
+| `nearestClimbable` | 33,2 µs | 2,6 µs | **×13** |
+| `nodeInReach` | 7,4 µs | 0,7 µs | **×11** |
+| collision décor, passe herbe | 32,8 µs | 0,8 µs | **×43** |
+| `probeShade` (r = 26, 4 Hz) | 14,8 µs | 4,2 µs | ×3,5 |
+| `move()` de 20 fourmis | — | 5,2 µs/image | — |
+
+Lecture honnête : pour **une** fourmi, ~73 µs d'arithmétique par image
+deviennent ~4 µs. Le vrai gain est en croissance — à 20 ouvrières, 1,5 ms par
+image (9 % du budget de 16,7 ms) deviennent ~0,09 ms. C'est exactement ce que
+#36 allait faire exploser.
+
+**Tests : 38 → 86, 0 échec.** `npx vite build` passe (2,3 s). La moitié de ces
+tests sont des tests d'**équivalence** : pour chacun des quatre appelants, une
+implémentation de référence par balayage linéaire (recopiée de l'état d'avant)
+est confrontée à la version indexée sur ~1070 points tirés déterministement
+sur la vraie carte. C'est ce qui remplace les captures ce round. Validé **en
+négatif** cinq fois (filtre de hauteur retiré → 409 désaccords ; filtre
+`amount` → 25 ; extent des champignons → 3 tests, 55 désaccords ; etc.), puis
+86/0 re-constaté.
+
+Deux arbitrages pris pendant le round :
+
+1. **Le second `createGrassField()` de `climb.js` a été supprimé.** Le
+   gameplay construisait son propre champ de brins, déterministe et identique
+   à celui du rendu, et s'y référait par indice. Les `id` de l'index viennent
+   du champ *rendu* : deux tableaux jumeaux qui se désalignent silencieusement
+   dès qu'un seul des deux appels change de graine ou d'effectif. Tout le monde
+   lit maintenant `getGrassFootprints()`.
+2. **Les rayons de collision ajustés ne sont pas poussés dans l'index.**
+   `decorCollision.js` n'utilise pas le `mushroomCollideR()` stocké mais
+   `fittedRadius()`, qui grossit un chapeau jusqu'à ~14 unités — un
+   `forEachWithin` naïf aurait **raté** ces chapeaux, seul vrai changement de
+   comportement possible du ticket (les tests le confirment : 3 échecs). Il
+   interroge donc par distance au centre avec sa propre borne. Écrire un rayon
+   ajusté dans l'index partagé le ferait dépendre de l'avatar courant, et
+   `maxExtent` ne décroît jamais : les ouvrières de #36, qui ont un autre corps,
+   auraient hérité d'un balayage gonflé à vie.
+
+### Ce qui est cassé ou en attente
+
+- **#35 n'est pas fermé, à une chose près.** Tout est livré et prouvé sauf le
+  chiffre exact que réclame son critère de fin : « temps CPU **d'une image**,
+  avant/après, même harnais ». Celui-là inclut Three.js et exige une machine
+  avec GPU. Les µs ci-dessus sont le coût de l'arithmétique de proximité
+  seule — honnêtes, mais ce n'est pas la même mesure. **À faire tourner sur
+  machine avec GPU, puis fermer.**
+- **LE LIEN DE TEST DU README EST CASSÉ, et l'était déjà avant ce round.** Le
+  commit du tour 10 (`b072d97`) a **supprimé** `dist/assets/index-LmX2wDE8.js`
+  et pointé `dist/index.html` vers `index-xyXCMNBS.js`, qui n'a jamais été
+  ajouté. La branche publie donc un `index.html` qui charge un fichier absent :
+  page blanche. La note du tour 10 croyait avoir évité ça, c'est l'inverse qui
+  s'est produit. Réparation, une ligne, à faire depuis une machine où git
+  écrit : `cd game && npx vite build && git add -f dist/index.html dist/assets/*.js`.
+  Je n'ai pas pu la faire ici : **toute écriture git est refusée dans cet
+  environnement** (`git add`, `git checkout` rejetés par le bac à sable), c'est
+  aussi pourquoi `dist/index.html` apparaît modifié dans le diff de ce round.
+  Mieux vaudrait régler la contradiction pour de bon — `dist/` est dans
+  `.gitignore` alors que 6 de ses fichiers sont suivis : soit on l'en sort,
+  soit on publie par CI.
+- Le commentaire d'en-tête de `world/index.js` affirme encore que
+  `MUSHROOMS`/`ROCKS`/`mushroomCollideR` sont « deliberately not wired into the
+  player controller ». C'est faux depuis plusieurs tours. Une ligne à corriger.
+- **Rien de tout ça n'a été vu.** Par construction rien ne *doit* se voir.
+
+### À juger à l'œil, sur une machine avec GPU
+
+Par ordre d'importance :
+
+1. **Que rien n'ait changé.** C'est le critère de fin de #35, mot pour mot :
+   « le jeu doit se jouer exactement pareil ». Rejouer la boucle — grimper un
+   brin, récolter, déposer, **frôler un amas de champignons sous terre** (le
+   cas que l'arbitrage n°2 a failli casser), lire la note de site — et
+   confirmer que la sensation au clavier est identique. Les tests prouvent
+   l'égalité des *requêtes*, pas celle du ressenti.
+2. Le temps CPU par image avant/après, pour clore le ticket.
+3. Tout ce que le tour 10 attendait déjà et qui n'a toujours pas été vu : la
+   ponte, la bascule crépuscule → jour à la remontée, la fondation (défaut 1).
+
+### Quoi faire ensuite
+
+1. **Réparer le lien de test** (une ligne ci-dessus). Sans lui, aucun des
+   points « à juger à l'œil » accumulés depuis trois tours n'est atteignable.
+2. **#36 — la couche d'entités.** Sa dépendance est levée : l'index sait déjà
+   déplacer une entrée (`move()`, 5,2 µs pour 20 fourmis) et le type `'ant'`
+   n'attend qu'à être inséré.
+3. Puis **#37** (l'éclosion peuple le monde) et **#38** (le choix de caste),
+   branchés sur `brood.workersAvailable` qui les attend depuis le tour 10.
+4. Le reste de la liste ci-dessous est inchangé.
+
+---
+
 ## Défauts connus (vus sur captures, non corrigés)
 
 | # | Défaut | Gravité |
@@ -247,7 +380,10 @@ Par ordre d'importance :
 1. **Voir la fondation** (défaut 1). Rejouer la boucle de bout en bout et
    capturer le moment. Tant qu'il n'est pas vu, il n'est pas livré.
 2. ~~**#6 — la ponte**~~ — **fait au tour 10**, y compris la bascule déplacée
-   à la première ponte (§7a). Reste à la **voir**, et à exporter `MAX_BROOD`.
+   à la première ponte (§7a). Reste à la **voir**. ~~exporter `MAX_BROOD`~~ —
+   fait au tour 11.
+2 bis. ~~**#35 — l'index spatial**~~ — **fait au tour 11**, sauf le chiffre de
+   temps par image qui le fermera. Il lève la dépendance de #36.
    Puis **#36/#37** : la couche d'entités, branchée sur
    `brood.workersAvailable` qui les attend déjà.
 3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
@@ -271,7 +407,8 @@ Par ordre d'importance :
 | Les tailles/vitesses de la fourmi | `player/avatar.js` — un second corps = une entrée de plus, pas un contrôleur |
 | Les textures | `world/texturing.js` (triplanaire), `scripts/generate-procedural-textures.mjs` (génération) |
 | L'éclairage du nid | `world/lighting.js` — `applyNestShading()` s'applique à toute la scène depuis `main.js` |
-| Le contrat monde ↔ gameplay | `design/api-monde-gameplay.md` — **fait autorité, aucun agent ne le modifie** |
+| Qu'y a-t-il près d'ici ? | `core/spatialIndex.js` (la grille, module pur) et `worldIndex` exporté par `world/index.js`. **Aucun code ne rebalaie un tableau entier par image** — voir `design/api-monde-gameplay.md` §6 |
+| Le contrat monde ↔ gameplay | `design/api-monde-gameplay.md` — **fait autorité, aucun agent ne le modifie** (§6 ajouté par l'orchestrateur au tour 11, comme l'exige #35) |
 | Tester une constante de taille sans écran | `scripts/test-logic.mjs` — voir son en-tête ; à étendre plutôt qu'à dupliquer si une autre échelle se retrouve un jour fausse |
 
 ---
@@ -353,6 +490,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 11 | **L'index spatial** (#35) : `core/spatialIndex.js` pur, grille uniforme partagée de 1862 objets, cellule 12 u. Les 5 balayages par image rebranchés (`nearestClimbable` ×13, collision décor ×43). Second champ d'herbe du gameplay supprimé, `MAX_BROOD` enfin exporté. Tests 38 → 86, moitié d'équivalence contre les balayages d'avant. Round nocturne sur VPS sans GPU, rien de vu | *(voir la note de round)* |
 | 10 | **La ponte** (#6 §2) : `player/brood.js` pur, coût en réserve, incubation, capacité de couvoir, HUD, touche `P`. Bascule crépuscule → jour déplacée du coup de pelle à la **première ponte** (§7a) : `main.js` cesse de piloter `setFoundedMix()`. Tests 15 → 38. Round nocturne sur VPS sans GPU, rien de vu | *(voir la note de round)* |
 | 9 | Harnais de tests non graphiques (`test-logic.mjs`) — géométrie/confinement de `world/**` vérifiés en pur Node, sans GPU. Round nocturne sur VPS sans GPU, aucun rendu touché | *(non commité par l'agent — voir note de round ci-dessus)* |
 | 8 | Commandes affichées, jauge de maintien, anneau de cible ; alésage du nid mis à l'échelle de la reine ; nid pré-construit retiré du jeu | `a5860e4`, `a7bcd35` |

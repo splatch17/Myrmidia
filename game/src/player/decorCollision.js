@@ -1,7 +1,7 @@
-import { MUSHROOMS, ROCKS, mushroomCollideR, TREE, treeTrunkRadius, TUNNEL_MOUTH, containUnderground, profileR, getRoomBranches } from '../world/index.js';
+import { MUSHROOMS, mushroomCollideR, TREE, treeTrunkRadius, TUNNEL_MOUTH, containUnderground, profileR, getRoomBranches, worldIndex } from '../world/index.js';
 import { clamp } from '../core/noise.js';
 import { bladeCurvePoint } from '../world/blade.js';
-import { GRASS, CLIMB_MIN_H } from './climb.js';
+import { grassBlades, CLIMB_MIN_H } from './climb.js';
 import { PLAYER_AVATAR, collideRadius } from './avatar.js';
 
 /* ==========================================================================
@@ -9,7 +9,7 @@ import { PLAYER_AVATAR, collideRadius } from './avatar.js';
    thick grass stems and the tree trunk instead of walking through them.
    The world already publishes every footprint this needs (world/index.js:
    MUSHROOMS/ROCKS/mushroomCollideR, world/tree.js: treeTrunkRadius,
-   world/grass.js: footprints via climb.js's GRASS) — nothing here invents a
+   world/grass.js: footprints via climb.js's grassBlades()) — nothing here invents a
    second radius that could drift from what's drawn.
 
    Method, ported from the old prototype's second (fixed) version of
@@ -145,7 +145,7 @@ function fitsBeside(x, z, r, antR) {
   return 2 * laneHalfWidth(x, z) >= 2 * antR + 2 * r + LANE_MARGIN;
 }
 
-let mushroomR = null, mushroomRForR = null;
+let mushroomR = null, mushroomRForR = null, mushroomMaxR = 0;
 export function mushroomRadii(antR = collideRadius(PLAYER_AVATAR)) {
   if (!mushroomR || mushroomR.length !== MUSHROOMS.length || mushroomRForR !== antR) {
     mushroomRForR = antR;
@@ -153,29 +153,56 @@ export function mushroomRadii(antR = collideRadius(PLAYER_AVATAR)) {
       const r = fittedRadius(m.x, m.z, mushroomCollideR(m));
       return r > 0 && fitsBeside(m.x, m.z, r, antR) ? r : 0;
     });
+    // widest fitted cap in play — how far forEachCollider() has to sweep to
+    // be sure it has seen every cap that could be touching (see there)
+    mushroomMaxR = mushroomR.reduce((m, r) => (r > m ? r : m), 0);
   }
   return mushroomR;
 }
 
-/* Every collider that could be touching (x, z), handed one at a time to
-   `fn(cx, cz, r)`. Split by region rather than iterating everything: the
-   fungus gardens are all underground (z < -14) and the pebbles/grass/tree
-   are all out on the lawn (z > 6), so each frame only ever walks the list it
-   can actually be touching. One iterator, so the resolver and the
-   verification probe can never disagree about a radius. */
-function forEachCollider(x, z, fn) {
+/* Every collider that could be touching a body of radius `slack` at (x, z),
+   handed one at a time to `fn(cx, cz, r)`. Asked of the shared spatial index
+   (#35) rather than by walking MUSHROOMS/ROCKS/the blades every frame; still
+   split by region first, because which *kinds* exist here is a cheaper
+   question than where they are (the fungus gardens are all underground,
+   z < -14, the pebbles/grass/tree all out on the lawn, z > 6). One iterator,
+   so the resolver and the verification probe can never disagree about a
+   radius.
+
+   The two sweeps below are deliberately generous rather than exact, because
+   in both cases the radius this file collides against is NOT the extent the
+   index stores; callers act only on a real overlap, so a candidate handed
+   over that turns out not to touch costs one distance test, exactly as the
+   full scan did.
+
+   Exported (it used to be private) so scripts/test-logic.mjs can hold the set
+   of colliders actually overlapping a point against the same set computed by
+   the full scan this replaced — the only proof available without a screen
+   that the swap changed nothing. */
+export function forEachCollider(x, z, slack, fn) {
   if (z < TUNNEL_MOUTH + 6) {
     const radii = mushroomRadii();
-    for (let k = 0; k < MUSHROOMS.length; k++) {
-      if (radii[k] > 0) fn(MUSHROOMS[k].x, MUSHROOMS[k].z, radii[k]);
-    }
+    /* Caps collide at fittedRadius() (above), which can be several times the
+       cap's own collide radius the index stores — a cap grown to swallow a
+       pocket reaches ~14 units — so the sweep widens by the largest fitted
+       radius instead of trusting the stored extent, which would silently miss
+       exactly those grown caps. The fitted radii are deliberately NOT written
+       back into the index: they depend on WHO is walking (mushroomRadii(antR)
+       is recomputed per body), and the index is shared world data that #36's
+       workers will read with a body of their own. */
+    worldIndex.forEachInRadius(x, z, slack + mushroomMaxR, 'mushroom', (k, d, mx, mz) => {
+      if (radii[k] > 0) fn(mx, mz, radii[k]);
+    });
   }
   if (z > TUNNEL_MOUTH - 6) {
-    for (let i = 0; i < ROCKS.length; i++) fn(ROCKS[i].x, ROCKS[i].z, ROCKS[i].r);
-    for (let j = 0; j < GRASS.length; j++) {
-      const g = GRASS[j];
-      if (g.h >= CLIMB_MIN_H) fn(g.x, g.z, grassCollideR(g));
-    }
+    worldIndex.forEachWithin(x, z, slack, 'rock', (k, d, rx, rz, r) => fn(rx, rz, r));
+    // a blade's stored extent is its half width w, its collider is 0.75w, so
+    // "reaches within slack" is a superset of "collides"
+    const blades = grassBlades();
+    worldIndex.forEachWithin(x, z, slack, 'grass', (k, d, gx, gz) => {
+      const g = blades[k];
+      if (g.h >= CLIMB_MIN_H) fn(gx, gz, grassCollideR(g));
+    });
     fn(TREE_BASE[0], TREE_BASE[2], TREE_COLLIDE_R);
   }
 }
@@ -187,7 +214,7 @@ function forEachCollider(x, z, fn) {
  *  radius to ask the stricter "is any of the ant inside something". */
 export function deepestPenetration(x, z, antR = 0) {
   let worst = 0;
-  forEachCollider(x, z, (cx, cz, r) => {
+  forEachCollider(x, z, antR, (cx, cz, r) => {
     const pen = r + antR - Math.hypot(x - cx, z - cz);
     if (pen > worst) worst = pen;
   });
@@ -202,7 +229,7 @@ function collectDecorPush(ant) {
   // obstacle rather than baked into the obstacle radii, so the same world
   // data serves whichever body the player is in (avatar.js)
   const antR = collideRadius(ant.profile || PLAYER_AVATAR);
-  forEachCollider(ant.x, ant.z, (cx, cz, r0) => {
+  forEachCollider(ant.x, ant.z, antR, (cx, cz, r0) => {
     const r = r0 + antR;
     const dx = ant.x - cx, dz = ant.z - cz;
     const d = Math.hypot(dx, dz);

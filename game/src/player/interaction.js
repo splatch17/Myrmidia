@@ -1,5 +1,5 @@
 import { collideRadius, PLAYER_AVATAR } from './avatar.js';
-import { nearestClimbable, tryInteract, climbPromptText, GRASS } from './climb.js';
+import { nearestClimbable, tryInteract, climbPromptText, grassBlades } from './climb.js';
 import { TREE } from '../world/index.js';
 import { createHarvest, FOUND_STOCK, CACHE_RADIUS } from './harvest.js';
 import { KIND_LABEL, nodesAreProvisional } from './resources.js';
@@ -224,7 +224,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
         const t = act.climbTarget;
         if (!t) return null;
         if (t.kind === 'tree') return { x: TREE.x, z: TREE.z, radius: TREE.w + 5, blocked: false };
-        const g = GRASS[t.i];
+        const g = grassBlades()[t.i];
         return g ? { x: g.x, z: g.z, radius: 5, blocked: false } : null;
       }
       default:

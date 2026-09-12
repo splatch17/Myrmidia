@@ -9,7 +9,7 @@ import { buildAntMesh } from './antMesh.js';
 import { createInput } from './input.js';
 import { createCameraRig } from './camera.js';
 import { computeWishDir, stepAnt } from './movement.js';
-import { stepClimb, GRASS } from './climb.js';
+import { stepClimb, grassBlades } from './climb.js';
 import { deepestPenetration, resolveDecorCollision, mushroomRadii } from './decorCollision.js';
 import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
 import { createInteraction } from './interaction.js';
@@ -81,14 +81,14 @@ const SPAWN_YAW = -Math.PI / 2; // facing -X: the meadow, the bowl and the far t
 // frame budget
 const SITE_INTERVAL = 0.25, SITE_MOVE = 3;
 
-/* #6 §2 — the ponte. Capacity mirrors world/founding.js's own MAX_BROOD (6):
-   that file pre-builds exactly six hidden brood piles per chamber and
-   populateNest(n) can only ever reveal up to that many, so a brood state
-   allowed to grow past it would incubate eggs the couvoir has no pile left
-   to show — a lay that "succeeds" but is invisible underground. MAX_BROOD is
-   not exported by the world barrel today, so this literal has to be kept in
-   sync by hand until it is (see the session report). */
-const BROOD_ROOM_CAPACITY = 6;
+/* #6 §2 — the ponte. Capacity IS world/founding.js's own MAX_BROOD, imported
+   rather than copied (#35): that file pre-builds exactly that many hidden
+   brood piles per chamber and populateNest(n) can only ever reveal up to that
+   many, so a brood state allowed to grow past it would incubate eggs the
+   couvoir has no pile left to show — a lay that "succeeds" but is invisible
+   underground. It used to be a hand-synced literal here; the world barrel
+   exports it now, so the two cannot drift. */
+const BROOD_ROOM_CAPACITY = world.MAX_BROOD;
 
 // design/ressources-et-fondation.md §7a: "anime founded sur 6 s" — the same
 // literal main.js's own FOUND_FADE already carries. Duplicated here (not
@@ -326,7 +326,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__site = (x, z) => evaluateSite(x, z);
     window.__avatar = profile;
     window.__mushroomRadii = mushroomRadii;
-    window.__grass = GRASS;  // so the harness can walk to a real climbable stem
+    window.__grass = grassBlades();  // so the harness can walk to a real climbable stem
     // #29/#33: the harness has to know where a node is in order to walk to
     // it, and what the loop thinks she is holding — it still *drives* with
     // real key events.

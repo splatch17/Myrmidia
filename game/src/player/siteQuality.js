@@ -1,6 +1,6 @@
 import * as world from '../world/index.js';
 import { clamp } from '../core/noise.js';
-import { GRASS, CLIMB_MIN_H } from './climb.js';
+import { grassBlades, CLIMB_MIN_H } from './climb.js';
 
 /* ==========================================================================
    "What is this ground worth?" — the reading the founding queen gets under
@@ -73,12 +73,32 @@ const IDEAL_SLOPE_DEG = 9;
 // worth making.
 const MIN_WATER = 18, IDEAL_WATER = 55, FAR_WATER = 190;
 
+const SHADE_RADIUS = 26;      // how far the fallback shade probe looks for tall grass
 const RESOURCE_RADIUS = 55;   // "within one forage trip"
 const GOOD_RESOURCES = 14;    // count at which the factor saturates
 
 const WEIGHTS = { soil: 0.28, slope: 0.16, water: 0.20, shade: 0.18, food: 0.18 };
 
 /* ---- probes: world data if it exists, honest fallback if it does not ---- */
+
+/** Tall blades strictly inside `radius`, through the shared spatial index
+ *  (#35) instead of walking every blade on the map four times a second.
+ *  `d < radius` rather than the query's own inclusive bound: the scans this
+ *  replaced compared strictly, and a probe is cheap to keep exactly faithful.
+ *  Exported so scripts/test-logic.mjs can hold it against that scan. */
+export function countTallGrass(x, z, radius) {
+  const blades = grassBlades();
+  return W.worldIndex.countInRadius(x, z, radius, 'grass',
+    (i, d) => d < radius && blades[i].h >= CLIMB_MIN_H);
+}
+
+/** Resource nodes strictly inside `radius`, spent ones included — the scan
+ *  this replaced counted every node in RESOURCE_NODES, not just the live
+ *  ones, and "there is food around here" is about the ground, not the
+ *  larder's current state. Exported for the same equivalence check. */
+export function countNodesNear(x, z, radius) {
+  return W.worldIndex.countInRadius(x, z, radius, 'resource', (i, d) => d < radius);
+}
 
 /* world/terrain.js names its ground types in English and against a shorter
    list than the one above (it has no clay and no leaf litter yet). The
@@ -124,31 +144,13 @@ function probeShade(x, z) {
   if (typeof W.shadeAt === 'function') return { v: clamp(W.shadeAt(x, z), 0, 1), assumed: false };
   const tree = W.TREE;
   const canopy = tree ? clamp(1 - Math.hypot(x - tree.x, z - tree.z) / 90, 0, 1) : 0;
-  let tall = 0;
-  for (let i = 0; i < GRASS.length; i++) {
-    const g = GRASS[i];
-    if (g.h < CLIMB_MIN_H) continue;
-    if (Math.abs(g.x - x) > 26 || Math.abs(g.z - z) > 26) continue;
-    if (Math.hypot(g.x - x, g.z - z) < 26) tall++;
-  }
+  const tall = countTallGrass(x, z, SHADE_RADIUS);
   return { v: clamp(canopy * 0.8 + Math.min(tall, 8) / 8 * 0.5, 0, 1), assumed: true };
 }
 
 function probeFood(x, z) {
-  const nodes = W.RESOURCE_NODES;
-  if (Array.isArray(nodes)) {
-    let n = 0;
-    for (const r of nodes) if (Math.hypot(r.x - x, r.z - z) < RESOURCE_RADIUS) n++;
-    return { n, assumed: false };
-  }
-  let n = 0;
-  for (let i = 0; i < GRASS.length; i++) {
-    const g = GRASS[i];
-    if (g.h < CLIMB_MIN_H) continue;
-    if (Math.abs(g.x - x) > RESOURCE_RADIUS || Math.abs(g.z - z) > RESOURCE_RADIUS) continue;
-    if (Math.hypot(g.x - x, g.z - z) < RESOURCE_RADIUS) n++;
-  }
-  return { n, assumed: true };
+  if (Array.isArray(W.RESOURCE_NODES)) return { n: countNodesNear(x, z, RESOURCE_RADIUS), assumed: false };
+  return { n: countTallGrass(x, z, RESOURCE_RADIUS), assumed: true };
 }
 
 /* ---- scoring ------------------------------------------------------------ */
