@@ -132,6 +132,82 @@ function scanForReach(nodes, x, z, bodyR) {
   return best;
 }
 
+/* PIÈGE #6, applied to a search radius rather than a body. A FIXED large
+ * radius defeats the whole point of #35's grid: core/spatialIndex.js's
+ * nearest() does not walk outward in rings, it computes the cell BOX that
+ * covers the radius and sweeps every cell in it (see its own source, the
+ * loop over cx0..cx1 / cz0..cz1) — a single query at radius 2000 with this
+ * file's cellSize-12 grid visits a ~333x333 block, ~111,000 cells, to find
+ * one of ~145 nodes: far more expensive than the linear scan #35 replaced.
+ * (First measured in review at radius 2000: ~28,000 cells for a ~167x167
+ * box — the arithmetic above is the same bound restated for the box that
+ * radius actually produces; either way it is two to three orders of
+ * magnitude more than the common case needs.)
+ *
+ * START_RADIUS is sized against the real content, not a guess: world/
+ * resources.js sows on the order of 145 nodes across LAWN_BOUNDS's ~398x250
+ * unit lawn (world/terrain.js), so nodes sit roughly sqrt(398*250/145) ≈ 26
+ * units apart on average if they were spread evenly (they are not — denser
+ * near the tree and the bowl, per world/resources.js's own placement — which
+ * only means the common case is found even sooner than this). 32 clears
+ * that typical spacing with a little room, and at cellSize 12 sweeps a 7x7
+ * block — 49 cells, not ~28,000 — for the common case of "there is a node
+ * somewhere nearby".
+ *
+ * HARD_CAP is the loop's own safety net, not a per-query cost: LAWN_BOUNDS is
+ * 398x250, whose diagonal is ~470 units, so no two points on the lawn are
+ * ever farther apart than that. 600 clears it with margin, so a forager
+ * standing in one corner with the map's last remaining node in the opposite
+ * corner still gets a real answer instead of the loop giving up early — and
+ * because the search only WIDENS when the previous, cheaper pass found
+ * nothing, this worst case is reached rarely, not on every call. */
+const START_RADIUS = 32;
+// Exported (not just a local const) so scripts/test-logic.mjs's equivalence
+// reference can bound itself against the SAME number rather than retyping
+// it — the exact discipline this file's own header already asks of every
+// other caller of a world contract.
+export const HARD_CAP = 600;
+
+function scanNearest(nodes, x, z) {
+  let best = null, bestD = Infinity;
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.amount <= 0) continue;
+    const d = Math.hypot(n.x - x, n.z - z);
+    if (d < bestD) { bestD = d; best = n; }
+  }
+  return best;
+}
+
+/**
+ * The nearest node with anything left in it, ANYWHERE on the map — what a
+ * forager (#37, player/forage.js) walks TOWARD from afar. Unlike
+ * nodeInReach() (which only answers "is something already within arm's
+ * reach right now", the player's own question while holding the harvest
+ * key), this never filters by distance: a forager many body-lengths from
+ * every node still needs a direction to walk in.
+ *
+ * Searched at a GROWING radius rather than one fixed large one (see the
+ * constants above): nearest(x, z, r, ...) is an EXACT minimum over every
+ * accepted candidate within r, so the first radius that turns up a hit is
+ * provably the true global nearest — nothing closer could have been missed,
+ * because "closer" would have been found (and returned) at a smaller r
+ * already. Doubling means the common case (a node within START_RADIUS)
+ * costs one small query; only a forager truly alone on an empty stretch of
+ * lawn pays for the widening passes, and even that terminates at HARD_CAP.
+ */
+export function nearestNode(x, z) {
+  const nodes = resourceNodes();
+  if (nodes !== W.RESOURCE_NODES) return scanNearest(nodes, x, z);
+  let r = START_RADIUS;
+  for (;;) {
+    const hit = W.worldIndex.nearest(x, z, r, 'resource', (i) => nodes[i].amount > 0);
+    if (hit) return nodes[hit.id];
+    if (r >= HARD_CAP) return null;
+    r = Math.min(r * 2, HARD_CAP);
+  }
+}
+
 /* id -> node, rebuilt whenever the array it was built from is replaced or
    changes length (nodes are never removed, only emptied — see the contract at
    the top — so that is enough to notice every change). */

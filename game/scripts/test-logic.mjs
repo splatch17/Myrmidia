@@ -40,6 +40,9 @@ const spatial = await import('../src/core/spatialIndex.js');
 // core/entities.js (#36) is pure by the same discipline (see its header):
 // direct import, no loader hook needed.
 const entitiesCore = await import('../src/core/entities.js');
+// player/forage.js (#37) is pure by the same discipline (see its header):
+// direct import, no loader hook needed.
+const forage = await import('../src/player/forage.js');
 // player/antMesh.js (#36's rendering half) and core/outline.js pull in
 // THREE.js core objects (BufferGeometry, InstancedMesh, Matrix4, Color) —
 // all pure CPU data structures, no canvas/WebGL needed, so they run under
@@ -498,6 +501,185 @@ console.log('\nentity records and goal-seeking (core/entities.js, #36):');
     && avatar.FOUNDING_QUEEN.scale === 2.2);
 }
 
+console.log('\nthe forager state machine (player/forage.js, #37), against a fake ctx:');
+{
+  const { FORAGE_STATE, createForageState, update, DEFAULT_HARVEST_SECONDS } = forage;
+
+  /** A tiny in-memory node/cache world, deliberately separate from
+   *  player/resources.js/harvest.js (forage.js cannot import them, and this
+   *  is exactly the discipline that lets it be tested with no loader hook —
+   *  see the module header). Shaped like the real contracts (RESOURCE_NODES'
+   *  {id,x,z,kind,amount,r} and harvest.js's {x,z,items,total}) so a mismatch
+   *  here would be a real one, not a fixture quirk. */
+  function makeFakeWorld({ nodes, depot }) {
+    const byId = new Map(nodes.map((n) => [n.id, n]));
+    return {
+      nodes,
+      cache: depot ? { x: depot.x, z: depot.z, items: {}, total: 0 } : null,
+      ctx(x, z, bodyR, harvestSeconds) {
+        return {
+          x, z, bodyR,
+          // Nearest node with anything left, regardless of distance — same
+          // contract as player/resources.js's real nearestNode(): a forager
+          // needs a direction to walk in from anywhere, not just an answer
+          // to "is one already under my feet" (that is forage.js's OWN
+          // arrival check below, node.r + bodyR*0.6, not this function's job).
+          findNode: (qx, qz) => {
+            let best = null, bestD = Infinity;
+            for (const n of nodes) {
+              if (n.amount <= 0) continue;
+              const d = Math.hypot(n.x - qx, n.z - qz);
+              if (d < bestD) { bestD = d; best = n; }
+            }
+            return best;
+          },
+          nodeById: (id) => byId.get(id) || null,
+          takeFromNode: (n, qty) => { const got = Math.max(0, Math.min(qty, n.amount)); n.amount -= got; return got; },
+          depot: this.cache ? { x: this.cache.x, z: this.cache.z } : null,
+          depotRadius: 6,
+          deposit: (kind) => { this.cache.items[kind] = (this.cache.items[kind] || 0) + 1; this.cache.total += 1; },
+          harvestSeconds,
+        };
+      },
+    };
+  }
+
+  /** Integrate a forager's own position with the wish update() hands back,
+   *  the same "walk in the direction of the wish" loop the entity tests use
+   *  for a patrol goal — forage.js's contract is the exact same shape, on
+   *  purpose (see its header). */
+  function run(fg, w, speed, dt, ticks) {
+    for (let i = 0; i < ticks; i++) {
+      const wish = update(fg, w.ctx(fg._x, fg._z, fg._bodyR, fg._harvestSeconds), dt);
+      fg._x += wish.wishX * wish.mag * speed * dt;
+      fg._z += wish.wishZ * wish.mag * speed * dt;
+    }
+  }
+
+  /* ---- 1. the full cycle: seek -> harvest -> return -> deposit -> seek --- */
+  {
+    // A single unit on the node: once it is taken there is nothing left to
+    // find, so she parks back in SEEK for good — an unambiguous end state to
+    // assert on (a richer node would make her go round again, which test 6
+    // below covers on purpose instead).
+    const w = makeFakeWorld({
+      nodes: [{ id: 1, x: 30, z: 0, kind: 'graine', amount: 1, r: 4 }],
+      depot: { x: -20, z: 0 },
+    });
+    const fg = createForageState();
+    fg._x = 0; fg._z = 0; fg._bodyR = 1.5; fg._harvestSeconds = 0.3; // fast, so the loop below stays short
+    check('a fresh forager starts in SEEK with nothing carried',
+      fg.state === FORAGE_STATE.SEEK && fg.carrying === null);
+
+    run(fg, w, 15, 1 / 30, 2000);
+    check('the cycle reaches HARVEST, takes one unit, walks it to the depot and deposits, back to SEEK',
+      fg.state === FORAGE_STATE.SEEK && fg.carrying === null && w.cache.total === 1,
+      `state=${fg.state} carrying=${JSON.stringify(fg.carrying)} cache.total=${w.cache.total}`);
+    check('the node lost exactly one unit — nothing created, nothing lost',
+      w.nodes[0].amount === 0, w.nodes[0].amount);
+    check('the deposited kind matches the node\'s own kind',
+      w.cache.items.graine === 1, JSON.stringify(w.cache.items));
+  }
+
+  /* ---- 2. no depot yet: she harvests and then PARKS, never invents a spot */
+  {
+    const w = makeFakeWorld({ nodes: [{ id: 1, x: 10, z: 0, kind: 'brindille', amount: 1, r: 3 }], depot: null });
+    const fg = createForageState();
+    fg._x = 0; fg._z = 0; fg._bodyR = 1.5; fg._harvestSeconds = 0.2;
+    run(fg, w, 15, 1 / 30, 400);
+    check('with no depot she reaches RETURN carrying her unit and then stands still',
+      fg.state === FORAGE_STATE.RETURN && fg.carrying && fg.carrying.kind === 'brindille',
+      `state=${fg.state} carrying=${JSON.stringify(fg.carrying)}`);
+    const before = { x: fg._x, z: fg._z };
+    const stillWish = update(fg, w.ctx(fg._x, fg._z, 1.5, 0.2), 1 / 30);
+    check('...and the wish while parked is exactly zero, not a wandering drift',
+      stillWish.wishX === 0 && stillWish.wishZ === 0 && stillWish.mag === 0);
+    check('...position does not move on its own', fg._x === before.x && fg._z === before.z);
+  }
+
+  /* ---- 3. nothing to harvest anywhere: parks in SEEK, no crash ---------- */
+  {
+    const w = makeFakeWorld({ nodes: [{ id: 1, x: 500, z: 500, kind: 'miellat', amount: 0, r: 4 }], depot: { x: 0, z: 0 } });
+    const fg = createForageState();
+    const wish = update(fg, w.ctx(0, 0, 1.5, 1), 1 / 30);
+    check('an empty map (no reachable node) returns a zero wish, not an error',
+      wish.wishX === 0 && wish.wishZ === 0 && wish.mag === 0 && fg.state === FORAGE_STATE.SEEK);
+  }
+
+  /* ---- 4. node emptied mid-harvest: recovers to SEEK, nothing is taken -- */
+  {
+    const node = { id: 1, x: 0, z: 0, kind: 'graine', amount: 1, r: 3 };
+    const w = makeFakeWorld({ nodes: [node], depot: { x: 100, z: 100 } });
+    const fg = createForageState();
+    fg._x = 0; fg._z = 0;
+    // arrive and start harvesting
+    update(fg, w.ctx(0, 0, 1.5, 10), 1 / 30);
+    check('standing over the node starts HARVEST', fg.state === FORAGE_STATE.HARVEST);
+    node.amount = 0; // someone else took the last unit this same tick, elsewhere
+    update(fg, w.ctx(0, 0, 1.5, 10), 1 / 30);
+    check('a node emptied mid-harvest sends her back to SEEK empty-handed',
+      fg.state === FORAGE_STATE.SEEK && fg.carrying === null);
+  }
+
+  /* ---- 5. NO SIZE CONSTANT IS COPIED: the arrival radius moves with bodyR,
+     exactly node.r + bodyR*0.6 — this is #37's own version of piège #6.
+     Placed just outside vs. just inside that radius, for TWO different
+     bodies, so a hardcoded literal (rather than a formula reading ctx.bodyR)
+     would fail at least one of the four checks. */
+  {
+    const node = { id: 1, x: 0, z: 0, kind: 'graine', amount: 5, r: 4 };
+    for (const bodyR of [avatar.collideRadius(avatar.WORKER), avatar.collideRadius(avatar.FOUNDING_QUEEN)]) {
+      const reach = node.r + bodyR * 0.6;
+      const w = makeFakeWorld({ nodes: [{ ...node }], depot: null });
+      const justOutside = createForageState();
+      update(justOutside, w.ctx(reach + 0.05, 0, bodyR, 1), 1 / 30);
+      check(`bodyR=${bodyR.toFixed(2)}: just outside the reach (${(reach + 0.05).toFixed(2)}) still walks toward the node`,
+        justOutside.state === FORAGE_STATE.SEEK);
+
+      const w2 = makeFakeWorld({ nodes: [{ ...node }], depot: null });
+      const justInside = createForageState();
+      update(justInside, w2.ctx(reach - 0.05, 0, bodyR, 1), 1 / 30);
+      check(`bodyR=${bodyR.toFixed(2)}: just inside the reach (${(reach - 0.05).toFixed(2)}) starts harvesting`,
+        justInside.state === FORAGE_STATE.HARVEST);
+    }
+  }
+
+  /* ---- 6. conservation of units across many foragers, nodes and ticks --- */
+  {
+    const nodes = [
+      { id: 1, x: 0, z: 0, kind: 'graine', amount: 4, r: 5 },
+      { id: 2, x: 25, z: 10, kind: 'brindille', amount: 3, r: 5 },
+      { id: 3, x: -18, z: -12, kind: 'miellat', amount: 5, r: 5 },
+    ];
+    const startTotal = nodes.reduce((s, n) => s + n.amount, 0);
+    const w = makeFakeWorld({ nodes, depot: { x: 40, z: -30 } });
+    const foragers = [];
+    for (let i = 0; i < 5; i++) {
+      const fg = createForageState();
+      fg._x = (Math.random() - 0.5) * 60; fg._z = (Math.random() - 0.5) * 60;
+      fg._bodyR = 1.5; fg._harvestSeconds = 0.4;
+      foragers.push(fg);
+    }
+    let conservationBroken = false;
+    for (let t = 0; t < 3000; t++) {
+      for (const fg of foragers) {
+        const wish = update(fg, w.ctx(fg._x, fg._z, fg._bodyR, fg._harvestSeconds), 1 / 30);
+        fg._x += wish.wishX * wish.mag * 15 * (1 / 30);
+        fg._z += wish.wishZ * wish.mag * 15 * (1 / 30);
+      }
+      const remaining = nodes.reduce((s, n) => s + n.amount, 0);
+      const carried = foragers.reduce((s, fg) => s + (fg.carrying ? 1 : 0), 0);
+      if (remaining + carried + w.cache.total !== startTotal) { conservationBroken = true; break; }
+    }
+    check(`units are conserved across ${foragers.length} foragers and ${nodes.length} nodes over 3000 ticks`
+      + ' (remaining + carried + deposited === starting total, always)', !conservationBroken);
+    check('...and the swarm actually moved units (this is not a vacuous pass)',
+      w.cache.total > 0, w.cache.total);
+  }
+
+  void DEFAULT_HARVEST_SECONDS; // exported for callers' fallback; nothing here needs its exact value
+}
+
 console.log('\nant-part instancing (player/antMesh.js + core/outline.js, #36):');
 {
   const antMesh = await import('../src/player/antMesh.js');
@@ -767,6 +949,48 @@ console.log('\nthe shared world index (world/index.js):');
       playerRes.nodeById(node.id) === node && playerRes.nodeById(-1) === null);
   }
 
+  /* ---- 2b. resources.js nearestNode() (#37 — findNode for a forager,
+     unlike nodeInReach() this must NOT filter by a gameplay reach), searched
+     at a GROWING radius rather than one fixed large one (review comment on
+     this ticket: a fixed radius of 2000 made core/spatialIndex.js's
+     nearest() sweep a ~333x333 cell box for every call — see resources.js's
+     own header for the arithmetic — which is exactly the linear-scan-sized
+     cost #35 exists to remove). The reference respects the SAME hard cap the
+     real function documents (imported, not re-typed): a couple of this
+     shared POINTS array's probes sit ~1e4 units off the map on purpose
+     (built for the decor/climb scans above, which want "nothing out
+     there"), and no forager will ever be that far from the map she was
+     born on. */
+  {
+    const refNearest = (x, z) => {
+      let best = null, bestD = Infinity;
+      for (const n of world.RESOURCE_NODES) {
+        if (n.amount <= 0) continue;
+        const d = Math.hypot(n.x - x, n.z - z);
+        if (d > playerRes.HARD_CAP || d >= bestD) continue;
+        bestD = d; best = n;
+      }
+      return best;
+    };
+    let mismatch = 0, hits = 0, farHits = 0;
+    for (const [x, z] of POINTS) {
+      const want = refNearest(x, z);
+      if (want) { hits++; if (Math.hypot(want.x - x, want.z - z) > 20) farHits++; }
+      if (playerRes.nearestNode(x, z) !== want) mismatch++;
+    }
+    check(`nearestNode matches the bounded node scan on ${POINTS.length} probes`,
+      mismatch === 0, `${mismatch} mismatches`);
+    check('...and it actually reaches FAR nodes too, unlike nodeInReach()',
+      hits > 20 && farHits > 5, `${hits} hits, ${farHits} farther than 20 units`);
+
+    // Explicit, not just folded into the aggregate above: a forager literally
+    // 1e4 units off the map (well past HARD_CAP from anything) gets a clean
+    // null, not a hang or a wrong answer, and the growing-radius loop still
+    // terminates rather than doubling forever.
+    check('a probe far past HARD_CAP from every node returns null, not a hang or a wrong answer',
+      playerRes.nearestNode(1e4, 1e4) === null && playerRes.nearestNode(-1e4, -1e4) === null);
+  }
+
   /* ---- 3. decorCollision.js forEachCollider()/resolveDecorCollision() --- */
   {
     // the production cache, so the reference collides against exactly the
@@ -974,6 +1198,140 @@ console.log('\nthe shared world index (world/index.js):');
     // rewrite of stepAnt/computeWishDir.
     check('movement.js stays a plain function pair, not aware of the entity list',
       typeof movement.stepAnt === 'function' && typeof movement.computeWishDir === 'function');
+  }
+
+  /* ---- 6. player/workers.js (#37): hatch -> forage -> deposit, for real -- */
+  console.log('\nworkers.js (#37) — the éclosion becomes ouvrières that forage on their own:');
+  {
+    const workersMod = await import('../src/player/workers.js');
+    const harvestMod = await import('../src/player/harvest.js');
+    // Nothing here renders — a scene stub with a no-op add() is enough,
+    // buildAntMesh()/buildOutlineHull() only need real THREE objects (which
+    // they get: antMesh.js's shared pools), never a live WebGL context. Reset
+    // first so this doesn't inherit whatever the antMesh instancing block
+    // above already allocated (it resets the pools itself at its own end,
+    // but a defensive reset here keeps this block independent of test order).
+    const antMeshMod = await import('../src/player/antMesh.js');
+    antMeshMod._resetPoolsForTest();
+    const fakeScene = { add() {} };
+
+    /* ---- "une éclosion = une ouvrière, jamais deux, jamais zéro" -------- */
+    {
+      const swarm = workersMod.createWorkerSwarm({ scene: fakeScene });
+      const b = brood.createBroodState(6);
+
+      b.workersAvailable = 3; // e.g. a whole clutch hatching on the same tick
+      const spawned3 = swarm.spawnFromBrood(b, 0, 0);
+      check('a clutch of 3 hatching at once spawns exactly 3 workers, not 6 or 0',
+        spawned3 === 3 && swarm.count() === 3, `spawned=${spawned3} count=${swarm.count()}`);
+      check('...and drains workersAvailable to zero', b.workersAvailable === 0);
+
+      const spawnedAgain = swarm.spawnFromBrood(b, 0, 0);
+      check('draining again before the next hatch spawns nothing (idempotent)',
+        spawnedAgain === 0 && swarm.count() === 3, `spawned=${spawnedAgain} count=${swarm.count()}`);
+
+      b.workersAvailable = 1; // a single later hatch
+      const spawned1 = swarm.spawnFromBrood(b, 100, 100);
+      check('one later hatch adds exactly one more worker, never two',
+        spawned1 === 1 && swarm.count() === 4, `spawned=${spawned1} count=${swarm.count()}`);
+
+      // Sync the index to each worker's post-spawn position first: spawnOne()
+      // resolves decor collision (which can nudge x/z) AFTER worldIndex.insert()
+      // already ran, exactly the same order player/index.js uses for the queen
+      // — the first updateEntity() tick (here, a dt=0 one, so nobody actually
+      // walks) is what calls worldIndex.move() and settles it, same as frame 1
+      // does for the player in production.
+      swarm.update(0, 0, null);
+      check('every spawned worker is indexed in the shared spatial index, at WORKER\'s own collideRadius',
+        swarm.workers.every((w) => {
+          const hit = world.worldIndex.nearest(w.entity.x, w.entity.z, 0.01, 'ant');
+          return hit && hit.id === w.entity.id && hit.extent === avatar.collideRadius(avatar.WORKER);
+        }));
+      check('every spawned worker is controlled:true (driven by forage.js\'s own wish, not a goal)',
+        swarm.workers.every((w) => w.entity.controlled === true));
+
+      const ids = swarm.workers.map((w) => w.entity.id);
+      swarm.dispose();
+      check('dispose() empties the swarm and removes every one of them from the shared index',
+        swarm.workers.length === 0 && ids.every((id) => !world.worldIndex.has('ant', id)));
+    }
+
+    /* ---- the harvest timing is WIRED to harvest.js's HARVEST_SECONDS, not a
+       second hand-typed number (this ticket's own version of piège #6: see
+       forage.js's header on why it cannot import harvest.js itself, and
+       workers.js's ctx.harvestSeconds line, which passes the REAL value
+       through instead of retyping it). Placed co-located with a node so the
+       SEEK->HARVEST transition happens on the very first tick, then counted
+       until the unit is actually taken (forage.js's justTook fires). At
+       dt=1/30 and the real 1.8s value this lands on tick 55 exactly (1 for
+       the transition tick + 54 = 1.8/dt for the harvest itself); the ±1
+       tolerance only absorbs floating-point rounding on the progress
+       accumulator, not a different constant. ------------------------------ */
+    {
+      const swarm = workersMod.createWorkerSwarm({ scene: fakeScene });
+      const node = world.RESOURCE_NODES.find((n) => n.amount > 0);
+      const before = node.amount;
+      const b = brood.createBroodState(6);
+      b.workersAvailable = 1;
+      swarm.spawnFromBrood(b, node.x, node.z);
+      const w = swarm.workers[0];
+      w.entity.x = node.x; w.entity.z = node.z; // co-located: arrival is immediate
+
+      const DT = 1 / 30;
+      let takenAtTick = -1;
+      for (let i = 0; i < 200 && takenAtTick < 0; i++) {
+        swarm.update(DT, i * DT, null); // no depot yet — only the harvest half is under test here
+        if (w.forage.justTook) takenAtTick = i + 1;
+      }
+      const expectedTick = Math.round(harvestMod.HARVEST_SECONDS / DT) + 1; // +1 for the SEEK->HARVEST transition tick
+      check(`a unit is taken at tick ${expectedTick} (harvest.js's real HARVEST_SECONDS=${harvestMod.HARVEST_SECONDS}s @ dt=${DT.toFixed(4)}s), not a different hard-coded pace`,
+        takenAtTick > 0 && Math.abs(takenAtTick - expectedTick) <= 1,
+        `took at tick ${takenAtTick}, expected ~${expectedTick}`);
+      check('the node lost exactly one unit for that one taken', node.amount === before - 1, node.amount);
+      swarm.dispose();
+    }
+
+    /* ---- end to end: seek a REAL node, harvest it, walk to a REAL cache
+       shape, deposit into it — the same cache player/harvest.js's drop()
+       would have created, fabricated here so the test does not depend on
+       the player ever having pressed E.
+
+       Conservation is checked across the WHOLE map's resource nodes, not
+       against one node this test happens to name: nearestNode() (#37) is a
+       genuine "closest, full stop" search, so a worker spawned a few units
+       off her nominal origin may rationally target whichever real node ends
+       up nearest to her actual post-spawn position — that is correct
+       behaviour, not a reason to assume she walks to one hand-picked id. */
+    {
+      const swarm = workersMod.createWorkerSwarm({ scene: fakeScene });
+      const node = world.RESOURCE_NODES.find((n) => n.amount > 0);
+      const sumBefore = world.RESOURCE_NODES.reduce((s, n) => s + n.amount, 0);
+      const cache = { x: node.x + 60, y: 0, z: node.z + 40, items: {}, total: 0 }; // a real drop-shaped cache, far enough to walk
+      const b = brood.createBroodState(6);
+      b.workersAvailable = 1;
+      swarm.spawnFromBrood(b, node.x, node.z); // born right by the node
+      const w = swarm.workers[0];
+
+      const DT = 1 / 30;
+      let deposited = false, harvestedKind = null;
+      for (let i = 0; i < 6000 && !deposited; i++) {
+        swarm.update(DT, i * DT, cache);
+        if (w.forage.justTook) harvestedKind = w.forage.justTook.kind;
+        if (cache.total > 0) deposited = true;
+      }
+      const sumAfter = world.RESOURCE_NODES.reduce((s, n) => s + n.amount, 0);
+      check('a worker with a real node and a real cache deposits without any player input',
+        deposited && cache.total === 1, `cache.total=${cache.total}`);
+      check('...crediting the cache with whichever kind she actually harvested',
+        harvestedKind !== null && cache.items[harvestedKind] === 1, JSON.stringify(cache.items));
+      check('...and the map\'s total resource amount dropped by exactly the one unit she carried — conservation, end to end',
+        sumBefore - sumAfter === 1, `${sumBefore} -> ${sumAfter}`);
+      check('...she is empty-handed again, back in SEEK, ready for the next trip',
+        w.forage.carrying === null && w.forage.state === forage.FORAGE_STATE.SEEK, JSON.stringify(w.forage));
+      swarm.dispose();
+    }
+
+    antMeshMod._resetPoolsForTest();
   }
 }
 

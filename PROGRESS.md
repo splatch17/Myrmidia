@@ -14,11 +14,11 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ## État au 2026-09-05
 
-> **Le tour le plus récent est le 11 (2026-09-12, l'index spatial).** Sa
-> section est plus bas, juste avant « Défauts connus », précédée de celle du
-> tour 10 (la ponte). Ce qui suit ici est l'état du tour 9, conservé parce
-> qu'il décrit encore correctement la stack et la procédure de reprise —
-> **sauf le lien de test, qui est cassé : voir le tour 11.**
+> **Le tour le plus récent est le 13 (2026-09-12, l'éclosion peuple le monde).**
+> Sa section est plus bas, juste avant « Défauts connus », précédée de celles
+> des tours 10 à 12. Ce qui suit ici est l'état du tour 9, conservé parce qu'il
+> décrit encore correctement la stack et la procédure de reprise — **sauf le
+> lien de test, qui a été cassé au tour 10 et réparé au tour 12.**
 
 **PR #23 mergée dans `main`** (`0f1a28a`). La ligne « pas encore mergée » de
 la précédente version de ce fichier est obsolète — `git log main` le confirme.
@@ -500,6 +500,125 @@ Par ordre d'importance :
 
 ---
 
+## Round du 2026-09-12 (tour 13 — nocturne, VPS ARM sans GPU)
+
+**Ticket travaillé : #37 — « Éclosion : la première couvée donne des ouvrières ».**
+Désigné nommément par « Quoi faire ensuite » du tour 12 ; ses deux dépendances
+(#35 index spatial, #36 couche d'entités) étaient levées depuis les tours 11 et
+12 ; `brood.workersAvailable` l'attendait depuis le tour 10. Son cœur — la
+machine à états d'une butineuse et le branchement éclosion → naissance — est de
+la logique pure, donc la moitié vérifiable sans écran. Aucun `verify-*.mjs` n'a
+été lancé.
+
+### Où on en est
+
+**La reine n'est plus seule — dans le code.** Une couvée qui éclôt fait naître
+autant d'ouvrières, chacune sort du nid, marche vers le nœud de ressource le
+plus proche, récolte, rentre et dépose dans **la réserve du joueur**, sans
+aucune intervention.
+
+| Fichier | Rôle |
+|---|---|
+| `player/forage.js` **(nouveau)** | La machine à états SEEK → HARVEST → RETURN → DEPOSIT. **Module pur, zéro `import`** — comme `brood.js` (t. 10), `spatialIndex.js` (t. 11), `core/entities.js` (t. 12) : tout passe par un `ctx` de callbacks, donc `test-logic.mjs` l'importe directement, sans hook de résolution ni stub de `texturing.js`. Elle ne rend qu'un **souhait de déplacement** et des **événements** (a pris 1 unité, a déposé 1 unité) |
+| `player/workers.js` **(nouveau)** | La couche impure. Draine `brood.workersAvailable`, fait naître par `spawnEntity()`, avance par **`updateEntity()` — le chemin commun du tour 12**, pas un second contrôleur —, construit mesh et contour, dépose dans la vraie réserve |
+| `player/resources.js` | Ajout de `nearestNode(x, z)` : « vers quoi marcher », question distincte de `nodeInReach()` qui répond « suis-je déjà dessus » |
+| `player/index.js` | Le câblage : `createWorkerSwarm()`, `spawnFromBrood()` après `updateBrood()`, la mise à jour dans la boucle, `dispose()` |
+
+**Tests : 113 → 145, 0 échec.** `npx vite build` passe (2,38 s). Je les ai
+relancés moi-même après chaque passe de l'agent, pas seulement lus dans son
+rapport. Validé **en négatif cinq fois** : constante recopiée à la place de
+`node.r + bodyR*0.6` → 2 échecs ; `spawnFromBrood` qui spawne `n*2` → 4 échecs ;
+drain de `workersAvailable` supprimé → 3 ; dépôt créditant 2 unités au lieu
+d'1 → 2 ; et le test d'équivalence de `nearestNode` est tombé tout seul,
+en cours de round, sur une version intermédiaire du correctif ci-dessous — il a
+fait son travail sans qu'on ait à le provoquer. 145/0 re-constaté après chaque
+restauration.
+
+**Arbitrages pris pendant le round :**
+
+1. **`nearestNode()` ne devait surtout pas interroger l'index à rayon fixe.**
+   La première livraison appelait `worldIndex.nearest(x, z, 2000, …)`. Or
+   `spatialIndex.nearest()` **ne cherche pas par anneaux croissants** : il
+   calcule la boîte de cellules qui couvre le rayon et la balaie entière. À
+   2000 unités avec une cellule de 12, c'est de l'ordre de **10⁵ cellules
+   visitées pour trouver un nœud parmi 145** — donc *plus cher que le balayage
+   linéaire que le tour 11 avait justement supprimé*. Trouvé à la relecture, pas
+   par un test (aucun ne mesurait le coût), et renvoyé à l'agent. Remplacé par
+   une **recherche à rayon croissant** : 32 unités d'abord (l'espacement moyen
+   réel des ~145 nœuds sur les 398×250 du pré), doublé tant que rien n'est
+   trouvé, plafonné à 600 (diagonale de `LAWN_BOUNDS` ≈ 470, avec marge). C'est
+   exact : `nearest()` rendant le minimum sur tout le rayon, le premier rayon
+   qui répond rend forcément le vrai plus proche global. Cas courant : **49
+   cellules** au lieu de ~10⁵. Les deux nombres sont annotés contre la densité
+   réelle des nœuds et contre `LAWN_BOUNDS` — piège n°6 appliqué à un rayon de
+   recherche plutôt qu'à un corps.
+2. **Une butineuse latche son nœud cible** (même raison que `harvest.js`) :
+   sans ça elle oscillerait entre deux nœuds proches et ne marcherait jamais.
+3. **Dispersion déterministe à la naissance (spirale à angle d'or), pas
+   `Math.random()`.** Une couvée entière éclôt sur la même image ; le tirage
+   aléatoire rendait un test instable et n'éparpillait pas mieux.
+4. **`controlled: true` pour une IA**, contre la lettre de l'en-tête de
+   `core/entities.js`. Le code ne teste que `entity.controlled && drive` : une
+   ouvrière est le même contrôleur avec un `drive` venu d'une machine à états au
+   lieu d'un clavier. L'alternative propre (un type de `goal` « forage » dans
+   `core/entities.js`) sort du périmètre de fichiers de l'agent. Documenté en
+   tête de `workers.js` pour que le prochain lecteur n'y voie pas un oubli.
+
+### Ce qui est cassé ou en attente
+
+- **#37 n'est pas fermé, et il s'en faut de la capture.** Son critère de fin est
+  « une capture de la reine et de ses premières ouvrières sur la pelouse, et une
+  ouvrière qui rapporte une ressource au dépôt sans intervention du joueur ».
+  Le chemin de code est entier et prouvé par 145 tests dont la conservation des
+  unités de bout en bout — **mais aucune ouvrière n'a jamais été vue marcher.**
+- **Le ticket #36 reste ouvert pour la même raison**, et ce round le rapproche :
+  faire naître des ouvrières ne demande plus de câblage jetable dans `main.js`,
+  il suffit désormais de **jouer jusqu'à la première éclosion** (pondre, attendre
+  `EGG_INCUBATION_SECONDS = 25` s). Les deux tickets se ferment sur la même
+  session avec écran.
+- **Pas d'évitement mutuel entre ouvrières.** Elles ne se traversent pas le
+  décor (`resolveDecorCollision`) mais se traversent entre elles. L'index les
+  connaît déjà sous le type `'ant'` : c'est prêt, ce n'est pas branché. À juger
+  à l'œil avant de décider si ça vaut un ticket.
+- **Pas de HUD pour les ouvrières** (aucun compteur de la population écloses),
+  délibérément hors périmètre ce round.
+- Chaque éclosion produit une `WORKER` et rien d'autre : le choix de caste est
+  #38, frontière documentée depuis `brood.js` au tour 10.
+- Le commentaire d'en-tête de `world/index.js` ment toujours (« deliberately not
+  wired into the player controller »). Une ligne, trois tours que je la note.
+
+### À juger à l'œil, sur une machine avec GPU
+
+Par ordre d'importance :
+
+1. **Le critère de fin de #37** : jouer jusqu'à la première éclosion et regarder
+   une ouvrière sortir, marcher jusqu'à un nœud, récolter et revenir déposer
+   toute seule. Capturer. C'est ce qui ferme le ticket — et #36 avec, puisque
+   les ouvrières visibles sont exactement ce qu'il réclamait.
+2. **La dispersion à la naissance** : une couvée entière éclôt sur la même
+   image, dispersée en spirale de 4,5 à 15 unités autour de la bouche du nid.
+   Ni tas, ni essaim trop large — ça ne se juge qu'à l'œil.
+3. **La teinte par instance et le contour sur un vrai mélange** reine + N
+   ouvrières, jamais vus depuis le tour 12 : c'est maintenant le cas normal.
+4. **Le ressenti de la reine** : elle passe par le même `updateEntity()` que les
+   ouvrières, et personne n'a mesuré que le clavier répond pareil.
+5. Tout l'arriéré des tours 10-12 : la ponte, la bascule crépuscule → jour à la
+   remontée, la fondation (défaut 1). Le lien de test marche depuis le tour 12,
+   ils sont atteignables.
+
+### Quoi faire ensuite
+
+1. **Une session avec écran qui ferme #37 et #36 d'un coup** : jouer la boucle
+   entière — récolter, fonder, pondre, attendre l'éclosion, ressortir — et
+   capturer. Cinq tickets de suite se sont arrêtés faute de cet œil.
+2. **#38 — le choix de caste à la ponte.** `brood.js` et `workers.js` ont tous
+   deux la frontière déjà tracée ; c'est le prochain morceau de logique pure,
+   donc le prochain faisable de nuit.
+3. Corriger l'en-tête menteur de `world/index.js` (une ligne).
+4. Le reste de la liste ci-dessous est inchangé.
+
+---
+
 ## Défauts connus (vus sur captures, non corrigés)
 
 | # | Défaut | Gravité |
@@ -523,9 +642,14 @@ Par ordre d'importance :
 2 bis. ~~**#35 — l'index spatial**~~ — **fait au tour 11**, sauf le chiffre de
    temps par image qui le fermera. Il lève la dépendance de #36.
 2 ter. ~~**#36 — la couche d'entités**~~ — **faite au tour 12**, logique *et*
-   rendu instancié. Ce qui reste pour le fermer est visuel : faire naître cinq
-   ouvrières dans `main.js`, les regarder marcher, capturer. Puis **#37**,
-   branché sur `brood.workersAvailable` qui l'attend depuis le tour 10.
+   rendu instancié. ~~Ce qui reste pour le fermer est visuel : faire naître cinq
+   ouvrières dans `main.js`~~ — plus besoin de câblage jetable depuis le tour 13 :
+   il suffit de jouer jusqu'à la première éclosion. Reste à **regarder et
+   capturer**.
+2 quater. ~~**#37 — l'éclosion donne des ouvrières**~~ — **faite au tour 13**,
+   machine à états de butineuse et naissance branchée sur
+   `brood.workersAvailable`. Reste sa capture, la même session que #36. Puis
+   **#38**, le choix de caste, dont la frontière est tracée des deux côtés.
 3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
    petit nid mort à trouver : entrée effondrée avec du relief, champignons
    toujours luminescents (le champignon survit à la colonie). Corrige aussi le
@@ -542,6 +666,7 @@ Par ordre d'importance :
 | Où le joueur peut marcher | `containSurface()` (dehors), `containUnderground()` (dedans) |
 | Ce que vaut un sol | `world/terrain.js` `sampleTerrain()` → `player/siteQuality.js` traduit en verdict de jeu |
 | Les ressources | `world/resources.js` (données + mesh), `player/harvest.js` (ce qu'on en fait) |
+| Ce que fait une ouvrière toute seule | `player/forage.js` (la machine à états, module pur) et `player/workers.js` (la naissance, le mesh, les vraies requêtes monde) |
 | Creuser le nid | `world/founding.js` — `canFoundAt` / `foundNest` / `populateNest` |
 | Le ciel, le soleil, la bascule prologue→colonie | `world/sun.js` (`RIG_PROLOGUE`, `RIG_FOUNDED`, `setFoundedMix`) |
 | Les tailles/vitesses de la fourmi | `player/avatar.js` — un second corps = une entrée de plus, pas un contrôleur |
@@ -630,6 +755,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 13 | **L'éclosion peuple le monde** (#37) : `player/forage.js` pur (SEEK → HARVEST → RETURN → DEPOSIT), `player/workers.js` qui draine `brood.workersAvailable` et fait naître par le chemin commun du tour 12. Une ouvrière récolte et dépose dans la réserve du joueur sans intervention. `nearestNode()` corrigé d'un rayon fixe de 2000 (≈10⁵ cellules balayées, pire que le balayage que le tour 11 avait supprimé) vers une recherche à rayon croissant : 49 cellules dans le cas courant. Tests 113 → 145. Round nocturne sur VPS sans GPU, **aucune ouvrière n'a été vue marcher** | *(voir la note de round)* |
 | 12 | **La couche d'entités** (#36, les deux volets) : `core/entities.js` pur et sérialisable, `player/entities.js` avec `updateEntity()` unique — **le joueur passe par le même chemin que les PNJ**. Rendu instancié : 72–74 draw calls par fourmi → **4, constants quel que soit l'effectif**, matériaux 4–6 → 2. Tests 86 → 113. `dist/` sorti du `.gitignore` : le lien de test, page blanche depuis le tour 10, est réparé. Round nocturne sur VPS sans GPU, **aucune fourmi n'a été vue marcher** | *(voir la note de round)* |
 | 11 | **L'index spatial** (#35) : `core/spatialIndex.js` pur, grille uniforme partagée de 1862 objets, cellule 12 u. Les 5 balayages par image rebranchés (`nearestClimbable` ×13, collision décor ×43). Second champ d'herbe du gameplay supprimé, `MAX_BROOD` enfin exporté. Tests 38 → 86, moitié d'équivalence contre les balayages d'avant. Round nocturne sur VPS sans GPU, rien de vu | *(voir la note de round)* |
 | 10 | **La ponte** (#6 §2) : `player/brood.js` pur, coût en réserve, incubation, capacité de couvoir, HUD, touche `P`. Bascule crépuscule → jour déplacée du coup de pelle à la **première ponte** (§7a) : `main.js` cesse de piloter `setFoundedMix()`. Tests 15 → 38. Round nocturne sur VPS sans GPU, rien de vu | *(voir la note de round)* |
