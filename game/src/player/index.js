@@ -21,6 +21,7 @@ import {
   createBroodState, lay as layEgg, update as updateBrood, nextHatchIn,
   broodCount, layRefusalText, EGG_COST,
 } from './brood.js';
+import { createWorkerSwarm } from './workers.js';
 
 /* design/api-monde-gameplay.md's consumption rule: player/** reads the
    world's exports through a namespace copy, never `world.foo` directly, so a
@@ -148,6 +149,12 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
      one caller would be speculative. Edge-triggered, same contract as
      input.js's own consumeInteract()/consumeHelp(). */
   const brood = createBroodState(BROOD_ROOM_CAPACITY);
+  // #37: every hatch drains brood.workersAvailable into one worker entity,
+  // scattered around the nest's own surface origin (nestOrigin(), read again
+  // below since founding can happen after this line runs) — see
+  // workers.js's header for why `controlled: true` is the right mechanism
+  // for an AI here, not a special case of this file's own player drive.
+  const workerSwarm = createWorkerSwarm({ scene });
   let pontePressed = false;
   function onPonteKey(e) { if (e.code === 'KeyP') pontePressed = true; }
   window.addEventListener('keydown', onPonteKey);
@@ -270,6 +277,18 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     }
     if (layMessageTimer > 0) layMessageTimer -= dt;
 
+    // #37: whatever workersAvailable holds right now becomes exactly that
+    // many worker entities, born at the nest's own surface mouth — read
+    // AFTER updateBrood() above so a hatch this very frame is drained the
+    // same frame it happens, never left for the next one. A no-op on every
+    // frame nothing hatched (spawnFromBrood drains to zero regardless, so
+    // there is simply nothing left to spawn) and on every frame before the
+    // colony is founded (brood.workersAvailable can only be nonzero after a
+    // lay, which itself requires `founded` — see brood.js's lay()).
+    const nestNow = nestOrigin();
+    if (nestNow) workerSwarm.spawnFromBrood(brood, nestNow.x, nestNow.z);
+    workerSwarm.update(dt, elapsed, interaction.harvest.state.cache);
+
     // design/ambiance-prologue.md §2c: "chaque ponte ajoute sa lampe" — driven
     // by laidTotal (never decreasing), NOT by broodCount()/clutches.length
     // (currently incubating, which drops on every hatch). The latter was
@@ -344,6 +363,10 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
       founded: isFounded(), inChamber: inBroodChamber(ant),
     });
     window.__inBroodChamber = () => inBroodChamber(ant);
+    // #37: so a harness can count/inspect the ouvrières without a screen —
+    // each entry is { entity, forage, updatePose, group }, forage.state one
+    // of forage.js's FORAGE_STATE names.
+    window.__workers = workerSwarm;
   }
 
   function dispose() {
@@ -352,6 +375,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     hud.dispose();
     marker.dispose();
     props.dispose();
+    workerSwarm.dispose(); // #37: every ouvrière is an entry in the shared spatial index too
     removeEntity(ant); // #36: the player is an entry in the shared spatial index too
   }
 
