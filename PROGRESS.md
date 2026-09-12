@@ -362,6 +362,144 @@ Par ordre d'importance :
 
 ---
 
+## Round du 2026-09-12 (tour 12 — nocturne, VPS ARM sans GPU)
+
+**Ticket travaillé : #36 — « Couche d'entités : une fourmi qui n'est pas le
+joueur ».** Désigné nommément par « Quoi faire ensuite » du tour 11, dépendance
+(#35) levée au tour 11, et il débloque à lui seul #37, #38, #8 et #34. Son
+cœur est de la logique pure, donc la moitié vérifiable sans écran. Aucun
+`verify-*.mjs` n'a été lancé.
+
+### Où on en est
+
+**Une fourmi qui n'est pas le joueur a enfin un endroit où vivre, et le rendu
+peut en tenir vingt.** Les deux moitiés du ticket ont été livrées, par
+Cataglyphis puis par Atta à qui j'ai passé le résultat de la première.
+
+| Fichier | Rôle |
+|---|---|
+| `core/entities.js` **(nouveau)** | **Module pur, zéro import** — comme `spatialIndex.js` (t. 11) et `brood.js` (t. 10), donc importé directement par `test-logic.mjs`. `createEntity`, `makePatrolGoal`/`goalWish` (aller-retour), `snapshotEntity`/`restoreEntity`. Le profil est référencé par `profileId` (chaîne), pas par objet : c'est la clause « sérialisable » tenue même si `avatar.js` gagne un jour une closure |
+| `player/entities.js` **(nouveau)** | La couche impure. `spawnEntity()` (résout le profil, construit le `legState`, insère dans `worldIndex` en type `'ant'`), **`updateEntity()` — la fonction UNIQUE de mise à jour, joueur ou PNJ**, `driveFromInput`, `removeEntity` |
+| `player/index.js` | Le joueur n'est plus un chemin de code à part : il est créé par `spawnEntity(..., {id:'player', controlled:true})` et avancé par `updateEntity()`. Le `legState` a cessé d'être une variable locale, il vit sur `ant.legState` |
+| `core/instancedPool.js` **(nouveau)** | Pool `InstancedMesh` à capacité fixe (`MAX_ANTS = 32`), réservation de slots, **échoue bruyamment** en dépassement plutôt que de réallouer en silence |
+| `player/antMesh.js` **(réécrit)** | Ne crée plus un `Mesh` par pièce : il réserve des slots dans deux pools partagés (sphères, cylindres), un seul matériau `vertexColors` teinté **par instance** |
+| `core/outline.js` | La coque partage l'`instanceMatrix` du corps **par référence** et son `count` est un getter live ; un `WeakSet` empêche de ré-envelopper un pool |
+| `scripts/bench-antmesh.mjs` **(nouveau)** | Compte meshes/géométries/matériaux/instances en pur Node, sans GPU — 22 checks |
+
+**Le vrai travail technique du ticket, mesuré et non estimé.** Le ticket
+annonçait « ~30 meshes par fourmi » ; le compte réel était **72 (ouvrière) à
+74 (reine)**, contour compris — le contour doublait la note, ce que le ticket
+ne disait pas.
+
+| | avant | après |
+|---|---|---|
+| Draw calls, 1 fourmi | 72–74 | **4** |
+| Draw calls, 5 fourmis | 360–370 | **4** |
+| Draw calls, 20 fourmis | 1440–1480 | **4** |
+| Matériaux | 4–6 (cache par teinte) | **2** |
+| Géométries | 2 | 2 |
+
+Le nombre de draw calls est devenu **constant**. Ce qui croît avec la colonie,
+c'est le nombre d'instances posées (36 par ouvrière, 37 par reine : 728 à
+vingt fourmis mixtes), pas le nombre d'appels de dessin.
+
+**Tests : 86 → 113, 0 échec** (+19 côté entités, +8 côté rendu).
+`npx vite build` passe (2,3 s). J'ai relancé les deux moi-même après chaque
+agent. Validé **en négatif** quatre fois : bascule d'arrivée du patrol
+désactivée → 3 tests tombent ; `collideRadius(profile)` remplacé par le
+littéral `1.5` → 1 test tombe, précisément celui qui interdit la constante
+recopiée ; `MAX_ANTS` ramené à 2 → échec bruyant à la 3ᵉ fourmi ; partage de
+l'`instanceMatrix` du contour retiré → 6 checks du bench tombent (le contour
+reste figé sur la première fourmi). Restaurés, 113/113 re-constaté à chaque fois.
+
+**Arbitrages pris pendant le round, tous contre ce que le code faisait :**
+
+1. **Couleur par instance, plus un matériau par teinte.** L'ancien cache par
+   hex aurait plafonné les pools à un draw call par couleur distincte. Un seul
+   matériau `vertexColors` couvre toutes les teintes, présentes et futures.
+2. **Pool à capacité fixe plutôt que croissante.** Une réallocation casserait
+   le partage par référence de l'`instanceMatrix` avec le contour — la coque
+   pointerait sur un buffer périmé. Capacité généreuse et documentée, qui
+   lève une erreur, contre un mécanisme plus fin impossible à valider sans rendu.
+3. **`legState` (l'IK des pattes) reste hors de la forme sérialisable.** C'est
+   de l'état d'animation, pas de l'état de partie : une entité restaurée
+   replante ses pieds à la première image, comme une entité neuve.
+4. **`dist/` sorti du `.gitignore`** — voir ci-dessous.
+
+**Le lien de test du README est réparé.** C'était le blocage le plus cher du
+projet : `dist/index.html` et 5 PNG étaient *suivis* alors que `dist/` était
+*ignoré*, et le bundle JS — dont le nom porte un hash qui change à chaque
+build — n'a jamais pu être ré-ajouté. La branche publiait donc un `index.html`
+chargeant un fichier absent, c'est-à-dire une page blanche, depuis le tour 10.
+Le contournement à la main a échoué **deux tours de suite**. J'ai tranché pour
+la solution que ce fichier recommandait depuis deux tours : `dist/` ne figure
+plus dans `game/.gitignore`, avec le pourquoi écrit dedans. Vérifié sur le
+disque : `dist/index.html` pointe sur `assets/index-B4DWIMPw.js`, qui existe
+et que git voit enfin. Coût assumé : ~580 Ko de JS dans l'historique par build ;
+la vraie sortie reste une action CI, pas un retour à l'ignorance du dossier.
+
+### Ce qui est cassé ou en attente
+
+- **#36 n'est pas fermé, et il s'en faut de la moitié visible.** Son critère de
+  fin est « cinq fourmis non contrôlées qui se déplacent sur la pelouse sans
+  que l'image s'effondre, chiffres à l'appui. **Captures obligatoires.** »
+  Or **aucun PNJ n'est instancié dans le jeu** : `main.js` n'en fait naître
+  aucun. Ce qui existe est le chemin complet — la couche d'entités, la fonction
+  de mise à jour commune, le rendu qui tient vingt corps — prouvé par 113 tests
+  et par un bench d'objets de scène, mais **jamais joué**. Le câblage final
+  (faire naître cinq ouvrières et les lâcher sur la pelouse) est court et sûr
+  maintenant ; il a été laissé à un round qui peut regarder l'écran, parce que
+  le livrer à l'aveugle aurait produit exactement le genre d'affirmation que ce
+  fichier reproche depuis onze tours.
+- **La teinte par instance n'a jamais été vue.** `instanceColor` est documenté
+  par Three.js mais n'a jamais tourné ici. C'est le point le plus incertain du
+  round.
+- **La grimpe reste un mécanisme de joueur contrôlé.** `updateEntity()` route
+  bien la branche `ant.climb` par le chemin commun, mais aucun objectif d'IA ne
+  déclenche d'escalade. Noté dans le fichier, pas un oubli silencieux.
+- **Pas d'évitement mutuel entre entités.** L'index porte pourtant déjà le type
+  `'ant'` et sait les retrouver : c'est prêt, ce n'est pas branché.
+- La cellule de 12 unités de l'index spatial, dimensionnée contre la reine au
+  tour 11, a été **revérifiée avec des ouvrières dedans** : leur portée (~4,5–8)
+  est strictement sous la bande déjà couverte, et les extents sont par type.
+  Rien à corriger — c'est le piège n°6 regardé en face plutôt que supposé.
+- Le commentaire d'en-tête de `world/index.js` ment toujours (« deliberately
+  not wired into the player controller »). Une ligne, toujours pas faite.
+
+### À juger à l'œil, sur une machine avec GPU
+
+Par ordre d'importance :
+
+1. **Faire naître cinq ouvrières et les regarder marcher** — c'est le critère
+   de fin de #36, et c'est maintenant à une poignée de lignes dans `main.js`.
+   Relever les FPS à 5 puis à 20, capturer. C'est ce qui ferme le ticket.
+2. **La teinte par instance** : chaque pièce (gastre, mandibules, pattes)
+   affiche-t-elle la bonne couleur, fourmi par fourmi ? Le mécanisme est neuf
+   ici et c'est le plus incertain.
+3. **Le contour sur un corps instancié** : épaisseur et couleur du liseré,
+   pièce par pièce. Le calcul de `oDist` par instance a été corrigé mais jamais
+   affiché. Et il vise « ~1,3 px constant » — vérifier que ça tient aussi pour
+   une ouvrière, deux fois plus petite que la reine.
+4. **Les ombres portées** : `castShadow` est posé sur les deux pools ; chaque
+   instance se projette-t-elle dans la shadow map ?
+5. **Que la reine se pilote exactement pareil.** Elle passe désormais par le
+   chemin de code commun. Aucun test ne mesure le ressenti au clavier.
+6. Tout l'arriéré des tours 10-11, toujours jamais vu : la ponte, la bascule
+   crépuscule → jour à la remontée, la fondation (défaut 1). **Le lien de test
+   marche à nouveau — ils sont enfin atteignables.**
+
+### Quoi faire ensuite
+
+1. **Ouvrir le lien de test et vérifier qu'il affiche le jeu.** Une minute, et
+   ça valide la réparation ci-dessus. Si c'est blanc, le diagnostic est à
+   refaire, pas à contourner une troisième fois.
+2. **Fermer #36** : faire naître cinq ouvrières, capturer, relever les chiffres.
+3. **#37** (l'éclosion peuple le monde) — `brood.workersAvailable` l'attend
+   depuis le tour 10, et il a maintenant un corps où aller. Puis **#38**.
+4. Le reste de la liste ci-dessous est inchangé.
+
+---
+
 ## Défauts connus (vus sur captures, non corrigés)
 
 | # | Défaut | Gravité |
@@ -384,8 +522,10 @@ Par ordre d'importance :
    fait au tour 11.
 2 bis. ~~**#35 — l'index spatial**~~ — **fait au tour 11**, sauf le chiffre de
    temps par image qui le fermera. Il lève la dépendance de #36.
-   Puis **#36/#37** : la couche d'entités, branchée sur
-   `brood.workersAvailable` qui les attend déjà.
+2 ter. ~~**#36 — la couche d'entités**~~ — **faite au tour 12**, logique *et*
+   rendu instancié. Ce qui reste pour le fermer est visuel : faire naître cinq
+   ouvrières dans `main.js`, les regarder marcher, capturer. Puis **#37**,
+   branché sur `brood.workersAvailable` qui l'attend depuis le tour 10.
 3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
    petit nid mort à trouver : entrée effondrée avec du relief, champignons
    toujours luminescents (le champignon survit à la colonie). Corrige aussi le
@@ -490,6 +630,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 12 | **La couche d'entités** (#36, les deux volets) : `core/entities.js` pur et sérialisable, `player/entities.js` avec `updateEntity()` unique — **le joueur passe par le même chemin que les PNJ**. Rendu instancié : 72–74 draw calls par fourmi → **4, constants quel que soit l'effectif**, matériaux 4–6 → 2. Tests 86 → 113. `dist/` sorti du `.gitignore` : le lien de test, page blanche depuis le tour 10, est réparé. Round nocturne sur VPS sans GPU, **aucune fourmi n'a été vue marcher** | *(voir la note de round)* |
 | 11 | **L'index spatial** (#35) : `core/spatialIndex.js` pur, grille uniforme partagée de 1862 objets, cellule 12 u. Les 5 balayages par image rebranchés (`nearestClimbable` ×13, collision décor ×43). Second champ d'herbe du gameplay supprimé, `MAX_BROOD` enfin exporté. Tests 38 → 86, moitié d'équivalence contre les balayages d'avant. Round nocturne sur VPS sans GPU, rien de vu | *(voir la note de round)* |
 | 10 | **La ponte** (#6 §2) : `player/brood.js` pur, coût en réserve, incubation, capacité de couvoir, HUD, touche `P`. Bascule crépuscule → jour déplacée du coup de pelle à la **première ponte** (§7a) : `main.js` cesse de piloter `setFoundedMix()`. Tests 15 → 38. Round nocturne sur VPS sans GPU, rien de vu | *(voir la note de round)* |
 | 9 | Harnais de tests non graphiques (`test-logic.mjs`) — géométrie/confinement de `world/**` vérifiés en pur Node, sans GPU. Round nocturne sur VPS sans GPU, aucun rendu touché | *(non commité par l'agent — voir note de round ci-dessus)* |

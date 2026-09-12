@@ -37,6 +37,16 @@ const brood = await import('../src/player/brood.js');
 // core/spatialIndex.js is pure too (no THREE, no DOM, no world/** import —
 // see its header): direct import, same as brood.js.
 const spatial = await import('../src/core/spatialIndex.js');
+// core/entities.js (#36) is pure by the same discipline (see its header):
+// direct import, no loader hook needed.
+const entitiesCore = await import('../src/core/entities.js');
+// player/antMesh.js (#36's rendering half) and core/outline.js pull in
+// THREE.js core objects (BufferGeometry, InstancedMesh, Matrix4, Color) —
+// all pure CPU data structures, no canvas/WebGL needed, so they run under
+// plain node exactly like everything else here (see scripts/bench-antmesh.mjs
+// for the fuller mesh/material/geometry count report this block only spot-
+// checks as a standing regression guard).
+const THREE = await import('three');
 
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
@@ -379,6 +389,223 @@ console.log('\nspatial index (core/spatialIndex.js):');
   }
 }
 
+console.log('\nentity records and goal-seeking (core/entities.js, #36):');
+{
+  const { createEntity, makePatrolGoal, goalWish, snapshotEntity, restoreEntity, resetEntityIds } = entitiesCore;
+
+  resetEntityIds(1);
+  const e1 = createEntity('worker', 0, 0, 0);
+  const e2 = createEntity('worker', 0, 0, 0);
+  check('createEntity hands out distinct auto ids', e1.id !== e2.id, `${e1.id} vs ${e2.id}`);
+  check('an entity is uncontrolled with no goal by default', e1.controlled === false && e1.goal === null);
+
+  /* No THREE, no function, no undefined anywhere on a freshly made record —
+     the actual guarantee behind "no closure, no THREE reference" is that
+     this whole module never imports THREE in the first place (see its
+     header), but this walks the produced shape too, as a regression trip
+     wire: the day something here starts attaching a function or a
+     Vector3-shaped object to an entity, this fails without anyone having to
+     notice it on a screenshot. */
+  function isPlainSerializable(v, seen = new Set()) {
+    if (v === null) return true;
+    const t = typeof v;
+    if (t === 'number' || t === 'string' || t === 'boolean') return true;
+    if (t !== 'object') return false; // function, undefined, symbol, bigint
+    if (seen.has(v)) return false; // no cycles in a JSON-safe tree
+    seen.add(v);
+    if (Array.isArray(v)) return v.every((x) => isPlainSerializable(x, seen));
+    if (Object.getPrototypeOf(v) !== Object.prototype) return false; // a class instance, not plain data
+    return Object.values(v).every((x) => isPlainSerializable(x, seen));
+  }
+  const goal = makePatrolGoal(-20, 5, 20, 5, { waitFor: 0.3, arriveR: 0.5 });
+  const e = createEntity('worker', -20, 0, 5, { goal });
+  check('a fresh entity + patrol goal is plain, JSON-safe data', isPlainSerializable(e));
+
+  /* ---- convergence: a patrol reaches B, waits, comes back to A --------- */
+  const SPEED = 15, DT = 1 / 30; // avatar.js's WORKER.maxSpeed, a plausible fixed tick
+  function integrate(ent, ticks) {
+    let reachedB = false, arrivedBack = false, ticksUsed = 0;
+    for (let i = 0; i < ticks; i++) {
+      const before = ent.goal.target;
+      const w = goalWish(ent.x, ent.z, ent.goal, DT);
+      ent.x += w.wishX * SPEED * DT;
+      ent.z += w.wishZ * SPEED * DT;
+      ent.travel += Math.hypot(w.wishX, w.wishZ) * SPEED * DT;
+      ticksUsed = i + 1;
+      if (before === 'b' && ent.goal.target === 'a') reachedB = true; // flipped after arriving at b
+      if (reachedB && before === 'a' && ent.goal.target === 'b') { arrivedBack = true; break; } // and again after arriving at a
+    }
+    return { reachedB, arrivedBack, ticksUsed };
+  }
+  // 40 units at 15 u/s is ~2.7s each way plus two 0.3s waits: call it ~6.5s,
+  // ~195 ticks at DT — bounded generously (600) so the check is "it
+  // converges", not "it converges in exactly this many ticks".
+  const r1 = integrate(e, 600);
+  check('a patrol goal reaches B and returns to A within a bounded tick count',
+    r1.reachedB && r1.arrivedBack, JSON.stringify(r1));
+  check('...and it lands back within arriveR of A',
+    Math.hypot(e.x - goal.a[0], e.z - goal.a[1]) <= goal.arriveR + 1e-6,
+    `${e.x}, ${e.z}`);
+
+  // "ne diverge pas": run it for several more full round trips and check it
+  // never leaves the [A,B] segment's own span by more than arriveR — a
+  // goal that overshot and hunted back and forth would show up here as a
+  // position outside that band, not as a crash.
+  let outOfBand = 0;
+  for (let i = 0; i < 4000; i++) {
+    const w = goalWish(e.x, e.z, e.goal, DT);
+    e.x += w.wishX * SPEED * DT; e.z += w.wishZ * SPEED * DT;
+    if (e.x < goal.a[0] - goal.arriveR - 0.5 || e.x > goal.b[0] + goal.arriveR + 0.5) outOfBand++;
+  }
+  check('a patrol never diverges outside its own [A,B] span over 4000 more ticks',
+    outOfBand === 0, `${outOfBand} out-of-band ticks`);
+
+  /* ---- serialization: resumes its tick exactly where it left off ------- */
+  const live = createEntity('worker', 3, 0, -7, { goal: makePatrolGoal(3, -7, -30, 40, { waitFor: 0.4, arriveR: 1 }) });
+  for (let i = 0; i < 37; i++) { // an arbitrary mid-flight point, not on a goal edge
+    const w = goalWish(live.x, live.z, live.goal, DT);
+    live.x += w.wishX * SPEED * DT; live.z += w.wishZ * SPEED * DT; live.travel += DT * SPEED;
+  }
+  const jsonText = JSON.stringify(snapshotEntity(live));
+  check('a mid-flight entity survives JSON.parse(JSON.stringify(...))',
+    typeof jsonText === 'string' && jsonText.length > 0 && jsonText.indexOf('function') === -1);
+  const revived = restoreEntity(JSON.parse(jsonText));
+  check('...and comes back deep-equal to the live record (goal progress included)',
+    JSON.stringify(revived) === JSON.stringify(live));
+
+  // Continue BOTH for the same further ticks: if the revived copy resumed
+  // correctly, the two trajectories must stay bit-for-bit identical, tick
+  // for tick — not just equal at the moment of the snapshot.
+  let diverged = 0;
+  for (let i = 0; i < 200; i++) {
+    const w1 = goalWish(live.x, live.z, live.goal, DT);
+    live.x += w1.wishX * SPEED * DT; live.z += w1.wishZ * SPEED * DT;
+    const w2 = goalWish(revived.x, revived.z, revived.goal, DT);
+    revived.x += w2.wishX * SPEED * DT; revived.z += w2.wishZ * SPEED * DT;
+    if (live.x !== revived.x || live.z !== revived.z || live.goal.target !== revived.goal.target
+      || Math.abs(live.goal.waitT - revived.goal.waitT) > 1e-12) diverged++;
+  }
+  check('the restored entity resumes its tick exactly where the live one continues (200 ticks, bit-for-bit)',
+    diverged === 0, `${diverged} diverging ticks`);
+
+  // avatar.js's two profiles, read the way createEntity()'s profileId is
+  // meant to be resolved (see player/entities.js's resolveProfile) — no
+  // constant here is copied between them; collideRadius() derives both from
+  // bodyR * scale, and only `scale` differs (2.2 vs 1).
+  check('WORKER and FOUNDING_QUEEN derive different collide radii from the same formula',
+    avatar.collideRadius(avatar.WORKER) === 1.5
+    && Math.abs(avatar.collideRadius(avatar.FOUNDING_QUEEN) - 3.3) < 1e-9
+    && avatar.FOUNDING_QUEEN.scale === 2.2);
+}
+
+console.log('\nant-part instancing (player/antMesh.js + core/outline.js, #36):');
+{
+  const antMesh = await import('../src/player/antMesh.js');
+  const outline = await import('../src/core/outline.js');
+
+  /* This is the ticket's actual acceptance test in numeric form: "le rendu
+     doit tenir plusieurs fourmis sans un draw call par patte" is exactly
+     "the drawable count does not grow with the ant count" — see
+     scripts/bench-antmesh.mjs for the full before/after report this block
+     only guards as a standing regression check (a future edit that goes
+     back to one THREE.Mesh per part per ant would fail HERE, not just look
+     slow on a screen nobody in this sandbox can see). */
+  function countDrawables(scene) {
+    let drawables = 0, bodyInstances = 0;
+    const geos = new Set(), mats = new Set();
+    scene.traverse((o) => {
+      if (!o.isMesh) return;
+      drawables++;
+      geos.add(o.geometry);
+      mats.add(o.material);
+      if (o.material.isMeshStandardMaterial) bodyInstances += o.isInstancedMesh ? o.count : 1;
+    });
+    return { drawables, geoCount: geos.size, matCount: mats.size, bodyInstances };
+  }
+  function mockLegState(profile) {
+    return profile.legs.map(() => ({ planted: [0, 0, 0], from: [0, 0, 0], to: [0, 0, 0], swinging: false, prevP: 0 }));
+  }
+  // ellipsoid parts (gaster+petiole+thorax+head+2 eyes+knee/foot per leg) +
+  // bone parts (2 mandibles+4 antennae+thigh/shin per leg) — the same
+  // arithmetic player/antMesh.js's own partCounts() derives its pool sizing
+  // from, kept independent here (not imported) so this test would notice if
+  // that derivation itself drifted from what the profile tables actually need.
+  const partsOf = (p) => (p.body.gaster.length + 5 + p.legs.length * 2) + (6 + p.legs.length * 2);
+
+  antMesh._resetPoolsForTest();
+  const scene1 = new THREE.Scene();
+  {
+    const { group } = antMesh.buildAntMesh(avatar.WORKER);
+    scene1.add(group);
+    scene1.add(outline.buildOutlineHull(group));
+  }
+  const one = countDrawables(scene1);
+  check('one ant renders through a bounded, small number of draw calls (2 body pools + 2 outline shells)',
+    one.drawables === 4, one.drawables);
+
+  antMesh._resetPoolsForTest();
+  const scene20 = new THREE.Scene();
+  for (let i = 0; i < 20; i++) {
+    const profile = i % 5 === 0 ? avatar.FOUNDING_QUEEN : avatar.WORKER; // a mixed crowd, not one profile
+    const { group, updatePose } = antMesh.buildAntMesh(profile);
+    scene20.add(group);
+    scene20.add(outline.buildOutlineHull(group)); // a no-op past the first ant — see core/outline.js
+    updatePose({ x: i * 3, y: 0, z: 0, yaw: 0, speed: 0, travel: 0, bob: 0, climb: null, legsInit: false, scale: profile.scale },
+      mockLegState(profile), i * 0.3);
+  }
+  const twenty = countDrawables(scene20);
+  check('twenty mixed ants (the ticket\'s own number) still render through exactly 4 objects, not 20x',
+    twenty.drawables === 4, twenty.drawables);
+
+  /* The outline shell (core/outline.js) is the sharpest edge of this ticket:
+     it was built once, for the FIRST ant, then 19 more ants got allocated
+     into the same body pools with no second buildOutlineHull() call for any
+     of them (scene20's loop above still calls it every time, same as
+     player/index.js's real pattern, but every call after the first is a
+     documented no-op — see core/outline.js). If the shell ever stopped
+     sharing the body pool's instanceMatrix attribute by reference (a copy,
+     or a snapshot `count` instead of a live getter), this is where it would
+     show up: the shell would still be showing ant #1 alone. */
+  {
+    const shellSphere = scene20.children.find((c) => c.name === 'outline-hull' && c.children.length)
+      ?.children.find((c) => c.geometry.type === 'SphereGeometry');
+    const bodySphere = scene20.children.find((c) => c.name === 'ant-part-pools')
+      ?.children.find((c) => c.geometry.type === 'SphereGeometry');
+    check('the outline shell shares the body pool\'s instanceMatrix by reference',
+      !!shellSphere && !!bodySphere && shellSphere.instanceMatrix === bodySphere.instanceMatrix);
+    // partsOf() sums BOTH pools (sphere+cylinder) for one ant; the sphere
+    // pool alone after 20 ants is well past that combined figure for a
+    // single one, so this is a deliberately generous floor, not an exact
+    // count (the exact count is checked below via `twenty.bodyInstances`).
+    check('...so it renders every one of the 20 ants\' parts, not just the first ant\'s',
+      !!shellSphere && !!bodySphere && shellSphere.count === bodySphere.count
+      && bodySphere.count > partsOf(avatar.WORKER),
+      `${shellSphere && shellSphere.count} vs ${bodySphere && bodySphere.count}`);
+  }
+  check('...through exactly 2 shared geometries', twenty.geoCount === 2, twenty.geoCount);
+  check('...and exactly 2 shared materials (1 body + 1 outline), not one per ant or per colour',
+    twenty.matCount === 2, twenty.matCount);
+  {
+    // i % 5 === 0 for i in [0,20) -> 4 queens, 16 workers (see the loop above)
+    const queens = 4, workers = 16;
+    const want = workers * partsOf(avatar.WORKER) + queens * partsOf(avatar.FOUNDING_QUEEN);
+    check('...while every part of every one of the 20 ants is still individually posed '
+      + '(36/worker * 16 + 37/queen * 4, matching the profile tables)',
+      twenty.bodyInstances === want, `${twenty.bodyInstances} vs ${want}`);
+  }
+
+  check('a pool that is asked for one more ant than avatar.js\'s two profiles can pre-size for throws, not corrupts',
+    (() => {
+      antMesh._resetPoolsForTest();
+      const scene = new THREE.Scene();
+      try {
+        for (let i = 0; i < antMesh.MAX_ANTS + 1; i++) scene.add(antMesh.buildAntMesh(avatar.WORKER).group);
+        return false; // should have thrown by now
+      } catch (e) { return /instanced pool exhausted/.test(e.message); }
+    })());
+  antMesh._resetPoolsForTest();
+}
+
 /* Deliberately LAST: this one builds the whole world (meshes included, via
    the loader's texturing stub), which mutates module-level world state
    (MUSHROOMS/ROCKS/RESOURCE_NODES get filled, founding's host group is
@@ -676,6 +903,77 @@ console.log('\nthe shared world index (world/index.js):');
       nodeMismatch === 0, `${nodeMismatch} mismatches`);
     check('...and the probes actually counted something',
       grassSeen > 100 && nodesSeen > 50, `${grassSeen} blades, ${nodesSeen} nodes`);
+  }
+
+  /* ---- 5. player/entities.js (#36): the player IS an entity ------------- */
+  console.log('\nthe entity layer (player/entities.js, #36) — same update path as the player:');
+  {
+    const ent = await import('../src/player/entities.js');
+    const movement = await import('../src/player/movement.js');
+
+    // A controlled "player" and an unpiloted "worker" built by the SAME
+    // spawnEntity(), ticked by the SAME updateEntity() — the ticket's own
+    // wording ("le joueur devient l'entité contrôlée, pas un cas
+    // particulier"). Spawned on open, flat lawn well clear of every decor
+    // collider and of the underground mouth, so the trajectory checks below
+    // are about the entity/goal/containment machinery, not about dodging a
+    // pebble.
+    const OPEN = [160, 190]; // inside LAWN_BOUNDS, east of the resource cluster player/index.js's SURFACE_START also uses
+    const player = ent.spawnEntity(avatar.FOUNDING_QUEEN, OPEN[0], 0, OPEN[1], { id: 'test-player', controlled: true });
+    check('the player is an entity with controlled:true, not a separate record shape',
+      player.controlled === true && typeof player.profileId === 'string' && player.legState.length === avatar.FOUNDING_QUEEN.legs.length);
+
+    const patrolGoal = ent.makePatrolGoal(OPEN[0] - 25, OPEN[1], OPEN[0] + 25, OPEN[1],
+      { waitFor: 0.3, arriveR: avatar.collideRadius(avatar.WORKER) });
+    const worker = ent.spawnEntity(avatar.WORKER, OPEN[0] - 25, 0, OPEN[1], { controlled: false, goal: patrolGoal });
+    check('an unpiloted worker starts with a goal and controlled:false', worker.controlled === false && !!worker.goal);
+
+    check('both entities are indexed in the shared spatial index under type \'ant\'',
+      world.worldIndex.has('ant', player.id) && world.worldIndex.has('ant', worker.id));
+    check('their indexed extents are each profile\'s own collideRadius, not a shared literal',
+      world.worldIndex.nearest(player.x, player.z, 0.01, 'ant').extent === avatar.collideRadius(avatar.FOUNDING_QUEEN)
+      && world.worldIndex.nearest(worker.x, worker.z, 0.01, 'ant').extent === avatar.collideRadius(avatar.WORKER));
+
+    const DT = 1 / 30;
+    const zeroIntent = { ix: 0, iy: 0, mag: 0, sprint: false };
+    let workerReachedB = false, workerReturned = false;
+    const camEye = [OPEN[0], 20, OPEN[1] + 40], camAim = [OPEN[0], 0, OPEN[1]];
+    for (let i = 0; i < 900; i++) {
+      // the player is fed a `drive` (as player/index.js's update() builds
+      // one from real input); standing still on purpose — this loop is
+      // about the update PATH being shared, not about steering her.
+      ent.updateEntity(player, DT, ent.driveFromInput(zeroIntent, camEye, camAim));
+      // the worker gets no `drive` at all: updateEntity() must fall back to
+      // its own goal without being told to.
+      const beforeTarget = worker.goal.target;
+      ent.updateEntity(worker, DT, undefined);
+      if (beforeTarget === 'b' && worker.goal.target === 'a') workerReachedB = true;
+      if (workerReachedB && beforeTarget === 'a' && worker.goal.target === 'b') { workerReturned = true; break; }
+    }
+    check('an uncontrolled entity walks its patrol through updateEntity() alone (no drive supplied)',
+      workerReachedB && workerReturned);
+    check('the standing-still controlled entity did not wander off on its own',
+      Math.hypot(player.x - OPEN[0], player.z - OPEN[1]) < 1);
+
+    // Confinement (containSurface, via movement.js's stepAnt — same clamp
+    // the player is subject to): send a worker's patrol target far outside
+    // LAWN_BOUNDS and confirm it is held at the boundary, never marched
+    // through it.
+    const runaway = ent.spawnEntity(avatar.WORKER, world.LAWN_BOUNDS.x1 - 5, 0, 200,
+      { controlled: false, goal: ent.makePatrolGoal(world.LAWN_BOUNDS.x1 - 5, 200, world.LAWN_BOUNDS.x1 + 5000, 200, { arriveR: 1 }) });
+    for (let i = 0; i < 300; i++) ent.updateEntity(runaway, DT, undefined);
+    check('an unpiloted entity is held at containSurface\'s boundary like the player, never past it',
+      runaway.x <= world.LAWN_BOUNDS.x1 + 1e-6, runaway.x);
+
+    ent.removeEntity(player); ent.removeEntity(worker); ent.removeEntity(runaway);
+    check('removeEntity takes each one back out of the shared index',
+      !world.worldIndex.has('ant', player.id) && !world.worldIndex.has('ant', worker.id) && !world.worldIndex.has('ant', runaway.id));
+
+    // movement.js itself is untouched by #36 (no import of core/entities.js
+    // or player/entities.js) — the sharing lives in WHO calls it, not in a
+    // rewrite of stepAnt/computeWishDir.
+    check('movement.js stays a plain function pair, not aware of the entity list',
+      typeof movement.stepAnt === 'function' && typeof movement.computeWishDir === 'function');
   }
 }
 
