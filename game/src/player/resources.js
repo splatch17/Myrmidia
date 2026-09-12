@@ -114,6 +114,14 @@ export function takeFromNode(node, qty) {
  */
 export function nodeInReach(x, z, bodyR = 0) {
   const nodes = resourceNodes();
+  // The stand-in set above is player-side and was never inserted into the
+  // shared index (#35), so it — and only it — still needs the scan.
+  if (nodes !== W.RESOURCE_NODES) return scanForReach(nodes, x, z, bodyR);
+  const hit = W.worldIndex.nearestWithin(x, z, bodyR * 0.6, 'resource', (i) => nodes[i].amount > 0);
+  return hit ? nodes[hit.id] : null;
+}
+
+function scanForReach(nodes, x, z, bodyR) {
   let best = null, bestD = Infinity;
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
@@ -122,4 +130,22 @@ export function nodeInReach(x, z, bodyR = 0) {
     if (d <= n.r + bodyR * 0.6 && d < bestD) { bestD = d; best = n; }
   }
   return best;
+}
+
+/* id -> node, rebuilt whenever the array it was built from is replaced or
+   changes length (nodes are never removed, only emptied — see the contract at
+   the top — so that is enough to notice every change). */
+const byId = new Map();
+let byIdFor = null;
+
+/** The node with that id, or null — so a caller holding an id across frames
+ *  (harvest.js latches one) does not re-walk the array every frame. */
+export function nodeById(id) {
+  const nodes = resourceNodes();
+  if (byIdFor !== nodes || byId.size !== nodes.length) {
+    byIdFor = nodes;
+    byId.clear();
+    for (const n of nodes) byId.set(n.id, n);
+  }
+  return byId.get(id) || null;
 }

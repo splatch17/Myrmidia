@@ -129,3 +129,64 @@ Récolte et fondation. Rien de tout cela n'est appelé depuis `world/**` :
 le monde ne connaît pas le joueur, le joueur appelle le monde. La dépendance
 va dans un seul sens, et c'est ce qui permet de tester le monde sans
 contrôleur.
+
+---
+
+## 6. Index spatial partagé — livré (round 11, #35)
+
+`world/index.js` exporte `worldIndex`, **une** grille uniforme
+(`core/spatialIndex.js`, cellule de 12 unités) contenant tous les objets
+statiques de la carte dont `player/**` demande la proximité. Elle est créée
+vide à l'import du module et remplie par `createWorld()` : toute requête a
+donc lieu dans la boucle d'image, après la construction.
+
+`world/index.js` exporte aussi `getGrassFootprints()`, le tableau des brins
+réellement rendus. C'est la **seule** source des brins côté gameplay : le
+second `createGrassField()` que `climb.js` construisait pour lui-même a été
+supprimé, parce que deux champs déterministes identiques désalignent les `id`
+de l'index sans lever la moindre erreur dès que l'un des deux appels change de
+graine ou d'effectif.
+
+**Types et signification de `id`** — ces quatre tableaux ne sont ni réordonnés
+ni compactés : un index reste valide pour toute la partie.
+
+| type | `id` | `extent` |
+|---|---|---|
+| `'grass'` | index dans `getGrassFootprints()` | demi-largeur `w` |
+| `'mushroom'` | index dans `MUSHROOMS` | `mushroomCollideR(m)` |
+| `'rock'` | index dans `ROCKS` | `r` |
+| `'resource'` | index dans `RESOURCE_NODES` | rayon de cueillette `n.r` |
+
+**Ce que l'index ne contient pas :** ni maillage, ni objet vivant, ni
+fermeture — seulement `(type, id, x, z, extent)`. C'est ce qui le rend
+sérialisable et ce qui permet de le tester en pur Node.
+
+**Invalidation.** L'épuisement d'un nœud (`amount → 0`) et `foundNest()`
+**n'invalident rien** : un nœud vide garde sa place et sa position, les
+appelants filtrent sur `amount` comme avant. Tout objet qui bouge, apparaît ou
+disparaît appelle `worldIndex.move/insert/remove` pour **sa seule entrée**,
+jamais une reconstruction. C'est le chemin prévu pour les entités de #36.
+
+**Requêtes** — `type` accepte une chaîne, un tableau de chaînes ou `null`
+(= tous). Les callbacks reçoivent `(id, dist, x, z, extent)`.
+
+```
+nearest(x, z, radius, type, accept?)       nearestWithin(x, z, slack, type, accept?)
+forEachInRadius(x, z, radius, type, fn)    forEachWithin(x, z, slack, type, fn)
+countInRadius(x, z, radius, type, accept?) collectInRadius(x, z, radius, type, out?)
+maxExtent(type?)
+```
+
+`*Within` teste `dist <= extent + slack`, c'est-à-dire la portée propre de
+l'objet ; `*InRadius` teste la distance au centre. **Les bornes de l'index
+sont inclusives, et plusieurs balayages d'origine étaient stricts** : un
+appelant qui veut `d < r` doit le dire dans son prédicat `accept`. C'est le
+piège n°1 du rebranchement, il ne se voit sur aucune capture.
+
+**Si un consommateur substitue son propre rayon à celui de l'entrée** — c'est
+le cas de `decorCollision.js`, dont `fittedRadius()` peut grossir un chapeau
+de champignon bien au-delà du `mushroomCollideR()` stocké — il interroge par
+distance au centre avec sa propre borne. Il ne pousse **pas** son rayon dans
+l'index : un rayon ajusté dépend du corps qui marche, et `maxExtent` ne
+décroît jamais, donc l'écrire dans une structure partagée le ferait grossir
+définitivement pour toutes les autres fourmis.

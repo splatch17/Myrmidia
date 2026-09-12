@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "gen:textures": "node scripts/generate-procedural-textures.mjs",
-    "test:logic": "node scripts/test-logic.mjs"
+    "test:logic": "node scripts/test-logic.mjs",
+    "bench:spatial": "node scripts/bench-spatial.mjs"
   },
   "dependencies": {
     "three": "^0.169.0"

@@ -17,8 +17,9 @@ import { shadeAt } from './shade.js';
 import { RESOURCE_NODES, harvestNode, nodesNear, buildResources } from './resources.js';
 import {
   initFounding, canFoundAt, foundNest, nestOrigin, getFoundedNest,
-  populateNest, sealNest, updateFounding,
+  populateNest, sealNest, updateFounding, MAX_BROOD,
 } from './founding.js';
+import { createSpatialIndex } from '../core/spatialIndex.js';
 import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
 
 // Re-exported so Cataglyphis can pull everything needed for collision/climb
@@ -71,6 +72,10 @@ import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './
 // RIG_PROLOGUE/RIG_FOUNDED/sunDir/foundedMix/setFoundedMix are the sky rig
 // main.js drives and shadeAt() reads, kept in one place so the light the
 // player is told about and the light drawn on screen cannot diverge.
+//
+// SPATIAL INDEX (#35) — `worldIndex`, one shared uniform grid holding every
+// static thing player/** asks proximity questions about. See the block above
+// createWorld() for what goes in it, and core/spatialIndex.js for the API.
 export {
   containUnderground, getUndergroundRadius, getWallHoleAt, getRoomBranches, profileR,
   groundY, groundNormal, groundSlope, soilAt, sampleTerrain, waterDepthAt,
@@ -81,9 +86,70 @@ export {
   MUSHROOMS, ROCKS, mushroomCollideR, applyNestShading, daylightAt, pitFactorAt,
   shadeAt,
   RESOURCE_NODES, harvestNode, nodesNear,
-  canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
+  canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest, MAX_BROOD,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
+
+/* ==========================================================================
+   THE SHARED SPATIAL INDEX (#35)
+
+   One grid for the whole map, filled by createWorld() and read by player/**
+   instead of scanning arrays. It is created at module scope, EMPTY, so
+   player modules can `import { worldIndex }` at import time (they are loaded
+   before createWorld() runs) and simply find it populated by the time they
+   ask it anything — every query happens inside the frame loop, long after.
+
+   TYPES AND WHAT `id` MEANS (the whole contract, in five lines):
+     'grass'     id = index into the grass footprints array   extent = w (half width)
+     'mushroom'  id = index into MUSHROOMS                    extent = mushroomCollideR(m)
+     'rock'      id = index into ROCKS                        extent = r
+     'resource'  id = index into RESOURCE_NODES               extent = node.r (pick radius)
+   All four arrays are append-only and never reordered, so an index stays
+   valid for the life of the run. The index stores those numbers and nothing
+   else — no node objects, no meshes.
+
+   WHAT INVALIDATES IT, and what does not:
+     - a node running dry does NOT: it keeps its position and stays in
+       RESOURCE_NODES with amount 0, so the entry stays correct. Callers
+       filter on `amount` as they always did.
+     - foundNest() does NOT: digging the colony adds geometry and lights, but
+       it pushes nothing into MUSHROOMS/ROCKS/RESOURCE_NODES (world/
+       founding.js builds its own furnishing meshes), so no entry changes.
+       It does change where you can WALK — that is containUnderground()'s
+       business, not the index's.
+     - anything that moves, adds or removes one of those four kinds of object
+       DOES, and must call worldIndex.move()/insert()/remove() for that one
+       entry. That is the whole reason the index supports mutation rather
+       than only a rebuild: #36's ants will move every frame.
+   ========================================================================== */
+export const worldIndex = createSpatialIndex();
+
+/* The grass footprints createWorld() actually rendered. player/climb.js
+   currently builds its own second (deterministic, identical) copy; this
+   export exists so the index's 'grass' ids can be resolved against the very
+   array the mesh was built from, and so that duplicate can eventually go. */
+let grassFootprints = [];
+export function getGrassFootprints() { return grassFootprints; }
+
+function fillWorldIndex(blades) {
+  worldIndex.clear();
+  for (let i = 0; i < blades.length; i++) {
+    const g = blades[i];
+    worldIndex.insert('grass', i, g.x, g.z, g.w);
+  }
+  for (let i = 0; i < MUSHROOMS.length; i++) {
+    const m = MUSHROOMS[i];
+    worldIndex.insert('mushroom', i, m.x, m.z, mushroomCollideR(m));
+  }
+  for (let i = 0; i < ROCKS.length; i++) {
+    const r = ROCKS[i];
+    worldIndex.insert('rock', i, r.x, r.z, r.r);
+  }
+  for (let i = 0; i < RESOURCE_NODES.length; i++) {
+    const n = RESOURCE_NODES[i];
+    worldIndex.insert('resource', i, n.x, n.z, n.r);
+  }
+}
 
 /**
  * Builds the whole world (underground + lawn + grass + tree) as one
@@ -160,6 +226,11 @@ export function createWorld() {
   dug.name = 'dug';
   group.add(dug);
   initFounding(dug);
+
+  /* Last, so every array it reads is already filled: buildNestDecor fills
+     MUSHROOMS/ROCKS, buildResources sows RESOURCE_NODES. */
+  grassFootprints = grass.footprints;
+  fillWorldIndex(grassFootprints);
 
   function update(dt, elapsed, camera) {
     grass.update(dt, elapsed);

@@ -1,7 +1,6 @@
 import { clamp, damp } from '../core/noise.js';
 import { add3, scl3 } from '../core/vecmath.js';
-import { groundY, TREE, treeTrunkRadius, treeWalkBranch } from '../world/index.js';
-import { createGrassField } from '../world/grass.js';
+import { groundY, TREE, treeTrunkRadius, treeWalkBranch, getGrassFootprints, worldIndex } from '../world/index.js';
 import { bladeCurvePoint, bladeClimbBasis } from '../world/blade.js';
 import { PLAYER_AVATAR } from './avatar.js';
 
@@ -13,18 +12,22 @@ import { PLAYER_AVATAR } from './avatar.js';
    ant.climb the same way the old file's did; this module only owns finding
    a target, entering/exiting, and advancing along one while held.
 
-   GRASS here is a second createGrassField({}) call (world/grass.js, already
-   exported for the mesh) purely for its returned footprints — deterministic
-   (same default seed/count world/index.js uses to build the real mesh), so
-   this always matches what's rendered without needing a reference to that
-   specific instance threaded through main.js. The InstancedMesh/geometry
-   this second call builds is discarded immediately; a one-time startup cost,
-   not per-frame, and avoids touching world/index.js or main.js to plumb an
-   instance-specific value through (see the mission brief on staying out of
-   Atta's files).
+   THE BLADES ARE THE WORLD'S, NOT A COPY (#35). This module used to call
+   createGrassField({}) a second time and keep its footprints, relying on that
+   call being deterministic to stay aligned with the field world/index.js
+   actually rendered — a silent coupling: changing the seed or the count of
+   ONE of the two calls would have desynchronised them with no error. Now
+   world/index.js publishes the very array it built (getGrassFootprints()),
+   which is also what the shared spatial index's 'grass' ids point into, so
+   blade i here, blade i in the index and blade i on screen cannot diverge.
+   It is a live getter and not a captured array because the world fills it in
+   createWorld(), after this module is imported — every read below happens
+   inside a frame, long after.
    ========================================================================== */
 
-export const GRASS = createGrassField({}).footprints;
+/** The blades the world actually rendered — indexed exactly like the spatial
+ *  index's 'grass' ids. Empty until createWorld() has run. */
+export const grassBlades = getGrassFootprints;
 
 // Deliberately NOT scaled with the avatar: this is about the blade's own
 // stiffness (can it hold a climber at all), not about who is climbing it —
@@ -66,13 +69,14 @@ const TREE_WALK_LEN = (() => {
 /** Nearest climbable target within range, or null — grass blades tall
  *  enough to bother with, or the tree trunk. */
 export function nearestClimbable(ant) {
-  let best = null, bestD = reach(ant); // plain distance, so it compares fairly against the tree's surface distance below
-  for (let i = 0; i < GRASS.length; i++) {
-    const g = GRASS[i];
-    if (g.h < CLIMB_MIN_H) continue;
-    const d = Math.hypot(g.x - ant.x, g.z - ant.z);
-    if (d < bestD) { bestD = d; best = { kind: 'grass', i }; }
-  }
+  const maxD = reach(ant); // plain distance, so it compares fairly against the tree's surface distance below
+  // `d < maxD`, not the query's own inclusive bound: the scan this replaced
+  // compared strictly, and a blade exactly at arm's length was out of range.
+  const blades = grassBlades();
+  const hit = worldIndex.nearest(ant.x, ant.z, maxD, 'grass',
+    (i, d) => d < maxD && blades[i].h >= CLIMB_MIN_H);
+  let best = hit ? { kind: 'grass', i: hit.id } : null;
+  const bestD = hit ? hit.dist : maxD;
   const treeSurfaceD = Math.hypot(TREE.x - ant.x, TREE.z - ant.z) - TREE.w;
   if (treeSurfaceD < TREE_CLIMB_RADIUS * (ant.scale || 1) && treeSurfaceD < bestD) best = { kind: 'tree' };
   return best;
@@ -96,7 +100,7 @@ export function exitClimb(ant) {
     const tb = bladeClimbBasis(TREE, ant.climb.t);
     p = add3(bladeCurvePoint(TREE, ant.climb.t), scl3(tb.normal, treeTrunkRadius(ant.climb.t)));
   } else {
-    p = bladeCurvePoint(GRASS[ant.climb.i], ant.climb.t);
+    p = bladeCurvePoint(grassBlades()[ant.climb.i], ant.climb.t);
   }
   ant.climb = null;
   ant.x = p[0]; ant.z = p[2]; ant.y = groundY(p[0], p[2]);
@@ -161,7 +165,7 @@ export function stepClimb(ant, climbDir, dt) {
       if (ant.climb.u <= 0.0005 && climbDir < 0) segSwitch = 'trunk'; // back onto the trunk
     }
   } else {
-    const g = GRASS[ant.climb.i];
+    const g = grassBlades()[ant.climb.i];
     ant.climb.t = clamp(ant.climb.t + climbDir * (climbSpeed(ant) / g.h) * dt, 0, CLIMB_MAX_T);
     const cp = bladeCurvePoint(g, ant.climb.t);
     ant.x = cp[0]; ant.y = cp[1]; ant.z = cp[2];

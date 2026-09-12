@@ -1,5 +1,5 @@
 import { groundY } from '../world/index.js';
-import { nodeInReach, takeFromNode, countLabel, KIND_LABEL, resourceNodes } from './resources.js';
+import { nodeInReach, takeFromNode, countLabel, KIND_LABEL, nodeById } from './resources.js';
 
 /* ==========================================================================
    The harvest loop (#29): find something, spend time taking it, carry it
@@ -62,13 +62,8 @@ export function createHarvest() {
    */
   function target(ant, bodyR) {
     if (state.activeId !== null) {
-      const nodes = resourceNodes();
-      for (let i = 0; i < nodes.length; i++) {
-        const n = nodes[i];
-        if (n.id !== state.activeId) continue;
-        if (n.amount > 0 && Math.hypot(n.x - ant.x, n.z - ant.z) <= n.r + bodyR * 0.6) return n;
-        break;
-      }
+      const n = nodeById(state.activeId);
+      if (n && n.amount > 0 && Math.hypot(n.x - ant.x, n.z - ant.z) <= n.r + bodyR * 0.6) return n;
     }
     return nodeInReach(ant.x, ant.z, bodyR);
   }
