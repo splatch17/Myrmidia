@@ -1,15 +1,13 @@
 import * as world from '../world/index.js';
 import { antState } from '../core/antState.js';
-import { clamp } from '../core/noise.js';
 import { groundY, distanceToWater } from '../world/index.js';
 import { PLAYER_AVATAR, collideRadius } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
-import { makeAnt, makeLegState, updateLegs } from './legs.js';
 import { buildAntMesh } from './antMesh.js';
 import { createInput } from './input.js';
 import { createCameraRig } from './camera.js';
-import { computeWishDir, stepAnt } from './movement.js';
-import { stepClimb, grassBlades } from './climb.js';
+import { grassBlades } from './climb.js';
+import { spawnEntity, updateEntity, driveFromInput, removeEntity } from './entities.js';
 import { deepestPenetration, resolveDecorCollision, mushroomRadii } from './decorCollision.js';
 import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
 import { createInteraction } from './interaction.js';
@@ -99,8 +97,12 @@ const BROOD_ROOM_CAPACITY = world.MAX_BROOD;
 const FOUND_FADE_SECONDS = 6.0;
 
 export function createPlayerController({ scene, camera, domElement, profile = PLAYER_AVATAR }) {
-  const ant = makeAnt(SURFACE_START[0], 0, SURFACE_START[1], profile);
-  ant.yaw = SPAWN_YAW;
+  /* #36: the player is `entities[0]` — the one entity in the (currently
+     one-long) list that is `controlled: true` — not a hand-built record next
+     to the entity machinery. A fixed string id ('player') rather than an
+     auto-incremented one keeps it stable/greppable in the spatial index
+     regardless of how many unpiloted entities spawn or despawn around it. */
+  const ant = spawnEntity(profile, SURFACE_START[0], 0, SURFACE_START[1], { id: 'player', controlled: true, yaw: SPAWN_YAW });
   ant.y = groundY(ant.x, ant.z);
   // she is 2.2x a worker: a spawn point that was clear for a worker can still
   // overlap a pebble or a stem for her. Two resolves settle it (see
@@ -110,7 +112,6 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   resolveDecorCollision(ant, 0);
   ant.y = groundY(ant.x, ant.z);
 
-  const legState = makeLegState(profile);
   const { group, updatePose } = buildAntMesh(profile);
   scene.add(group);
   /* The outline is built from the finished mesh rather than inside
@@ -226,17 +227,15 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     if (input.consumeHelp()) hud.toggleControls();
     const act = interaction.update(ant, input.consumeInteract(), input.isInteractHeld(), dt);
 
-    if (ant.climb) {
-      // climbing: forward/back walks the ant along the blade/trunk's own
-      // curve; left/right is unused (see climb.js/the old prototype)
-      stepClimb(ant, clamp(intent.iy, -1, 1), dt);
-    } else {
-      const wish = computeWishDir(intent, cameraRig.eye, cameraRig.aim);
-      stepAnt(ant, wish, intent, dt);
-    }
-
-    updateLegs(ant, legState, dt);
-    updatePose(ant, legState, elapsed);
+    // #36: movement/legs go through the SAME updateEntity() an unpiloted
+    // worker uses (player/entities.js) — this file's only job is to build
+    // the `drive` (real input + this frame's camera) a controlled entity
+    // reads instead of a `goal`. Climbing (forward/back along a blade/
+    // trunk's own curve; left/right unused, see climb.js) is still routed
+    // through the same call: updateEntity() branches on `ant.climb`, not on
+    // a second call site here.
+    updateEntity(ant, dt, driveFromInput(intent, cameraRig.eye, cameraRig.aim));
+    updatePose(ant, ant.legState, elapsed);
     group.position.set(0, 0, 0); // parts are already placed in world space (see antMesh.js)
 
     antState.position.set(ant.x, ant.y, ant.z);
@@ -353,6 +352,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     hud.dispose();
     marker.dispose();
     props.dispose();
+    removeEntity(ant); // #36: the player is an entry in the shared spatial index too
   }
 
   return { ant, group, update, dispose };

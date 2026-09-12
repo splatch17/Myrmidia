@@ -47,11 +47,30 @@ const outlineMaterial = new THREE.MeshBasicMaterial({
 outlineMaterial.onBeforeCompile = (shader) => {
   shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', /* glsl */`
     #include <begin_vertex>
-    float oDist = -(modelViewMatrix * vec4(position, 1.0)).z;
+    // #36: an instanced ant-part pool's object matrix/matrixWorld is the
+    // identity (the pool sits at the scene root) — the actual per-part
+    // basis (position AND orientation, since a limb segment is rotated, not
+    // just translated) lives in the instanceMatrix attribute instead, right
+    // where the old per-Mesh code kept it in that mesh's own matrix/
+    // matrixWorld. Folding it in by hand here (Three's own project_vertex
+    // chunk, which does this automatically, runs AFTER this chunk) keeps
+    // oDist — and so the push amount, which depends on true camera distance
+    // — correct per instance instead of measuring every instance from the
+    // pool's own origin.
+    #ifdef USE_INSTANCING
+      vec4 oLocal = instanceMatrix * vec4(position, 1.0);
+    #else
+      vec4 oLocal = vec4(position, 1.0);
+    #endif
+    float oDist = -(modelViewMatrix * oLocal).z;
     transformed += normal * clamp(0.0017 * oDist, 0.06, 0.16);
   `);
 };
 outlineMaterial.customProgramCacheKey = () => 'inverted-hull';
+// USE_INSTANCING is one of the parameters Three folds into a material's
+// program-cache key by itself (alongside customProgramCacheKey()), so the
+// instanced and non-instanced branches above compile as two distinct
+// programs automatically — this material does not have to key on it itself.
 
 /** 0 = deep in the nest, 1 = out on the lawn. Called from main.js's
  *  applyEnvironment(), so the outline changes zone with the fog rather than
@@ -68,13 +87,49 @@ export function setOutlineZone(outside) {
  * which is what makes this work at all on an IK creature: antMesh.js rewrites
  * those buffers every frame, and a cloned geometry would leave the outline
  * standing in the ant's T-pose while the ant walked away from it.
+ *
+ * #36 — INSTANCED SOURCES (player/antMesh.js's shared body-part pools). A
+ * THREE.InstancedMesh is still `isMesh`, so the loop below already finds it;
+ * what it must NOT do is wrap it in a plain `THREE.Mesh` shell the way it
+ * would a single creature's part, because a plain Mesh ignores
+ * `instanceMatrix` entirely and would draw exactly one shell, at the
+ * geometry's own origin, no matter how many ants share that pool.
+ *
+ * The fix mirrors the pool itself instead of copying it: the shell is its
+ * own InstancedMesh, but its `instanceMatrix` is REASSIGNED to literally be
+ * the body pool's own attribute object (not a copy) — antMesh.js writes an
+ * ant's pose into the body pool exactly once per ant per frame; the shell
+ * reads that same write back for free, with no second write of its own,
+ * exactly the same "share the buffer, not the values" trick the header above
+ * already uses for the single-creature case. `count` is a live getter onto
+ * the body mesh rather than a number copied when the hull was built, so a
+ * pool that goes from "1 ant posed" to "6 ants posed" between two calls (a
+ * worker spawned after the hull already exists) still outlines all of them
+ * without this function having to be told to look again.
+ *
+ * A source mesh already wrapped (this can run again on the very same pool —
+ * antMesh.js returns the same persistent group from every call, so a second
+ * caller wrapping it must not produce a second, redundant shell pool) is
+ * skipped via `wrapped`, a WeakSet keyed on the source object.
  */
+const wrapped = new WeakSet();
+
 export function buildOutlineHull(root) {
   const hull = new THREE.Group();
   hull.name = 'outline-hull';
   root.traverse((o) => {
     if (!o.isMesh || !o.geometry) return;
-    const shell = new THREE.Mesh(o.geometry, outlineMaterial);
+    if (wrapped.has(o)) return;
+    wrapped.add(o);
+
+    let shell;
+    if (o.isInstancedMesh) {
+      shell = new THREE.InstancedMesh(o.geometry, outlineMaterial, o.instanceMatrix.count);
+      shell.instanceMatrix = o.instanceMatrix; // see the doc above: shared, not copied
+      Object.defineProperty(shell, 'count', { get: () => o.count });
+    } else {
+      shell = new THREE.Mesh(o.geometry, outlineMaterial);
+    }
     shell.castShadow = false;
     shell.receiveShadow = false;
     shell.frustumCulled = false;   // the source meshes are placed in world

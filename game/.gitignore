@@ -1,3 +1,11 @@
 node_modules/
-dist/
+# `dist/` N'EST PLUS IGNORÉ (tour 12). Il l'était, alors que 6 de ses fichiers
+# étaient suivis (force-ajoutés autrefois) et qu'AUCUN n'était le bundle JS —
+# dont le nom porte un hash qui change à chaque build. Résultat : la branche
+# publiait un `index.html` chargeant un fichier absent, c'est-à-dire une page
+# blanche au bout du lien de test du README, et ce depuis le tour 10. Deux
+# tours de suite, le contournement à la main a échoué. Le bundle est donc
+# publié comme le reste. Coût assumé : ~580 Ko de JS dans l'historique à
+# chaque build. Si ça devient gênant, la vraie sortie est une action CI qui
+# construit et publie — pas de re-ignorer le dossier.
 _verify-shots/
