@@ -38,6 +38,17 @@ import { addLocalLight, applyNestShading, setNestPit } from './lighting.js';
 /* ---- shape of a founding chamber ---------------------------------------- */
 
 const SHAFT_R = 4.2;      // a founding queen is ~2.2x a worker: 8 units across
+// #58's foundedNestEntry().r: how much of SHAFT_R is safely walkable once the
+// crater wall's own wobble (wobbleAt, up to +-0.35 around a 0.84 mean) is
+// allowed for. Deliberately NOT containUnderground()'s 0.82/-1.2 corridor
+// fudge: that fudge is calibrated for the much wider DIG_GALLERY_R=7.5 (it
+// would leave only 2.24 of usable radius here, LESS than the founding
+// queen's own 3.3 collision radius — the shaft was sized to barely clear her
+// at the raw 4.2, see the DIG_GALLERY_R comment below, so shrinking it that
+// hard would make the very entrance she needs to fit through narrower than
+// she is). A flat, small subtraction instead: 4.2 - 0.6 = 3.6, still 0.3
+// above her collision radius.
+const SHAFT_WALL_MARGIN = 0.6;
 const SHAFT_LEN = 15;     // along the axis, from the crater rim down
 const ROOM_R = 14;
 const ROOM_LEN = 8;       // half-extent of the chamber *along* the axis, i.e.
@@ -79,8 +90,23 @@ const GLOW_LIGHT = [1.95, 1.20, 0.52];         // ambiance §2c plan 6
    long enough that growth reads as a real tunnel over many advanceDig()
    calls, short enough that a mouth chosen by canFoundAt's own slope/water
    margins is unlikely to have its far end break the surface (MAX_SLOPE=0.62
-   over 48 units is a 30-unit worst-case rise — not checked against the
-   terrain here, an item for visual review). */
+   over 48 units is a 30-unit worst-case rise).
+
+   THAT LAST CLAIM WAS NEVER ACTUALLY MEASURED (#57's own admission, above)
+   AND, MEASURED FOR #58, IT IS WRONG. A scan of every legal canFoundAt()
+   point on the authored map (10-unit grid, LAWN_BOUNDS) x all 4 siteAngle()
+   directions x the real terrain.groundY() along each dug length: 622 of
+   2504 site/direction combinations (~25%) have the gallery's ceiling poke
+   above the real ground SOMEWHERE along their 48 units, 27 of them already
+   at the mouth (u=0). Worst case found: founding at (140, 230), direction
+   siteAngle(2) (south-west, toward the river), clearance -21.3 units by
+   u=48 — canFoundAt() only samples slope/water AT the chamber centre, never
+   along any of the 4 fixed directions a chantier will later dig, so a site
+   that is legally flat and dry can still aim straight at a riverbank or a
+   slope canFoundAt() never looked at. Left unfixed on purpose — canFoundAt()
+   deciding whether a *direction*, not just a *point*, is diggable is a
+   bigger change than #58's remit (the floor-continuity bug) and wants its
+   own ticket; see the session report for the measurement script. */
 export const DIG_SITES_MAX = 4;
 export const DIG_GALLERY_LEN = 48;
 export const DIG_GALLERY_R = 7.5;
@@ -527,7 +553,22 @@ function buildGalleryGeometry(site, dugLen) {
   // this file ever hands it (see the session report for the derivation).
   const side = [dir3[2], 0, -dir3[0]];
   const up = [0, 1, 0];
-  const floorY = site.mouth.y - site.r * 0.85;
+  // #58: site.mouth.y IS the chamber floor (sitePlan() sets it to
+  // nest.floorY, and contract §7 already calls `mouth` "a point of the
+  // chamber wall, at floor level") — so the gallery's own flat floor has to
+  // land exactly there, not below it. The circle used to be centred AT
+  // mouth.y and then clamped a further site.r*0.85 DOWN, landing the real
+  // floor 6.375 units under the chamber floor it was supposed to open onto
+  // (a queen falling through her own doorway, never seen because nothing
+  // ever walked through it before this round). Centring the tube ABOVE
+  // mouth.y by that same 0.85*r instead reproduces the exact silhouette the
+  // old (buggy) code was going for — a round tube with a small flat lip at
+  // the very bottom, the same idiom world/underground.js's riseAt()/
+  // wallPoint() use for the main gallery — except the lip now sits ON
+  // mouth.y, which is what makes the seam continuous (see
+  // foundedNestFloorY() and its continuity test in test-logic.mjs).
+  const floorY = site.mouth.y;
+  const centerY = floorY + site.r * 0.85;
   const ANG = 16;
 
   const M = new MeshBuilder();
@@ -541,7 +582,7 @@ function buildGalleryGeometry(site, dugLen) {
       const wob = wobbleAt(th, uu, site.seed);
       const r = site.r * wob;
       const px = cx + (side[0] * Math.cos(th) + up[0] * Math.sin(th)) * r;
-      const py = site.mouth.y + (side[1] * Math.cos(th) + up[1] * Math.sin(th)) * r;
+      const py = centerY + (side[1] * Math.cos(th) + up[1] * Math.sin(th)) * r;
       const pz = cz + (side[2] * Math.cos(th) + up[2] * Math.sin(th)) * r;
       // freshly dug, same earth as buildShell — this is more of the same hole
       const c = mixColor(C_WALL_B, C_WALL_A, 0.5).lerp(C_SOIL_A, 0.18).multiplyScalar(0.88);
@@ -635,6 +676,81 @@ export function containFoundedNest(x, z) {
   }
   const rc = clamp(rho, 0, reach);
   return [C.x + Math.cos(theta) * rc, C.z + Math.sin(theta) * rc];
+}
+
+/* ---- entering the founded nest (#58, contract §8a) ----------------------- */
+
+/**
+ * The descent: a straight segment from the crater rim (`top`, the axis at
+ * u=0 — literally `nest.axis.origin`) down to the chamber floor (`bottom`,
+ * the point where that same axis crosses `nest.floorY`). Not a vertical
+ * drop: AXIS_TILT keeps the shaft off plumb on purpose (buildShell's own
+ * comment — "a plumb-vertical hole reads as a drill core"), so `top` and
+ * `bottom` sit several units apart horizontally. `r` is SHAFT_R with its
+ * wall margin already removed (see SHAFT_WALL_MARGIN above); the caller
+ * applies no further correction and never recomputes SHAFT_R/AXIS_TILT
+ * itself, per contract.
+ *
+ * `null` while nothing is founded, exactly like nestOrigin().
+ */
+export function foundedNestEntry() {
+  if (!nest) return null;
+  const { origin, dir } = nest.axis;
+  const floorY = nest.floorY;
+  // dir[1] is always strictly negative (buildShell's dir = nrm3([.., -1,
+  // ..]) — AXIS_TILT tilts the shaft off vertical, it never lays it flat),
+  // so this never divides by zero or picks the wrong root.
+  const uBottom = (floorY - origin[1]) / dir[1];
+  return {
+    top: { x: origin[0], y: origin[1], z: origin[2] },
+    bottom: {
+      x: origin[0] + dir[0] * uBottom,
+      y: floorY,
+      z: origin[2] + dir[2] * uBottom,
+    },
+    r: Math.max(SHAFT_R - SHAFT_WALL_MARGIN, 0.5),
+  };
+}
+
+/**
+ * The one true floor height inside a founded nest — chamber and every dug
+ * gallery — the underground twin of terrain.js's groundY(). Every floor this
+ * file builds is flat, and they are all, by construction, the SAME flat
+ * plane: buildShell's own floorY (== nest.floorY == nest.chamber.y) and
+ * every site's (buildGalleryGeometry's, fixed at #58 to sit exactly on
+ * `site.mouth.y`, which sitePlan() sets to nest.floorY for every chantier —
+ * see buildGalleryGeometry's own comment for why the mesh used to disagree
+ * by 6.375 units and no longer does). So there is, today, exactly one number
+ * to give back whichever region (x, z) falls in. This still looks the
+ * region up (mirroring containFoundedNest's own site-then-chamber order)
+ * rather than shortcut straight to `return nest.floorY` — a future
+ * non-flat floor (a ramp, a gallery sloping toward its own working face)
+ * would then only have to change the branch it lands in, not every caller
+ * that had assumed one global constant.
+ *
+ * Protocol (contract §8a): the caller clamps with containFoundedNest()
+ * FIRST. This function does not itself decide "off limits" — asked about a
+ * point beyond a working face or outside the chamber, it still answers with
+ * the floor of whichever dug region is nearest, exactly as groundY() does
+ * for any (x, z) outside the lawn; refusing that would just move the
+ * "what if I'm asked about a point I've never dug" question onto every
+ * caller instead of answering it once, here.
+ *
+ * `null` while nothing is founded; a number every other time.
+ */
+export function foundedNestFloorY(x, z) {
+  if (!nest) return null;
+  for (const s of sites) {
+    if (!s) continue;
+    const relX = x - s.mouth.x, relZ = z - s.mouth.z;
+    const u = relX * s.dir.x + relZ * s.dir.z;
+    const dugLen = s.progress * s.length;
+    if (u <= -0.5 || u >= dugLen + 1) continue;
+    const lx = relX * -s.dir.z + relZ * s.dir.x;
+    if (Math.abs(lx) >= s.r * 0.82 - 1.2 + 3) continue;
+    return s.mouth.y;
+  }
+  return nest.floorY;
 }
 
 /** Test seam only: forget the founded nest so a harness can dig again. Not

@@ -46,6 +46,9 @@ const forage = await import('../src/player/forage.js');
 // player/dig.js (#57) is pure by the same discipline (see its header):
 // direct import, no loader hook needed.
 const dig = await import('../src/player/dig.js');
+// player/nestEntry.js (#58) is pure by the same discipline (see its header):
+// direct import, no loader hook needed.
+const nestEntry = await import('../src/player/nestEntry.js');
 // player/antMesh.js (#36's rendering half) and core/outline.js pull in
 // THREE.js core objects (BufferGeometry, InstancedMesh, Matrix4, Color) —
 // all pure CPU data structures, no canvas/WebGL needed, so they run under
@@ -239,6 +242,100 @@ console.log('dig sites growing out of the founded chamber (#57, contract §7):')
       `walkable reach ${partialReach.toFixed(2)}, expected ~${(s3.length * 0.3).toFixed(2)}`);
     check('...and specifically does NOT let a body walk anywhere near the full length',
       partialReach < s3.length * 0.9, `walkable reach ${partialReach.toFixed(2)} of length ${s3.length}`);
+  }
+
+  founding._resetFounding();
+}
+
+console.log('\nentering the founded nest (#58, contract §8a):');
+{
+  check('foundedNestEntry() is null before anything is founded', founding.foundedNestEntry() === null);
+  check('foundedNestFloorY() is null before anything is founded', founding.foundedNestFloorY(0, 0) === null);
+
+  // Same site-scan idiom as the two blocks above.
+  let site = null;
+  for (let x = -180; x <= 180 && !site; x += 20) {
+    for (let z = 60; z <= 230 && !site; z += 20) {
+      if (founding.canFoundAt(x, z).ok) site = { x, z };
+    }
+  }
+  check('a legal founding site exists (#58 block)', !!site);
+
+  if (site) {
+    founding.foundNest(site.x, site.z);
+    const nest = founding.getFoundedNest();
+    const queenR = avatar.collideRadius(avatar.FOUNDING_QUEEN);
+
+    const entry = founding.foundedNestEntry();
+    check('foundedNestEntry() returns an entry once a nest is founded', !!entry);
+
+    check('entry.top is the shaft axis at the crater rim (nest.mouth, not recomputed)',
+      entry.top.x === nest.mouth.x && entry.top.y === nest.mouth.y && entry.top.z === nest.mouth.z,
+      JSON.stringify({ top: entry.top, mouth: nest.mouth }));
+    check('entry.bottom sits exactly on the chamber floor',
+      entry.bottom.y === nest.floorY, `bottom.y=${entry.bottom.y} nest.floorY=${nest.floorY}`);
+
+    const horiz = Math.hypot(entry.top.x - entry.bottom.x, entry.top.z - entry.bottom.z);
+    check('the tilted shaft displaces top from bottom horizontally — descending is not a vertical drop',
+      horiz > 1, `horizontal offset ${horiz.toFixed(2)}`);
+
+    check('entry.r has its wall margin already removed (less than raw SHAFT_R)', entry.r > 0 && entry.r < 4.2, entry.r);
+    check('...and still clears the founding queen', entry.r > queenR, `entry.r=${entry.r.toFixed(2)} queenR=${queenR.toFixed(2)}`);
+
+    // The constant-recopy trap named in the task: this must read
+    // nest.floorY/site.mouth.y (what the world actually published for THIS
+    // nest), never a hard-coded number — a literal here would silently pass
+    // today and silently go stale the next time a founding-chamber constant
+    // moves.
+    check('foundedNestFloorY at the chamber centre equals the world-published nest.floorY, not a literal',
+      founding.foundedNestFloorY(nest.chamber.x, nest.chamber.z) === nest.floorY,
+      `${founding.foundedNestFloorY(nest.chamber.x, nest.chamber.z)} vs ${nest.floorY}`);
+
+    const s = founding.openDigSite(0).site;
+    founding.advanceDig(s.id, 1.0);
+    const midU = s.length * 0.5;
+    const midX = s.mouth.x + s.dir.x * midU, midZ = s.mouth.z + s.dir.z * midU;
+    check("a fully-dug gallery's floor is the SAME published height as the chamber's — no re-derived literal, no decrochement",
+      founding.foundedNestFloorY(midX, midZ) === s.mouth.y && s.mouth.y === nest.floorY,
+      `gallery floor ${founding.foundedNestFloorY(midX, midZ)} vs site.mouth.y ${s.mouth.y} vs nest.floorY ${nest.floorY}`);
+
+    // Continuity, contract §8a's own hard requirement, walked end to end:
+    // shaft bottom -> chamber centre -> the fully-dug gallery's working
+    // face, ~1 unit at a time, containFoundedNest() first as the protocol
+    // demands. This is a pure-logic probe (no mesh is built or sampled here,
+    // this script never touches a GPU) so it cannot, by itself, catch a
+    // regression confined to buildGalleryGeometry's vertex math — it catches
+    // foundedNestFloorY() disagreeing with what site.mouth.y/nest.floorY
+    // actually publish. Verified by hand (see the session report) that
+    // making foundedNestFloorY's per-site branch return
+    // `s.mouth.y - s.r * 0.85` — i.e. hard-coding the exact offset the old,
+    // buggy buildGalleryGeometry used to bake into the mesh — fails this
+    // check with maxStep = 6.375, exactly the decrochement the contract
+    // names. The mesh side of the fix (buildGalleryGeometry itself) was
+    // checked separately, by hand, the same way and is NOT covered by this
+    // test file — see the session report.
+    const faceX = s.mouth.x + s.dir.x * s.length, faceZ = s.mouth.z + s.dir.z * s.length;
+    const waypoints = [
+      [entry.bottom.x, entry.bottom.z],
+      [nest.chamber.x, nest.chamber.z],
+      [faceX, faceZ],
+    ];
+    let prevY = null, maxStep = 0, steps = 0;
+    for (let seg = 0; seg < waypoints.length - 1; seg++) {
+      const [x0, z0] = waypoints[seg], [x1, z1] = waypoints[seg + 1];
+      const dist = Math.hypot(x1 - x0, z1 - z0);
+      const n = Math.max(1, Math.round(dist));
+      for (let i = 0; i <= n; i++) {
+        const t = i / n;
+        const px = x0 + (x1 - x0) * t, pz = z0 + (z1 - z0) * t;
+        const [cx, cz] = founding.containFoundedNest(px, pz);
+        const y = founding.foundedNestFloorY(cx, cz);
+        if (prevY !== null) { maxStep = Math.max(maxStep, Math.abs(y - prevY)); steps++; }
+        prevY = y;
+      }
+    }
+    check(`the floor is continuous (<=0.5 unit per ~1-unit step) from the shaft bottom through the chamber to the gallery face (${steps} steps checked)`,
+      maxStep <= 0.5, `max step ${maxStep.toFixed(3)}`);
   }
 
   founding._resetFounding();
@@ -1065,6 +1162,234 @@ console.log('\nthe digger state machine (player/dig.js, #57), against a fake ctx
     // that test's comment.
     check(`DIGGER.digSpeed against the REAL world.DIG_GALLERY_LEN: a full gallery takes ${expected}s`,
       Math.abs(ticks / 30 - expected) < (1 / 30) * 3, `${(ticks / 30).toFixed(2)}s vs expected ${expected}s`);
+  }
+}
+
+console.log('\nthe founded-nest entry state machine (player/nestEntry.js, #58), against a fake ctx:');
+{
+  const { NEST_ENTRY_STATE, createNestEntryState, update, DEFAULT_ARM_MARGIN_FACTOR } = nestEntry;
+
+  /** A fake shaft, DELIBERATELY not the real nest's ~21-unit one (Atta's own
+   *  measurement, contract §8a) — same "incontournable" idiom as dig.js's
+   *  own test 1 (LEN1=20 against the real DIG_GALLERY_LEN=48): a caller that
+   *  hard-coded ~21 or ~4.2s anywhere in the duration math would fail the
+   *  timing check below, which only THIS fixture's own PATH_LEN can pass. */
+  const ENTRY = Object.freeze({ top: { x: 0, y: 50, z: 0 }, bottom: { x: 30, y: 0, z: 40 }, r: 3 });
+  const PATH_LEN = Math.hypot(
+    ENTRY.bottom.x - ENTRY.top.x, ENTRY.bottom.y - ENTRY.top.y, ENTRY.bottom.z - ENTRY.top.z);
+  check("fixture sanity: this fake shaft is not the real nest's ~21-unit one",
+    Math.abs(PATH_LEN - 21) > 5, PATH_LEN.toFixed(2));
+
+  // A fake chamber footprint around `bottom`, and a lawn height DELIBERATELY
+  // different from ENTRY.top.y (50) — see test 6's surfaceY check below.
+  const CH = { x: ENTRY.bottom.x, z: ENTRY.bottom.z, r: 25 };
+  const FLOOR_Y = ENTRY.bottom.y; // same convention as the real nest (contract §8a)
+  const LAWN_Y = 47;
+
+  function fakeContain(x, z) {
+    const dx = x - CH.x, dz = z - CH.z;
+    const d = Math.hypot(dx, dz);
+    if (d <= CH.r || d < 1e-9) return [x, z];
+    return [CH.x + (dx / d) * CH.r, CH.z + (dz / d) * CH.r];
+  }
+  const fakeFloorAt = () => FLOOR_Y;
+  const fakeSurfaceY = () => LAWN_Y;
+  const ctxAt = (x, z, speed, bodyR) => (
+    { x, z, entry: () => ENTRY, contain: fakeContain, floorAt: fakeFloorAt, surfaceY: fakeSurfaceY, descentSpeed: speed, bodyR });
+
+  const QUEEN_R = avatar.collideRadius(avatar.FOUNDING_QUEEN);
+  const SPEED = 5, DT = 1 / 30;
+
+  /* ---- 1. a fresh state is OUTSIDE; no founded nest is a permanent no-op,
+     even recovering cleanly from mid-transit if the nest vanishes under her
+     (a test harness's _resetFounding — never happens in production, but
+     "recover, don't corrupt" is cheap insurance). */
+  {
+    const es = createNestEntryState();
+    check('a fresh nest-entry state starts OUTSIDE, armed',
+      es.state === NEST_ENTRY_STATE.OUTSIDE && es.armed === true);
+
+    const noNestCtx = { x: 0, z: 0, entry: () => null };
+    const res = update(es, noNestCtx, DT);
+    check('no founded nest: OUTSIDE, no position override, no crash',
+      res.state === NEST_ENTRY_STATE.OUTSIDE && res.pos === null);
+
+    es.state = NEST_ENTRY_STATE.DESCENDING; es.t = 0.4;
+    const res2 = update(es, noNestCtx, DT);
+    check('a nest that vanishes mid-transit recovers to OUTSIDE rather than getting stuck',
+      res2.state === NEST_ENTRY_STATE.OUTSIDE && res2.pos === null && es.state === NEST_ENTRY_STATE.OUTSIDE);
+  }
+
+  /* ---- 2. far from the shaft: no trigger, no crash ---------------------- */
+  {
+    const es = createNestEntryState();
+    const res = update(es, ctxAt(500, 500, SPEED, QUEEN_R), DT);
+    check('far from the shaft: stays OUTSIDE, no position override',
+      res.state === NEST_ENTRY_STATE.OUTSIDE && res.pos === null);
+  }
+
+  /* ---- 3. standing over the hole triggers DESCENDING — NO KEY IS EVER READ
+     by this module (contract's own requirement), and this ctx has no key to
+     read in the first place. */
+  {
+    const es = createNestEntryState();
+    const res = update(es, ctxAt(ENTRY.top.x, ENTRY.top.z, SPEED, QUEEN_R), DT);
+    check('standing over entry.top triggers DESCENDING on its own',
+      res.state === NEST_ENTRY_STATE.DESCENDING && !!res.pos);
+    check('the very first descending sample has already moved off entry.top toward entry.bottom',
+      res.pos.y < ENTRY.top.y && res.pos.y > ENTRY.bottom.y);
+  }
+
+  /* ---- 4. the descent takes |top-bottom|/descentSpeed seconds — THIS
+     fixture's own numbers, not a copied real-nest ~21/~4.2 (see PATH_LEN's
+     own sanity check above) — arrives EXACTLY at bottom, never overshoots,
+     and never bounces back to OUTSIDE mid-transit. */
+  {
+    const es = createNestEntryState();
+    let res = update(es, ctxAt(ENTRY.top.x, ENTRY.top.z, SPEED, QUEEN_R), DT);
+    let ticks = 1, maxStep = 0, prevPos = res.pos, bounced = false;
+    while (res.state === NEST_ENTRY_STATE.DESCENDING && ticks < 100000) {
+      res = update(es, ctxAt(res.pos.x, res.pos.z, SPEED, QUEEN_R), DT);
+      maxStep = Math.max(maxStep, Math.hypot(res.pos.x - prevPos.x, res.pos.y - prevPos.y, res.pos.z - prevPos.z));
+      prevPos = res.pos;
+      ticks++;
+      if (res.state === NEST_ENTRY_STATE.OUTSIDE) bounced = true;
+    }
+    check('the descent never bounces back to OUTSIDE mid-transit', !bounced);
+    check('the descent ends in INSIDE, exactly at entry.bottom (no overshoot)',
+      res.state === NEST_ENTRY_STATE.INSIDE
+      && Math.abs(res.pos.x - ENTRY.bottom.x) < 1e-6
+      && Math.abs(res.pos.y - ENTRY.bottom.y) < 1e-6
+      && Math.abs(res.pos.z - ENTRY.bottom.z) < 1e-6,
+      JSON.stringify(res.pos));
+    check('each frame of the descent advances by a constant speed*dt along the segment (no jump, no stall)',
+      Math.abs(maxStep - SPEED * DT) < 1e-9, maxStep);
+    const expectedSeconds = PATH_LEN / SPEED, actualSeconds = ticks * DT;
+    check(`the descent takes |top-bottom|/descentSpeed = ${expectedSeconds.toFixed(2)}s off THIS fixture's own length, not a copied real-nest duration`,
+      Math.abs(actualSeconds - expectedSeconds) < DT * 3, `expected ~${expectedSeconds.toFixed(2)}s, got ${actualSeconds.toFixed(2)}s`);
+  }
+
+  /* ---- 5. HYSTERESIS at the bottom: arriving does not immediately
+     re-trigger the return trip (the exact oscillation the ticket calls out
+     by name — she arrives at distance 0 from her own ascent trigger), and
+     walking clear of the band re-arms it for a real return later. */
+  {
+    const es = createNestEntryState();
+    let res = update(es, ctxAt(ENTRY.top.x, ENTRY.top.z, SPEED, QUEEN_R), DT);
+    while (res.state === NEST_ENTRY_STATE.DESCENDING) res = update(es, ctxAt(res.pos.x, res.pos.z, SPEED, QUEEN_R), DT);
+    check('arrival disarms the return trigger', es.armed === false && res.state === NEST_ENTRY_STATE.INSIDE);
+
+    let bounced = false;
+    for (let i = 0; i < 200; i++) {
+      res = update(es, ctxAt(ENTRY.bottom.x, ENTRY.bottom.z, SPEED, QUEEN_R), DT);
+      if (res.state !== NEST_ENTRY_STATE.INSIDE) { bounced = true; break; }
+    }
+    check('standing at entry.bottom for 200 more frames never bounces back into ASCENDING', !bounced);
+
+    const armR = ENTRY.r + QUEEN_R * DEFAULT_ARM_MARGIN_FACTOR;
+    res = update(es, ctxAt(ENTRY.bottom.x + armR + 1, ENTRY.bottom.z, SPEED, QUEEN_R), DT);
+    check('walking clear of the hysteresis band re-arms the trigger (still INSIDE)',
+      es.armed === true && res.state === NEST_ENTRY_STATE.INSIDE);
+
+    res = update(es, ctxAt(ENTRY.bottom.x, ENTRY.bottom.z, SPEED, QUEEN_R), DT);
+    check('...and walking back onto entry.bottom now DOES trigger ASCENDING',
+      res.state === NEST_ENTRY_STATE.ASCENDING);
+  }
+
+  /* ---- 6. the ascent ends in OUTSIDE, blended onto surfaceY() — the
+     crater-mound seam nestEntry.js's own header documents — rather than
+     entry.top.y (this fixture's own LAWN_Y=47 is deliberately far from
+     top.y=50, so a caller that forgot to blend would fail this loudly). */
+  {
+    const es = createNestEntryState();
+    es.state = NEST_ENTRY_STATE.ASCENDING; es.t = 1; es.armed = false;
+    let res = null, ticks = 0;
+    do {
+      const at = res ? res.pos : ENTRY.bottom;
+      res = update(es, ctxAt(at.x, at.z, SPEED, QUEEN_R), DT);
+      ticks++;
+    } while (res.state === NEST_ENTRY_STATE.ASCENDING && ticks < 100000);
+    check('the ascent ends in OUTSIDE', res.state === NEST_ENTRY_STATE.OUTSIDE);
+    check("...at entry.top's own (x, z)",
+      Math.abs(res.pos.x - ENTRY.top.x) < 1e-6 && Math.abs(res.pos.z - ENTRY.top.z) < 1e-6);
+    check('...but blended onto surfaceY(), NOT entry.top.y (the crater-mound seam)',
+      Math.abs(res.pos.y - LAWN_Y) < 1e-9 && Math.abs(res.pos.y - ENTRY.top.y) > 1,
+      `pos.y=${res.pos.y} surfaceY=${LAWN_Y} top.y=${ENTRY.top.y}`);
+    check("arriving disarms the fall-in trigger, symmetric to the descent's own arrival", es.armed === false);
+  }
+
+  /* ---- 7. HYSTERESIS at the top too: a full round trip with no
+     oscillation on either end. */
+  {
+    const es = createNestEntryState();
+    es.state = NEST_ENTRY_STATE.OUTSIDE; es.armed = false; es.t = 0;
+    let bounced = false;
+    for (let i = 0; i < 200; i++) {
+      const res = update(es, ctxAt(ENTRY.top.x, ENTRY.top.z, SPEED, QUEEN_R), DT);
+      if (res.state !== NEST_ENTRY_STATE.OUTSIDE) { bounced = true; break; }
+    }
+    check('standing at entry.top while disarmed never re-triggers DESCENDING on its own', !bounced);
+
+    const armR = ENTRY.r + QUEEN_R * DEFAULT_ARM_MARGIN_FACTOR;
+    update(es, ctxAt(ENTRY.top.x + armR + 1, ENTRY.top.z, SPEED, QUEEN_R), DT);
+    check('walking clear re-arms it', es.armed === true);
+    const res = update(es, ctxAt(ENTRY.top.x, ENTRY.top.z, SPEED, QUEEN_R), DT);
+    check('...and walking back onto entry.top now DOES trigger DESCENDING again — a full round trip, no oscillation either way',
+      res.state === NEST_ENTRY_STATE.DESCENDING);
+  }
+
+  /* ---- 8. a non-positive speed finishes the transit in one frame instead
+     of latching the controller with no lateral freedom forever (see the
+     header on why that failure mode is worse here than in dig.js). */
+  {
+    const es = createNestEntryState();
+    const res = update(es, ctxAt(ENTRY.top.x, ENTRY.top.z, 0, QUEEN_R), DT);
+    check('descentSpeed<=0 still finishes the fall in a single frame (never freezes the controller)',
+      res.state === NEST_ENTRY_STATE.INSIDE, res.state);
+  }
+
+  /* ---- 9. NO SIZE CONSTANT IS COPIED: the hysteresis band scales with
+     bodyR, exactly r + bodyR*DEFAULT_ARM_MARGIN_FACTOR — this file's own
+     version of piège #6, mirror of forage.js's/dig.js's own test 5. */
+  {
+    for (const bodyR of [avatar.collideRadius(avatar.WORKER), avatar.collideRadius(avatar.FOUNDING_QUEEN)]) {
+      const armR = ENTRY.r + bodyR * DEFAULT_ARM_MARGIN_FACTOR;
+      const es = createNestEntryState();
+      es.state = NEST_ENTRY_STATE.OUTSIDE; es.armed = false;
+      update(es, ctxAt(ENTRY.top.x + armR - 0.05, ENTRY.top.z, SPEED, bodyR), DT);
+      check(`bodyR=${bodyR.toFixed(2)}: just inside the arm band (${(armR - 0.05).toFixed(2)}) stays disarmed`,
+        es.armed === false);
+      update(es, ctxAt(ENTRY.top.x + armR + 0.05, ENTRY.top.z, SPEED, bodyR), DT);
+      check(`bodyR=${bodyR.toFixed(2)}: just outside the arm band (${(armR + 0.05).toFixed(2)}) re-arms`,
+        es.armed === true);
+    }
+  }
+
+  /* ---- 10. contract §8a's own protocol, PROVEN rather than assumed:
+     contain() FIRST, floorAt() SECOND, on the CLAMPED point — not ctx.x/z
+     merely echoed through. A fake contain() that clamps hard to a single
+     point, and a floorAt() that returns a DIFFERENT number for the clamped
+     point than for the raw one: if INSIDE ever skipped the clamp (or fed
+     floorAt() the wrong point), this pos would come back wrong on both axes
+     at once, in a way the real-nest end-to-end test cannot reliably exercise
+     on its own (a queen steered toward the chamber's own interior only
+     reaches the wall by accident, if ever — see the session report on why
+     this fixture exists instead of trusting that test alone). */
+  {
+    const CLAMP_TO = { x: 12, z: -7 };
+    const fakeContainHard = () => [CLAMP_TO.x, CLAMP_TO.z];
+    const fakeFloorAtDistinctive = (x, z) => (x === CLAMP_TO.x && z === CLAMP_TO.z ? 999 : -999);
+    const es = createNestEntryState();
+    es.state = NEST_ENTRY_STATE.INSIDE; es.armed = true;
+    const res = update(es, {
+      x: 500, z: 500, // deliberately far from CLAMP_TO, so echoing it through would be obvious
+      entry: () => ENTRY, contain: fakeContainHard, floorAt: fakeFloorAtDistinctive,
+      surfaceY: fakeSurfaceY, descentSpeed: SPEED, bodyR: QUEEN_R,
+    }, DT);
+    check('INSIDE clamps through contain() before reading position (x, z land on the clamped point, not ctx.x/z)',
+      res.pos.x === CLAMP_TO.x && res.pos.z === CLAMP_TO.z, JSON.stringify(res.pos));
+    check("...and floorAt() is called on THAT clamped point (y=999), not the raw, un-clamped one (which would read -999)",
+      res.pos.y === 999, res.pos.y);
   }
 }
 
@@ -2007,6 +2332,164 @@ console.log('\nthe shared world index (world/index.js):');
     }
     // Leave founding state clean for anything a future round adds after
     // this block, same courtesy every earlier founding-touching block pays.
+    founding._resetFounding();
+  }
+}
+
+console.log('\n#58 end to end — player/movement.js\'s third branch, against a real founded nest:');
+{
+  const movement = await import('../src/player/movement.js');
+  const { NEST_ENTRY_STATE } = nestEntry;
+
+  /** A bare ant record — exactly the fields stepAnt()/updateBob() read
+   *  (see movement.js), no player/entities.js involved: this block is about
+   *  the controller function itself, the same reasoning as the #36 block's
+   *  own "player/entities.js is untouched" check above, just one layer
+   *  lower. */
+  function makeAnt(x, z, profile) {
+    return { x, y: 0, z, yaw: 0, speed: 0, travel: 0, bob: 0, profile, scale: profile.scale };
+  }
+
+  /* ---- 1. REGRESSION: with no founded nest, #58's gate changes nothing.
+     Two ants, identical inputs, identical starting point: one wears
+     FOUNDING_QUEEN (nestDescentSpeed present), the other a shallow copy with
+     that one field removed (the exact shape a pre-#58 profile had). If the
+     new branch ever ran, read, or clamped anything before confirming a nest
+     actually exists, these two would diverge; they must not, tick for tick,
+     bit for bit. */
+  {
+    founding._resetFounding();
+    const NO_NEST_PROFILE = { ...avatar.FOUNDING_QUEEN };
+    delete NO_NEST_PROFILE.nestDescentSpeed;
+
+    const START = [150, 190]; // open lawn, well inside LAWN_BOUNDS, clear of the pre-#32 gallery mouth
+    const antQ = makeAnt(START[0], START[1], avatar.FOUNDING_QUEEN);
+    const antC = makeAnt(START[0], START[1], NO_NEST_PROFILE);
+    const DT = 1 / 30;
+    let diverged = 0;
+    for (let i = 0; i < 900; i++) {
+      // A wandering, deterministic input sequence (turns, stops, sprints) —
+      // not just "walk straight", so any code path this ticket touches
+      // (steering, decor collision, containSurface) gets exercised, not just
+      // the trivial one.
+      const wish = { wishX: Math.sin(i * 0.037), wishZ: Math.cos(i * 0.037) };
+      const intent = { ix: 0, iy: 0, mag: i % 40 < 32 ? 1 : 0, sprint: i % 40 >= 32 };
+      movement.stepAnt(antQ, wish, intent, DT);
+      movement.stepAnt(antC, wish, intent, DT);
+      if (Math.abs(antQ.x - antC.x) > 1e-9 || Math.abs(antQ.y - antC.y) > 1e-9
+        || Math.abs(antQ.z - antC.z) > 1e-9 || Math.abs(antQ.bob - antC.bob) > 1e-9) diverged++;
+    }
+    check('no founded nest: a FOUNDING_QUEEN-profile ant and the same profile with nestDescentSpeed removed '
+      + 'follow bit-for-bit identical trajectories over 900 ticks (#58 is a true no-op without a nest)',
+      diverged === 0, `${diverged} diverging ticks`);
+    check('...and she actually moved (this is not a vacuous pass)',
+      Math.hypot(antQ.x - START[0], antQ.z - START[1]) > 10, antQ.x - START[0]);
+  }
+
+  /* ---- 2. THE TICKET'S OWN CRITERION #1, WORD FOR WORD: a body of radius
+     3.3 (the founding queen) follows a continuous path bouche du puits ->
+     centre de la chambre -> front de taille d'une galerie creusée à 100%,
+     staying in the legal volume at every step (containFoundedNest returns
+     the point unchanged) and with no vertical step over 0.5 unit. Driven
+     entirely through the real stepAnt() (this file's own third branch) and
+     the real world/founding.js — no fake ctx anywhere in this block, the
+     same "no fixture could hide a wiring mistake" reasoning as the #57
+     end-to-end block just above. */
+  {
+    founding._resetFounding();
+    let site = null;
+    for (let x = -180; x <= 180 && !site; x += 20) {
+      for (let z = 60; z <= 230 && !site; z += 20) {
+        if (founding.canFoundAt(x, z).ok) site = { x, z };
+      }
+    }
+    check('a legal founding site exists (#58 end-to-end block)', !!site);
+    if (site) {
+      founding.foundNest(site.x, site.z);
+      const nest = founding.getFoundedNest();
+      const entry = founding.foundedNestEntry();
+      const dug = founding.openDigSite(0).site;
+      founding.advanceDig(dug.id, 1.0); // a fully-dug gallery, per the criterion's own wording
+      const faceX = dug.mouth.x + dug.dir.x * dug.length, faceZ = dug.mouth.z + dug.dir.z * dug.length;
+
+      // Starts well clear of the crater's own arm radius, so the walk-up to
+      // "bouche du puits" is a real approach, not a trigger fired standing
+      // still on frame 1.
+      const ant = makeAnt(entry.top.x - 30, entry.top.z - 30, avatar.FOUNDING_QUEEN);
+      const DT = 1 / 30;
+
+      // waypoints, in order: the crater mouth, the chamber centre, the
+      // fully-dug face — advanced to the next one once close, never revisited.
+      const waypoints = [
+        { x: entry.top.x, z: entry.top.z },
+        { x: nest.chamber.x, z: nest.chamber.z },
+        { x: faceX, z: faceZ },
+      ];
+      let wp = 0;
+      const trace = [];
+      let sawDescending = false, sawInside = false;
+      let ticks = 0;
+      while (wp < waypoints.length && ticks < 60000) {
+        const dx = waypoints[wp].x - ant.x, dz = waypoints[wp].z - ant.z, d = Math.hypot(dx, dz);
+        const wish = d > 1e-6 ? { wishX: dx / d, wishZ: dz / d } : { wishX: 0, wishZ: 0 };
+        movement.stepAnt(ant, wish, { ix: 0, iy: 0, mag: 1, sprint: true }, DT);
+        const st = ant.nestEntry ? ant.nestEntry.state : null;
+        trace.push({ x: ant.x, y: ant.y, z: ant.z, state: st });
+        if (st === NEST_ENTRY_STATE.DESCENDING) sawDescending = true;
+        if (st === NEST_ENTRY_STATE.INSIDE) sawInside = true;
+        // Waypoint 0 (the crater mouth) is "reached" the moment the fall-in
+        // actually triggers — walking to within a couple units of it and
+        // then stalling there (never quite triggering) would otherwise loop
+        // forever. Waypoints 1/2 use an ordinary arrival radius.
+        if (wp === 0 && sawDescending) wp++;
+        else if (wp > 0 && d < 2) wp++;
+        ticks++;
+      }
+      check('she actually fell into the shaft on the way to the crater (DESCENDING was reached)', sawDescending);
+      check('she actually walked the chamber floor (INSIDE was reached)', sawInside);
+      check(`reached the fully-dug gallery face within budget (${ticks} ticks)`, wp >= waypoints.length, `wp=${wp}`);
+
+      // The criterion's own path starts AT "bouche du puits" (entry.top) —
+      // everything before the fall-in trigger is the ordinary lawn walk-up,
+      // not part of what contract §8a's continuity promise is about (see
+      // the session report on why the crater mound's own RIM_H seam, a
+      // documented and out-of-scope visual gap between entry.top.y and
+      // terrain.groundY() at the same (x, z), would otherwise show up here
+      // as a false failure that has nothing to do with this ticket's code).
+      const startIdx = trace.findIndex((s) => s.state !== NEST_ENTRY_STATE.OUTSIDE);
+      check('the trace actually left OUTSIDE before the end (sanity, not vacuous)', startIdx >= 0 && startIdx < trace.length - 1);
+      const relevant = trace.slice(startIdx);
+
+      let maxStep = 0, offLegal = 0;
+      for (let i = 1; i < relevant.length; i++) {
+        maxStep = Math.max(maxStep, Math.abs(relevant[i].y - relevant[i - 1].y));
+      }
+      for (const s of relevant) {
+        if (s.state !== NEST_ENTRY_STATE.INSIDE) continue; // contain() is only meaningful once she is walking the floor
+        const [cx, cz] = founding.containFoundedNest(s.x, s.z);
+        if (Math.hypot(cx - s.x, cz - s.z) > 0.05) offLegal++;
+      }
+      check('containFoundedNest() returns every INSIDE sample unchanged — she never strays out of the dug volume',
+        offLegal === 0, `${offLegal} of ${relevant.filter((s) => s.state === NEST_ENTRY_STATE.INSIDE).length} samples clamped`);
+      check(`no vertical step over 0.5 unit from "bouche du puits" through the chamber to the fully-dug face (${relevant.length} samples)`,
+        maxStep <= 0.5, `max step ${maxStep.toFixed(3)}`);
+
+      // ---- the OTHER half of the profile gate (movement.js's own header):
+      // a WORKER standing right on top of the SAME real crater, driven by
+      // the SAME stepAnt(), must never fall in — no nest-entry state is even
+      // created for her, and she keeps the ordinary lawn's own groundY().
+      // Placed here (not in the no-nest regression block above) because it
+      // specifically needs a REAL founded nest to be a meaningful check at
+      // all — with no nest, entry() is null and every profile behaves alike
+      // regardless of the gate (see the session report on why a first,
+      // weaker version of this test caught nothing).
+      const worker = makeAnt(entry.top.x, entry.top.z, avatar.WORKER);
+      for (let i = 0; i < 90; i++) movement.stepAnt(worker, { wishX: 0, wishZ: 0 }, { ix: 0, iy: 0, mag: 0, sprint: false }, DT);
+      check('a WORKER standing on the SAME real crater mouth never engages the shaft (no nestEntry state at all)',
+        worker.nestEntry === undefined);
+      check("...and her y stays on the ordinary lawn's own groundY(), nowhere near the shaft's floor 20+ units down",
+        Math.abs(worker.y - entry.bottom.y) > 5, `worker.y=${worker.y} shaft bottom.y=${entry.bottom.y}`);
+    }
     founding._resetFounding();
   }
 }

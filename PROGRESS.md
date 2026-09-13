@@ -875,6 +875,182 @@ Par ordre d'importance :
 
 ---
 
+## Round du 2026-09-13 (tour 16 — nocturne, VPS ARM sans GPU)
+
+**Ticket travaillé : #58 — « Entrer dans le nid fondé : descendre le puits,
+marcher dans la chambre et la galerie (étape 3/4) ».** Il n'existait pas : le
+tour 15 le désignait comme la suite (« Quoi faire ensuite », point 2) en disant
+qu'il était à ouvrir. Ouvert ce round **avant** toute ligne de code, comme #57
+au tour 15. Choisi parce que `containFoundedNest()` était livrée et testée
+depuis le tour 15 et que **personne ne l'appelait** : le nid fondé était un
+décor qu'on survole. Le point 1 du tour 15 (la session avec écran qui ferme
+#36/#37/#38/#57) reste impossible ici et n'a pas été tenté. Aucun
+`verify-*.mjs` n'a été lancé.
+
+### Où on en est
+
+**On peut entrer dans le nid.** La reine qui marche sur le cratère de sa propre
+fondation descend le puits en ~4,2 s, se pose sur le sol de la chambre, y
+marche, entre dans la galerie que ses creuseuses ont ouverte, et ressort par le
+même puits.
+
+| Fichier | Rôle |
+|---|---|
+| `design/api-monde-gameplay.md` **§8** | Le contrat, écrit par l'orchestrateur **avant** distribution, comme le §6 au tour 11 et le §7 au tour 15. §8a la moitié monde, §8b la moitié gameplay |
+| `world/founding.js` | `foundedNestEntry()` (`{top, bottom, r}`) et `foundedNestFloorY(x, z)` — **la seule source de vérité de la hauteur du sol dans le nid fondé**, ce que `groundY()` est dehors. Plus la correction du décrochement ci-dessous |
+| `world/index.js` | Réexporte les deux |
+| `player/nestEntry.js` **(nouveau)** | La machine à états DEHORS → DESCENTE → DEDANS → REMONTÉE. **Module pur, zéro `import`** — vérifié sur le disque, pas seulement annoncé : même famille que `brood.js` (t. 10), `spatialIndex.js` (t. 11), `entities.js` (t. 12), `forage.js` (t. 13), `dig.js` (t. 15), donc importé **directement** par `test-logic.mjs` |
+| `player/movement.js` | Une **troisième branche** dans `stepAnt()`, à côté de « galerie pré-construite » et « pelouse ». `stepAnt()` reste la seule fonction qui déplace un corps |
+| `player/avatar.js` | `nestDescentSpeed: 5` unités/s sur `FOUNDING_QUEEN` — **une valeur de plus dans la table**, comme `digSpeed` au tour 15 |
+
+**Le vrai travail du ticket : une marche de 6,4 unités que personne n'avait pu
+voir.** `buildGalleryGeometry()` posait le sol de la galerie à
+`site.mouth.y - site.r * 0.85`, alors que `sitePlan()` fixe
+`mouth.y = nest.floorY`, **le sol de la chambre**. Toute galerie avait donc son
+sol 6,375 unités sous celui de la chambre : la reine qui franchit la porte
+tombe de deux fois sa hauteur de corps. Le défaut est là depuis le tour 15 et
+aucun test ne pouvait le voir, parce que personne ne pouvait entrer. Trouvé à
+la lecture en écrivant le contrat, pas par un harnais. Correction : c'est le
+**maillage** qui a bougé, jamais la fonction — le centre du tube de galerie est
+remonté de `r*0.85` au lieu que son sol descende d'autant, donc
+`floorY === nest.floorY` sans arithmétique. `site.mouth.y` **n'a pas changé de
+valeur** : `player/dig.js`, qui consomme le §7 du tour 15, n'est pas affecté.
+La coque de la chambre n'est pas reconstruite (règle de #12).
+
+**Chiffres, et contre quoi ils sont écrits** (piège n°6 traité aux deux bouts) :
+
+| Constante | Valeur | Calibrée contre |
+|---|---|---|
+| `entry.r` | 3,6 | `SHAFT_R = 4,2` moins 0,6 de marge de paroi. **Pas** la fudge `0,82 / −1,2` des corridors, qui donnerait 2,24 — sous le rayon de collision 3,3 de la reine. Ne sert que de rayon de **déclenchement**, pas de passage : pendant le transit la reine suit le segment sans liberté latérale |
+| `nestDescentSpeed` | 5 u/s | **~4,2 s** pour le vrai puits (~21 unités de `top` à `bottom`). Vit côté `avatar.js` parce que c'est une propriété du corps ; la durée se déduit de `|top − bottom|` publié par le monde, aucun des deux côtés ne recopie la longueur de l'autre |
+| ré-armement de l'hystérésis | `entry.r + bodyR` | dérivé du corps, jamais un littéral. Sans lui la reine oscille : contrairement à `forage.js`/`dig.js`, elle **arrive exactement** au point qui déclenche la transition inverse |
+
+**Tests : 214 → 266, 0 échec** (+12 côté monde, +40 côté gameplay).
+`npx vite build` passe (2,43 s). Je les ai relancés moi-même après chaque agent,
+pas seulement lus dans leur rapport, et j'ai vérifié sur le disque que
+`player/nestEntry.js` n'a **aucun** `import` et que le périmètre de fichiers a
+été tenu (aucun `core/**`, aucun `main.js`, aucun `camera.js`).
+
+**Validation en négatif, six ruptures, restaurées, vert re-constaté :** côté
+monde, `foundedNestFloorY()` remise à la formule fautive → 2 tests tombent dont
+la continuité, avec `max step = 6.375`, exactement le chiffre du contrat. Côté
+gameplay, le verrou d'hystérésis retiré → 4 ; la longueur de puits remplacée
+par le littéral 21 → 2 ; et **deux ruptures n'ont d'abord rien cassé du tout** —
+l'ordre `contain()` → `floorAt()` inversé, et le garde-fou
+`p.nestDescentSpeed != null` retiré. L'agent l'a **signalé au lieu de le
+taire**, a renforcé la couverture (une fixture qui pousse vraiment la reine au
+mur ; une vraie ouvrière sur le vrai cratère), et les deux ruptures tombent
+maintenant à 2 tests chacune.
+
+### Arbitrages pris pendant le round
+
+1. **Le contrat d'abord**, troisième tour de suite (§6 au t. 11, §7 au t. 15,
+   §8 ici). Écrit avant de lancer le moindre agent, interdit aux deux moitiés.
+   Aucune renégociation entre les deux moitiés, encore une fois.
+2. **En cas de désaccord entre le maillage et la fonction de sol, c'est le
+   maillage qui bouge.** Posé dans le contrat avant de savoir laquelle des deux
+   avait tort. C'est ce qui a évité de « corriger » la continuité en publiant
+   la marche au lieu de la supprimer.
+3. **Le puits se descend en suivant le segment `top → bottom`, pas en tombant
+   tout droit.** Le puits est incliné (`AXIS_TILT = 0,22`) : `top` et `bottom`
+   sont à ~4,9 unités l'un de l'autre en horizontal. C'est pour ça que le monde
+   publie deux points et non un.
+4. **L'éligibilité au puits est un champ de profil (`nestDescentSpeed`), pas un
+   test d'identité de caste.** Une ouvrière ou une creuseuse passe par le même
+   `stepAnt()` et ne doit jamais engager le puits ; un `id === 'queen'` aurait
+   été la constante recopiée du tour suivant. Un test dédié le protège.
+5. **`resolveDecorCollision()` est sautée dès que la reine n'est plus dehors.**
+   Le décor est indexé en (x,z) seul, et le nid fondé partage le même (x,z) que
+   la pelouse — contrairement à la galerie pré-construite, qui vit dans une
+   plage de `z` à elle. Sinon un champignon de surface repousserait une reine
+   20 unités plus bas.
+
+### Ce qui est cassé ou en attente
+
+- **#58 n'est pas fermé, et il s'en faut de la capture.** Son critère de fin
+  n°1 (la preuve sans écran) **est atteint** : 266 tests, dont le chemin
+  continu bouche du puits → chambre → front de taille sans marche > 0,5. Le
+  n°2 est une capture de la reine **dans** sa chambre puis dans la galerie —
+  impossible ici, par construction.
+- **La caméra ne sait pas cadrer un puits.** `camera.js` choisit son mode avec
+  `ant.z < TUNNEL_MOUTH` : elle restera en mode surface pendant toute la
+  descente et tout le séjour dans le nid fondé. C'était **hors périmètre**
+  (nommé dans le ticket), c'est documenté en commentaire à l'endroit du code où
+  ça se voit, et **ça mérite un ticket à ouvrir**. C'est le premier obstacle à
+  la capture qui fermerait #58.
+- **Une galerie de 48 unités perce la surface plus souvent qu'on ne le
+  croyait.** Le risque, seulement pressenti au tour 15, a été **mesuré** ce
+  round contre le terrain réel : sur 2504 couples (site légal × direction de
+  `siteAngle(i)`), **622 (~25 %) ont leur plafond de galerie au-dessus du
+  terrain quelque part**, et **27 dès l'embouchure**. Pire cas mesuré :
+  fondation en (140, 230), direction `siteAngle(2)`, dépassement de 21,3
+  unités à u = 48. Cause : `canFoundAt()` ne juge que le **point** de la
+  chambre, jamais les quatre **directions** qu'un chantier empruntera plus
+  tard. Non corrigé — c'est un changement de nature (juger une direction, pas
+  un point) et ça mérite son propre ticket.
+- **Le plafond de la galerie dépasse maintenant `chamber.ceilY` de ~9,6
+  unités** à la porte, conséquence directe d'avoir remonté le tube. À noter :
+  `ceilY` est une valeur prudente de placement de props, pas le vrai plafond du
+  maillage de la chambre (rayon 14 autour de l'axe) — le dépassement réel est
+  probablement bien moindre. **À juger à l'œil, pas au calcul.**
+- **`test-logic.mjs` ne voit pas le maillage.** L'agent l'a signalé plutôt que
+  caché : remettre l'ancienne formule dans `buildGalleryGeometry()` **seul** ne
+  fait tomber aucun test, parce que le harnais est de la logique pure et
+  n'échantillonne jamais la géométrie construite. Le filet protège
+  `foundedNestFloorY()`, pas l'accord du maillage avec elle. Limite documentée
+  en commentaire à côté du test.
+- **Les creuseuses, elles, n'entrent pas.** Elles travaillent au front de
+  taille en restant sur la pelouse, au-dessus du nid : `workers.js` était hors
+  périmètre et le garde-fou de l'arbitrage 4 les exclut du puits. C'était
+  invisible tant que personne ne pouvait descendre ; ça ne l'est plus. Prochain
+  morceau évident après la caméra.
+- **La récolte et la ponte ne savent pas qu'on est sous terre.** `nodeInReach()`
+  et la porte du couvoir raisonnent en (x,z) seul : la reine dans sa chambre
+  est à la verticale de nœuds de surface. À regarder avant d'en faire un
+  ticket — ça n'a jamais eu de sens avant ce round.
+- **Rien de tout ça n'a été vu**, comme aux six tours précédents.
+
+### À juger à l'œil, sur une machine avec GPU
+
+Par ordre d'importance :
+
+1. **Le critère de fin de #58** : jouer la boucle entière, descendre, et
+   capturer la reine dans sa chambre puis dans la galerie. **La caméra va
+   probablement gêner** (voir ci-dessus) — c'est la première chose à constater.
+2. **La descente elle-même** : ~4,2 s le long d'un segment incliné. Est-ce que
+   ça se lit comme une descente, ou comme une chute, ou comme un téléport ?
+   C'est le point le plus incertain du round.
+3. **La jonction chambre ↔ galerie** maintenant que les deux sols sont au même
+   niveau : chevauchement du tube remonté, plafond, ou trou qui laisse voir la
+   terre. Le tour 15 la nommait déjà comme son point n°1 ; elle a changé depuis.
+4. **Le raccord au cratère** : le bourrelet du monticule dépasse le terrain de
+   `RIM_H ≈ 1,6` et n'a pas été traité.
+5. Tout l'arriéré des tours 10-15, toujours jamais vu : la ponte, l'éclosion et
+   ses ouvrières (#37/#36), les deux castes côte à côte (#38), la galerie qui
+   s'allonge (#57), la bascule crépuscule → jour, la fondation (défaut 1).
+
+### Quoi faire ensuite
+
+1. **Une session avec écran.** Huit tickets s'y ferment d'un coup (#36, #37,
+   #38, #57, #58 et l'arriéré), et ils se ferment tous sur **la même partie** :
+   récolter, fonder, pondre, attendre les éclosions, regarder la galerie
+   s'allonger, **descendre**. C'est la seule chose qui manque au projet depuis
+   six tours.
+2. **Ouvrir un ticket caméra pour le nid fondé.** C'est maintenant le premier
+   obstacle matériel à la capture qui fermerait #58 — et donc à la chaîne
+   entière. Il se juge à l'écran, mais son squelette (un mode de plus dans
+   `camera.js`, choisi sur l'état de `nestEntry` plutôt que sur `TUNNEL_MOUTH`)
+   peut être préparé de nuit.
+3. **Ouvrir un ticket « une galerie ne perce pas la surface »** avec les
+   chiffres ci-dessus : faire juger à `canFoundAt()` (ou à un
+   `canDigDirection()`) les quatre directions sur `DIG_GALLERY_LEN`, ou
+   raccourcir une galerie qui approche la surface. C'est de la logique pure,
+   donc faisable de nuit.
+4. **L'étape 4/4** : les creuseuses entrent aussi, et le nid s'habite.
+5. Le reste de la liste ci-dessous est inchangé.
+
+---
+
 ## Défauts connus (vus sur captures, non corrigés)
 
 | # | Défaut | Gravité |
@@ -909,8 +1085,16 @@ Par ordre d'importance :
    chantier ancré sur la chambre fondée, galerie qui s'allonge avec la
    progression, volume creusé marchable, `digSpeed` dans le profil `DIGGER`.
    Reste sa capture — la galerie plus longue qu'au début, creuseuses au front.
-   Puis l'**étape 3/4** : brancher `containFoundedNest()` dans `movement.js`
-   pour pouvoir enfin entrer dans le nid fondé. Ce ticket-là est à ouvrir.
+   ~~Puis l'**étape 3/4** : brancher `containFoundedNest()` dans `movement.js`
+   pour pouvoir enfin entrer dans le nid fondé. Ce ticket-là est à ouvrir.~~ —
+   ouvert et **fait au tour 16**, voir ci-dessous.
+2 septies. ~~**#58 — entrer dans le nid fondé (étape 3/4)**~~ — **fait au
+   tour 16** : `foundedNestEntry()`/`foundedNestFloorY()`, la descente du puits
+   sur une durée, la troisième branche de `stepAnt()`, et le décrochement de
+   6,4 unités entre chambre et galerie supprimé. Reste sa capture — la reine
+   **dans** sa chambre puis dans la galerie —, la même session que #36, #37,
+   #38 et #57. **Bloquée en pratique par la caméra**, qui ne sait pas cadrer un
+   puits : ticket à ouvrir. Puis l'**étape 4/4** : les creuseuses entrent aussi.
 2 quinquies. ~~**#38 — le choix de caste à la ponte**~~ — **fait au tour 14**,
    `DIGGER` dans la table d'`avatar.js`, touche `C`, compteur HUD par caste, une
    creuseuse qui ne butine pas. Reste sa capture — **les deux castes côte à côte
@@ -935,6 +1119,7 @@ Par ordre d'importance :
 | Ce que fait une ouvrière toute seule | `player/forage.js` (la machine à états, module pur) et `player/workers.js` (la naissance, le mesh, les vraies requêtes monde) |
 | Ce que fait une creuseuse | `player/dig.js` (machine à états, module pur) côté gameplay ; `world/founding.js` côté monde (chantier, progression, géométrie). Le contrat entre les deux est `design/api-monde-gameplay.md` §7 |
 | Creuser le nid | `world/founding.js` — `canFoundAt` / `foundNest` / `populateNest` |
+| Entrer dans le nid fondé | `player/nestEntry.js` (machine à états, module pur) et la 3ᵉ branche de `stepAnt()` dans `player/movement.js`. Côté monde : `foundedNestEntry()` / `foundedNestFloorY()` — cette dernière est à l'intérieur du nid fondé ce que `groundY()` est dehors, **personne ne la recalcule**. Contrat : `design/api-monde-gameplay.md` §8 |
 | Le ciel, le soleil, la bascule prologue→colonie | `world/sun.js` (`RIG_PROLOGUE`, `RIG_FOUNDED`, `setFoundedMix`) |
 | Les tailles/vitesses de la fourmi | `player/avatar.js` — un second corps = une entrée de plus, pas un contrôleur. `ALL_PROFILES` est la liste canonique des castes : tout code qui itère les castes en dérive, personne ne la recopie |
 | Ce qu'est une caste, et pourquoi le choix à la ponte | `design/castes-et-micro-macro.md` — §2 chiffre chaque silhouette contre celle de `WORKER` |

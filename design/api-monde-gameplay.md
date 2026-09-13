@@ -258,3 +258,79 @@ n'est fondé, pour que l'appelant distingue « pas de nid » de « clampé ».
 **Ce que ce contrat ne couvre pas, volontairement :** le branchement de
 `containFoundedNest()` dans `player/movement.js` (étape 3/4, ça se juge à
 l'écran), le coût en ressources, et le décor de la galerie.
+
+---
+
+## 8. Entrer dans le nid fondé — à livrer par Atta puis Cataglyphis (round 16, #58)
+
+Étape 3/4 vers « voir le premier tunnel se creuser et **pouvoir y entrer** ».
+Écrit **avant** distribution, comme le §6 au round 11 et le §7 au round 15.
+Aucun agent ne le modifie : si une signature ci-dessous se révèle impraticable,
+l'agent le signale dans son rapport et l'orchestrateur tranche.
+
+### 8a. Ce que `world/founding.js` ajoute (et `world/index.js` réexporte)
+
+```
+foundedNestEntry()           -> entry | null
+foundedNestFloorY(x, z)      -> number | null
+```
+
+Une **entrée** est un objet nu, sérialisable, sans maillage ni fermeture :
+
+```
+{ top: { x, y, z }, bottom: { x, y, z }, r: number }
+```
+
+- `top` est l'axe du puits **au niveau de la lèvre du cratère** : le point où
+  une descente commence. `bottom` est le **pied du puits**, posé sur le sol de
+  la chambre : le point où elle finit. Le puits est incliné (`AXIS_TILT`), donc
+  `top` et `bottom` **ne sont pas à la verticale l'un de l'autre** : descendre,
+  c'est suivre le segment `top → bottom`, pas tomber en ligne droite.
+- `r` est le rayon **utile** du trou, marge de paroi déjà retirée. Le gameplay
+  s'en sert tel quel pour décider « je suis au-dessus du trou » ; il ne lui
+  applique aucune correction, et il ne recopie ni `SHAFT_R` ni `AXIS_TILT`.
+- `null` tant que rien n'est fondé, comme `nestOrigin()`.
+
+**`foundedNestFloorY(x, z)`** est à l'intérieur du nid fondé ce que `groundY()`
+est dehors : **la seule source de vérité** de la hauteur du sol. Aucun code de
+`player/**` ne la recalcule, ne l'approche, ni ne lit `nest.floorY`.
+
+- `null` tant que rien n'est fondé. Sinon **toujours un nombre** : pour un point
+  hors du volume creusé, elle rend le sol de la partie creusée la plus proche.
+  Le protocole d'appel est donc **clamper d'abord, demander ensuite** —
+  `containFoundedNest()` puis `foundedNestFloorY()`, dans cet ordre, comme
+  `movement.js` fait déjà `containUnderground()` puis `groundY()`.
+- **Continuité, exigence dure :** pour deux points du volume creusé distants
+  d'au plus 1 unité, les deux hauteurs diffèrent d'au plus **0,5 unité**. La
+  jonction chambre ↔ galerie est incluse, et c'est elle qui est cassée
+  aujourd'hui : `buildGalleryGeometry()` pose son sol à `mouth.y - r * 0.85`
+  alors que `mouth.y === nest.floorY`, soit **6,4 unités de décrochement**
+  qu'aucune fonction ne publie et que personne n'a jamais vues faute de pouvoir
+  entrer. Le maillage et la fonction doivent s'accorder ; **en cas de
+  désaccord, c'est le maillage qui bouge**, jamais la fonction — une marche
+  invisible dans la géométrie est exactement le piège n°6 de `PROGRESS.md`.
+- La galerie reste creusée **sur sa longueur creusée seulement** : la hauteur
+  de sol au-delà du front de taille n'a pas de sens, et c'est
+  `containFoundedNest()` qui interdit d'y aller, pas cette fonction-ci.
+
+### 8b. Ce que `player/**` livre en face
+
+- Une machine à états d'entrée/sortie dans un module **pur, zéro `import`** —
+  comme `brood.js` (t. 10), `spatialIndex.js` (t. 11), `entities.js` (t. 12),
+  `forage.js` (t. 13), `dig.js` (t. 15). Tout lui arrive par un `ctx` de
+  callbacks (`entry()`, `contain()`, `floorAt()`, `surfaceY()`), rien par
+  `import`, aucun `Math.random()`, aucune horloge : `test-logic.mjs` doit
+  pouvoir l'importer directement et la faire tourner pas à pas.
+- `stepAnt()` reste **la seule** fonction qui déplace un corps. Pas de second
+  contrôleur, pas de `nestMovement.js` parallèle : `movement.js` gagne une
+  troisième branche, à côté de « galerie pré-construite » et « pelouse ».
+- **Où vit la vitesse de descente.** Pas dans `world/**` : c'est une propriété
+  du corps qui descend, donc une valeur de `player/avatar.js` en **unités monde
+  par seconde**, convertie par l'appelant avec la longueur que le monde publie
+  (`|top − bottom|`). Exactement le patron de `digSpeed` au §7 : aucun des deux
+  côtés ne recopie la constante de l'autre.
+
+**Ce que ce contrat ne couvre pas, volontairement :** la caméra (elle ne sait
+pas cadrer un puits vertical — ticket à part, ça se juge à l'écran),
+l'éclairage et le décor de la galerie, et l'entrée des ouvrières et des
+creuseuses par le puits (elles naissent déjà là où il faut).

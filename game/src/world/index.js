@@ -20,6 +20,7 @@ import {
   populateNest, sealNest, updateFounding, MAX_BROOD,
   DIG_SITES_MAX, DIG_GALLERY_LEN, DIG_GALLERY_R,
   planDigSite, digSites, openDigSite, advanceDig, digProgress, containFoundedNest,
+  foundedNestEntry, foundedNestFloorY,
 } from './founding.js';
 import { createSpatialIndex } from '../core/spatialIndex.js';
 import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
@@ -81,6 +82,14 @@ import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './
 //                             volume actually dug. See world/founding.js's
 //                             own "#57" section for the geometry and the
 //                             rebuild-throttling rationale.
+//   §8a foundedNestEntry() / foundedNestFloorY(x,z) — round 16 (#58): the
+//                             shaft's { top, bottom, r } descent segment and
+//                             the underground twin of groundY(). Also fixed,
+//                             as part of the same round: buildGalleryGeometry
+//                             used to pose a dug gallery's floor 6.375 units
+//                             below the chamber floor it opens onto — see
+//                             world/founding.js's own "#58" comments on
+//                             buildGalleryGeometry and foundedNestFloorY.
 // RIG_PROLOGUE/RIG_FOUNDED/sunDir/foundedMix/setFoundedMix are the sky rig
 // main.js drives and shadeAt() reads, kept in one place so the light the
 // player is told about and the light drawn on screen cannot diverge.
@@ -101,6 +110,7 @@ export {
   canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest, MAX_BROOD,
   DIG_SITES_MAX, DIG_GALLERY_LEN, DIG_GALLERY_R,
   planDigSite, digSites, openDigSite, advanceDig, digProgress, containFoundedNest,
+  foundedNestEntry, foundedNestFloorY,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
 
