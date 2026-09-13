@@ -1,13 +1,13 @@
 import * as world from '../world/index.js';
 import { antState } from '../core/antState.js';
 import { groundY, distanceToWater } from '../world/index.js';
-import { PLAYER_AVATAR, collideRadius } from './avatar.js';
+import { PLAYER_AVATAR, WORKER, DIGGER, collideRadius } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { buildAntMesh } from './antMesh.js';
 import { createInput } from './input.js';
 import { createCameraRig } from './camera.js';
 import { grassBlades } from './climb.js';
-import { spawnEntity, updateEntity, driveFromInput, removeEntity } from './entities.js';
+import { spawnEntity, updateEntity, driveFromInput, removeEntity, resolveProfile } from './entities.js';
 import { deepestPenetration, resolveDecorCollision, mushroomRadii } from './decorCollision.js';
 import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
 import { createInteraction } from './interaction.js';
@@ -22,6 +22,13 @@ import {
   broodCount, layRefusalText, EGG_COST,
 } from './brood.js';
 import { createWorkerSwarm } from './workers.js';
+
+// #38: the two castes the queen can choose between at the ponte — read off
+// avatar.js rather than re-typed as string literals, so a rename of either
+// id would fail to compile here instead of silently mismatching brood.js's
+// caste-as-string convention (see brood.js's header for why brood.js itself
+// still keeps its own literal default — it cannot import this file at all).
+const SELECTABLE_CASTES = [WORKER.id, DIGGER.id];
 
 /* design/api-monde-gameplay.md's consumption rule: player/** reads the
    world's exports through a namespace copy, never `world.foo` directly, so a
@@ -160,6 +167,22 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   window.addEventListener('keydown', onPonteKey);
   function consumePonte() { const v = pontePressed; pontePressed = false; return v; }
 
+  /* #38 — which caste the NEXT lay produces. `C` was picked over the already-
+     taken keys (E is the whole interaction ladder, H toggles help, P lays,
+     WASD/ZQSD/arrows+Shift move — see input.js/hud.js's CONTROLS) and is free.
+     Same edge-triggered pattern as the P listener just above: a dedicated
+     key, not routed through input.js (which only owns the verbs that existed
+     before this ticket, same reasoning as the ponte key's own comment).
+     Visible BEFORE the first lay (broodStatusText() below reads it every
+     frame the colony is founded, regardless of whether P has ever been
+     pressed) — the ticket's own requirement 3, not just a side effect of
+     showing it after. */
+  let selectedCaste = WORKER.id;
+  let castePressed = false;
+  function onCasteKey(e) { if (e.code === 'KeyC') castePressed = true; }
+  window.addEventListener('keydown', onCasteKey);
+  function consumeCaste() { const v = castePressed; castePressed = false; return v; }
+
   let layMessage = null, layMessageTimer = 0;
   // Seconds elapsed since the FIRST successful lay, or null before it — the
   // founded-mix ramp's own clock (design/ressources-et-fondation.md §7a: the
@@ -183,15 +206,34 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     return Math.hypot(ant.x - nest.chamber.x, ant.z - nest.chamber.z) <= nest.chamber.r;
   }
 
+  /** `label` with an 's' if `n` isn't exactly one — the two labels in play
+   *  (avatar.js's 'ouvrière'/'creuseuse') both pluralize by a bare 's', so no
+   *  lookup table is needed for this round; a caste whose label needs a
+   *  different plural would need this to grow, not a caller. */
+  function pluralLabel(casteId, n) {
+    const label = resolveProfile(casteId).label;
+    return n === 1 ? label : `${label}s`;
+  }
+
   /** The brood HUD line: steady-state couvain/incubation/hatch readout,
    *  replaced for a few seconds by whatever the last P press just said (a
    *  success, a refusal, or nothing pressed at all — a hatch landing on its
-   *  own gets the same courtesy, see the `hatched` block in update()). */
+   *  own gets the same courtesy, see the `hatched` block in update()).
+   *  #38: also the ONLY place the selected caste and the population split
+   *  are shown — visible as soon as the colony exists, before the player has
+   *  ever pressed P (requirement 3 of the ticket), and split by caste
+   *  (requirement 4) rather than folded into one number the way
+   *  `workersAvailable` used to be. */
   function broodStatusText() {
     const next = nextHatchIn(brood);
     const nextTxt = next === null ? '' : ` · prochaine éclosion : ${Math.ceil(next)} s`;
+    const pop = workerSwarm.countByCaste();
+    const popTxt = SELECTABLE_CASTES
+      .map((id) => `${pop[id] || 0} ${pluralLabel(id, pop[id] || 0)}`)
+      .join(', ');
     const line = `Couvain : ${broodCount(brood)}/${brood.capacity}${nextTxt}`
-      + ` · ouvrières écloses : ${brood.workersAvailable}`;
+      + ` · population : ${popTxt}`
+      + ` · à pondre : ${resolveProfile(selectedCaste).label} (C pour changer)`;
     if (layMessageTimer > 0) return `${line} — ${layMessage}`;
     return `${line} · P (dans le couvoir) — pondre, coûte ${EGG_COST}`;
   }
@@ -250,16 +292,28 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
 
     props.update(ant, interaction.harvest.state);
 
+    // #38: C cycles the caste the NEXT lay will produce — independent of E's
+    // ladder and of P itself, same reasoning as the ponte key below.
+    if (consumeCaste()) {
+      const i = SELECTABLE_CASTES.indexOf(selectedCaste);
+      selectedCaste = SELECTABLE_CASTES[(i + 1) % SELECTABLE_CASTES.length];
+    }
+
     /* #6 §2 — the ponte, independent of E's ladder above (see the block that
        declares `brood` for why). Read before movement/props above have any
-       bearing on it and before the HUD calls below need its result. */
+       bearing on it and before the HUD calls below need its result. #38: the
+       clutch this produces is whichever caste is currently selected — see
+       brood.js's lay() for why that is passed as the LAST argument (a plain
+       caste-id string, not an avatar.js profile object: brood.js imports
+       nothing and cannot know that object exists). */
     if (consumePonte()) {
       const res = layEgg(brood, interaction.harvest.state.cache, {
         founded: isFounded(), inChamber: inBroodChamber(ant),
-      });
+      }, selectedCaste);
       layMessageTimer = 3.2;
       if (res.ok) {
-        layMessage = `Un œuf est pondu (${EGG_COST} unités prélevées sur la réserve).`;
+        layMessage = `Un œuf est pondu — caste : ${resolveProfile(selectedCaste).label}`
+          + ` (${EGG_COST} unités prélevées sur la réserve).`;
         if (foundedRampT === null) foundedRampT = 0; // starts the ramp — see its declaration
       } else {
         layMessage = `Pondre : ${layRefusalText(res.reason)}`;
@@ -267,12 +321,18 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     }
     // A hatch this frame gets its own line, but never steps on a fresher
     // lay/refusal line from the block above (same frame, same priority the
-    // press just claimed).
+    // press just claimed). #38: read brood.workersAvailable BEFORE
+    // workerSwarm.spawnFromBrood() drains it (a few lines below) so this can
+    // still say WHICH caste hatched, not just how many — updateBrood() only
+    // ever returns the total across every caste (see its own doc).
     const hatched = updateBrood(brood, dt);
     if (hatched > 0 && layMessageTimer <= 0) {
+      const byCaste = Object.keys(brood.workersAvailable)
+        .map((id) => `${brood.workersAvailable[id]} ${pluralLabel(id, brood.workersAvailable[id])}`)
+        .join(', ');
       layMessage = hatched === 1
-        ? 'Un œuf a éclos : une ouvrière est prête.'
-        : `${hatched} œufs ont éclos : autant d'ouvrières prêtes.`;
+        ? `Un œuf a éclos : ${byCaste} prête.`
+        : `${hatched} œufs ont éclos : ${byCaste} prêtes.`;
       layMessageTimer = 3.2;
     }
     if (layMessageTimer > 0) layMessageTimer -= dt;
@@ -359,18 +419,28 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // #6: so a harness can lay/advance without a real keyboard, and read the
     // verdict/state the HUD is built from.
     window.__brood = brood;
-    window.__lay = () => layEgg(brood, interaction.harvest.state.cache, {
+    // #38: optional casteId, defaulting to whatever the HUD/keyboard has
+    // currently selected — so a harness can lay a named caste without a
+    // real 'C' keypress, or omit it to exercise the same path a player does.
+    window.__lay = (casteId = selectedCaste) => layEgg(brood, interaction.harvest.state.cache, {
       founded: isFounded(), inChamber: inBroodChamber(ant),
-    });
+    }, casteId);
     window.__inBroodChamber = () => inBroodChamber(ant);
-    // #37: so a harness can count/inspect the ouvrières without a screen —
-    // each entry is { entity, forage, updatePose, group }, forage.state one
-    // of forage.js's FORAGE_STATE names.
+    // #38: read/set the caste the next lay will produce, and the ids it can
+    // be, without a real keypress.
+    window.__selectedCaste = () => selectedCaste;
+    window.__setSelectedCaste = (id) => { if (SELECTABLE_CASTES.includes(id)) selectedCaste = id; };
+    window.__selectableCastes = SELECTABLE_CASTES;
+    // #37/#38: so a harness can count/inspect the swarm without a screen —
+    // each entry is { entity, caste, forage, updatePose, group }, forage
+    // null for a digger, forage.state one of forage.js's FORAGE_STATE names
+    // for a worker. countByCaste() answers the ticket's population split.
     window.__workers = workerSwarm;
   }
 
   function dispose() {
     window.removeEventListener('keydown', onPonteKey);
+    window.removeEventListener('keydown', onCasteKey);
     input.dispose();
     hud.dispose();
     marker.dispose();

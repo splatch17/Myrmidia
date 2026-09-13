@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { nrm3, scl3, segBasis } from '../core/vecmath.js';
 import { antMatrix, localToWorld, solveKnee } from './legs.js';
-import { PLAYER_AVATAR, WORKER, FOUNDING_QUEEN, legLengths } from './avatar.js';
+import { PLAYER_AVATAR, ALL_PROFILES, legLengths } from './avatar.js';
 import { createInstancedPool } from '../core/instancedPool.js';
 
 /* ==========================================================================
@@ -90,7 +90,13 @@ function ensurePools() {
     color: 0xffffff, vertexColors: true, roughness: 0.55, metalness: 0.05,
   });
 
-  const maxPerAnt = [WORKER, FOUNDING_QUEEN].reduce((m, p) => {
+  // #38: sized against EVERY profile avatar.js knows about (its own
+  // ALL_PROFILES list), not a hand-copied [WORKER, FOUNDING_QUEEN] pair —
+  // that pair is exactly what PROGRESS.md's tour 14 flags as the silent-
+  // pool-overflow trap for a third caste (a digger is not markedly bigger
+  // than a worker, but the NEXT caste this misses might be, and this file
+  // would not throw, it would just corrupt instance slots).
+  const maxPerAnt = ALL_PROFILES.reduce((m, p) => {
     const c = partCounts(p);
     return { sphere: Math.max(m.sphere, c.sphere), cyl: Math.max(m.cyl, c.cyl) };
   }, { sphere: 0, cyl: 0 });

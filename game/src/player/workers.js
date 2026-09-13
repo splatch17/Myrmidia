@@ -1,11 +1,12 @@
 import { groundY } from '../world/index.js';
-import { spawnEntity, updateEntity, removeEntity } from './entities.js';
+import { spawnEntity, updateEntity, removeEntity, resolveProfile, makePatrolGoal } from './entities.js';
 import { WORKER, collideRadius } from './avatar.js';
 import { resolveDecorCollision } from './decorCollision.js';
 import { buildAntMesh } from './antMesh.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { nearestNode, takeFromNode, nodeById } from './resources.js';
 import { HARVEST_SECONDS, CACHE_RADIUS } from './harvest.js';
+import { drainHatched } from './brood.js';
 import * as forage from './forage.js';
 
 /* ==========================================================================
@@ -37,12 +38,33 @@ import * as forage from './forage.js';
    different `drive` source. Flagged here so the next reader does not mistake
    it for an oversight against that header comment.
 
-   ONE HATCH = ONE WORKER, NEVER TWO, NEVER ZERO. spawnFromBrood() drains
-   `brood.workersAvailable` to zero BEFORE spawning anything (see its own
-   doc): whatever it read is exactly how many spawnEntity() calls happen, no
-   more, no less, and a second call before the next hatch spawns nothing
-   because there is nothing left to drain — see test-logic.mjs's dedicated
-   invariant tests. */
+   ONE HATCH = ONE BODY, NEVER TWO, NEVER ZERO. spawnFromBrood() drains
+   `brood.workersAvailable` (now per caste, see brood.js's #38 header) to
+   empty BEFORE spawning anything, via brood.js's own drainHatched() rather
+   than reaching into the object here: whatever it read is exactly how many
+   spawnEntity() calls happen, no more, no less, per caste, and a second call
+   before the next hatch spawns nothing because there is nothing left to
+   drain — see test-logic.mjs's dedicated invariant tests.
+
+   #38 — A DIGGER DOES NOT FORAGE. This is a deliberate arbitrage
+   (design/castes-et-micro-macro.md §1, PROGRESS.md tour 14), not an
+   oversight: if a hatched digger ran forage.js exactly like a worker, the
+   sentence that justifies the whole ticket — "pondre des creuseuses, c'est
+   ne pas pondre d'ouvrières : creuser plus vite et récolter moins" — would
+   be false, and the choice at the ponte would cost nothing. A digger is
+   therefore spawned `controlled: false` with a `goal` (core/entities.js's
+   existing makePatrolGoal(), an out-and-back with a pause at each end) INSTEAD
+   of `controlled: true` fed a `drive` computed from forage.js every frame —
+   the same updateEntity() (player/entities.js, #36) simply takes its other
+   branch (goalWish() rather than a driven wish), so this is still exactly
+   one update function for every body, worker, digger or player.
+   THE ACTUAL DIGGING (a tunnel that grows, a chamber that gets bigger) is
+   NOT this round's job — it is the ticket's own "étape 2/4", not yet an
+   open issue. The patrol goal below is a placeholder for that: it makes a
+   digger stand near the nest mouth and pace a short stretch of it, sober and
+   readable, rather than doing nothing (frozen) or doing a worker's job
+   (foraging). THE BRANCH WHERE REAL DIGGING WOULD PLUG IN is marked with a
+   comment at spawnOne()'s goal construction, below. */
 
 // A little scatter around the nest mouth so a whole clutch hatching at once
 // (world/founding.js's MAX_BROOD eggs, all laid the same frame, all hatching
@@ -69,15 +91,50 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
  * (player/index.js).
  */
 export function createWorkerSwarm({ scene }) {
-  /** { entity, forage: forage.js's own state, updatePose, group } per live
-   *  worker. Plain array: a handful of workers at a time (bounded by
+  /** { entity, caste: 'worker'|'digger', forage: forage.js's own state or
+   *  null for a digger (#38), updatePose, group } per live body — the name
+   *  `workers` predates #38 and now holds both castes; renaming it is
+   *  cosmetic churn across this whole file for no behaviour change, so it is
+   *  left as-is; `caste`/`countByCaste()` are what a caller actually
+   *  branches on. Plain array: a handful of bodies at a time (bounded by
    *  antMesh.js's MAX_ANTS pool, shared with the player), no need for a map
-   *  keyed by id — nothing here looks a worker up by id, only iterates. */
+   *  keyed by id — nothing here looks one up by id, only iterates. */
   const workers = [];
 
-  function spawnOne(x, z, yaw) {
+  // Seconds paused at each end of a digger's patrol — the sober-and-legible
+  // idle #38 asks for, not a size, so no body radius is involved (piège #6
+  // does not apply to a pace, only to a distance/extent).
+  const DIGGER_PATROL_WAIT = 1.4;
+
+  /**
+   * `profile` (avatar.js's WORKER or DIGGER) decides everything caste-
+   * specific about the new body: which mesh gets built, and how she moves
+   * once she exists. A forager (profile === WORKER) is `controlled: true`
+   * and fed a `drive` computed from forage.js every frame (see update()
+   * below) — a digger is `controlled: false` with a patrol `goal` baked in
+   * at spawn instead, because #38's arbitrage is "she does not forage", not
+   * "she forages more slowly": giving her the same drive machinery with a
+   * different destination would still be foraging in every way that matters
+   * to the ticket's sentence.
+   */
+  function spawnOne(profile, x, z, yaw, originX, originZ) {
     const y = groundY(x, z);
-    const entity = spawnEntity(WORKER, x, y, z, { controlled: true, yaw });
+    const isForager = profile.id === WORKER.id;
+    const entity = spawnEntity(profile, x, y, z, isForager
+      ? { controlled: true, yaw }
+      : {
+          controlled: false,
+          yaw,
+          // #38 STEP 2/4 PLACEHOLDER: real digging (a tunnel that grows
+          // toward `goal`, a new chamber at the far end) plugs in HERE —
+          // this patrol is a stand-in "she is busy near the mouth" idle,
+          // not a simulation of excavation. makePatrolGoal() is
+          // core/entities.js's existing out-and-back (#36), reused as-is
+          // rather than teaching that pure module a new goal type for one
+          // caller — see this file's header.
+          goal: makePatrolGoal(originX, originZ, x, z,
+            { arriveR: collideRadius(profile), waitFor: DIGGER_PATROL_WAIT }),
+        });
     // Same courtesy player/index.js gives the queen on her own first frame:
     // a spawn point clear for whatever survey chose it can still overlap a
     // pebble or a stem once a body actually stands there. Two resolves
@@ -86,7 +143,7 @@ export function createWorkerSwarm({ scene }) {
     resolveDecorCollision(entity, 0);
     entity.y = groundY(entity.x, entity.z);
 
-    const { group, updatePose } = buildAntMesh(WORKER);
+    const { group, updatePose } = buildAntMesh(profile);
     scene.add(group);
     // Harmless past the very first ant (core/outline.js's own doc: the
     // shell's `count` is a live getter onto the shared pool, so it already
@@ -95,76 +152,102 @@ export function createWorkerSwarm({ scene }) {
     // spawned first to have established the outline.
     scene.add(buildOutlineHull(group));
 
-    workers.push({ entity, forage: forage.createForageState(), updatePose, group });
+    workers.push({
+      entity, caste: profile.id,
+      forage: isForager ? forage.createForageState() : null,
+      updatePose, group,
+    });
     return entity;
   }
 
   /**
-   * Drain `brood.workersAvailable` exactly: every unit it holds becomes one
-   * worker entity, scattered around (originX, originZ) — the nest's surface
-   * origin, i.e. she is born coming OUT of the ground, not appearing in mid
-   * air over the lawn. Drained to zero before any spawnOne() call, so this
-   * function is idempotent between hatches: called every frame (as
-   * player/index.js does), it spawns nothing extra on the frames nothing
-   * hatched, and exactly `n` on the frame `n` eggs did.
+   * Drain `brood.workersAvailable` exactly, PER CASTE (#38: brood.js's
+   * drainHatched() hands back `{ [casteId]: count }`) — every unit becomes
+   * one entity of that caste's avatar.js profile (resolveProfile(), the same
+   * id->object lookup player/entities.js already uses for everything else),
+   * scattered around (originX, originZ) — the nest's surface origin, i.e.
+   * she is born coming OUT of the ground, not appearing in mid air over the
+   * lawn. Drained to empty before any spawnOne() call, so this function is
+   * idempotent between hatches: called every frame (as player/index.js
+   * does), it spawns nothing extra on the frames nothing hatched, and
+   * exactly the drained count (any mix of castes) on the frame something did.
    */
   function spawnFromBrood(brood, originX, originZ) {
-    const n = brood.workersAvailable;
-    brood.workersAvailable = 0;
-    for (let i = 0; i < n; i++) {
-      // `workers.length` (not the loop's own `i`) so two separate hatches
-      // keep advancing the same spiral instead of both starting over at
-      // angle 0 — see GOLDEN_ANGLE's doc.
-      const seq = workers.length;
-      const ang = seq * GOLDEN_ANGLE;
-      const rad = SPAWN_SCATTER_MIN + (seq % 5) / 5 * SPAWN_SCATTER_SPREAD;
-      spawnOne(originX + Math.cos(ang) * rad, originZ + Math.sin(ang) * rad, ang);
+    const drained = drainHatched(brood);
+    let total = 0;
+    for (const casteId of Object.keys(drained)) {
+      const n = drained[casteId] || 0;
+      const profile = resolveProfile(casteId);
+      for (let i = 0; i < n; i++) {
+        // `workers.length` (not the loop's own `i`) so separate hatches, of
+        // either caste, keep advancing the same spiral instead of both
+        // starting over at angle 0 — see GOLDEN_ANGLE's doc.
+        const seq = workers.length;
+        const ang = seq * GOLDEN_ANGLE;
+        const rad = SPAWN_SCATTER_MIN + (seq % 5) / 5 * SPAWN_SCATTER_SPREAD;
+        spawnOne(profile, originX + Math.cos(ang) * rad, originZ + Math.sin(ang) * rad, ang, originX, originZ);
+        total++;
+      }
     }
-    return n;
+    return total;
   }
 
   /**
-   * One frame for every live worker: forage.js decides where she wants to
-   * go, updateEntity() (the #36 common path) actually moves her, antMesh's
-   * updatePose() writes this frame's IK into her mesh instances.
+   * One frame for every live body. A forager (w.forage set) asks forage.js
+   * where she wants to go and feeds that as a `drive` into updateEntity() —
+   * a digger (w.forage null, #38) has no drive of her own to build: she was
+   * given a patrol `goal` at spawn, and updateEntity() (player/entities.js,
+   * #36) already knows to fall back to goalWish() for any entity that is not
+   * `controlled` — same shared function, no second call site, no digger-
+   * specific branch inside updateEntity() itself. antMesh's updatePose()
+   * then writes this frame's IK into whichever body's mesh instances.
    *
    * `cache` is player/harvest.js's own `state.cache` — {x,y,z,items,total} or
    * null before the player's first drop (see forage.js's RETURN state: a
    * worker with no cache to aim at parks rather than picking a spot of her
-   * own, same rule as the player's own carry-and-drop loop).
+   * own, same rule as the player's own carry-and-drop loop). Unused by a
+   * digger, who never reads `cache` at all.
    */
   function update(dt, elapsed, cache) {
     const depot = cache ? { x: cache.x, z: cache.z } : null;
     for (const w of workers) {
-      const bodyR = collideRadius(w.entity.profile);
-      const ctx = {
-        x: w.entity.x, z: w.entity.z, bodyR,
-        // nearestNode(), not nodeInReach(): a forager needs a direction to
-        // walk from anywhere on the map, not just an answer to "is one
-        // already under my feet" (see resources.js's own doc on the
-        // difference). forage.js's own arrival check (node.r + bodyR*0.6)
-        // is what decides when she is close enough to stop and harvest.
-        findNode: nearestNode,
-        nodeById,
-        takeFromNode,
-        depot,
-        depotRadius: CACHE_RADIUS,
-        deposit(kind) {
-          // The SAME reserve the player carries to (design/api-monde-
-          // gameplay.md's "player owns the loop", not a second counter) —
-          // `cache` cannot be null here because forage.js's RETURN state
-          // never reaches DEPOSIT while ctx.depot is null.
-          cache.items[kind] = (cache.items[kind] || 0) + 1;
-          cache.total += 1;
-        },
-        harvestSeconds: HARVEST_SECONDS, // wired, not copied — see forage.js's header
-      };
-      const wish = forage.update(w.forage, ctx, dt);
-      updateEntity(w.entity, dt, {
-        wish: { wishX: wish.wishX, wishZ: wish.wishZ },
-        intent: { mag: wish.mag, sprint: wish.sprint },
-        climbAxis: 0, // workers never climb this round (see the module header)
-      });
+      if (w.forage) {
+        const bodyR = collideRadius(w.entity.profile);
+        const ctx = {
+          x: w.entity.x, z: w.entity.z, bodyR,
+          // nearestNode(), not nodeInReach(): a forager needs a direction to
+          // walk from anywhere on the map, not just an answer to "is one
+          // already under my feet" (see resources.js's own doc on the
+          // difference). forage.js's own arrival check (node.r + bodyR*0.6)
+          // is what decides when she is close enough to stop and harvest.
+          findNode: nearestNode,
+          nodeById,
+          takeFromNode,
+          depot,
+          depotRadius: CACHE_RADIUS,
+          deposit(kind) {
+            // The SAME reserve the player carries to (design/api-monde-
+            // gameplay.md's "player owns the loop", not a second counter) —
+            // `cache` cannot be null here because forage.js's RETURN state
+            // never reaches DEPOSIT while ctx.depot is null.
+            cache.items[kind] = (cache.items[kind] || 0) + 1;
+            cache.total += 1;
+          },
+          harvestSeconds: HARVEST_SECONDS, // wired, not copied — see forage.js's header
+        };
+        const wish = forage.update(w.forage, ctx, dt);
+        updateEntity(w.entity, dt, {
+          wish: { wishX: wish.wishX, wishZ: wish.wishZ },
+          intent: { mag: wish.mag, sprint: wish.sprint },
+          climbAxis: 0, // no forager climbs this round (see the module header)
+        });
+      } else {
+        // A digger: no drive to build, she is not `controlled` — updateEntity()
+        // reads her own `goal` (the patrol set at spawn) via goalWish() on its
+        // own. See this file's header for what SHOULD eventually happen here
+        // (real digging) instead of pacing.
+        updateEntity(w.entity, dt, null);
+      }
       w.updatePose(w.entity, w.entity.legState, elapsed);
       w.group.position.set(0, 0, 0); // parts are already placed in world space (antMesh.js)
     }
@@ -172,10 +255,19 @@ export function createWorkerSwarm({ scene }) {
 
   function count() { return workers.length; }
 
+  /** Population by caste id, e.g. `{ worker: 3, digger: 1 }` — #38's HUD
+   *  criterion ("un compteur de population par caste"). Absent castes are
+   *  simply absent keys, same convention as brood.js's workersAvailable. */
+  function countByCaste() {
+    const out = {};
+    for (const w of workers) out[w.caste] = (out[w.caste] || 0) + 1;
+    return out;
+  }
+
   function dispose() {
     for (const w of workers) removeEntity(w.entity);
     workers.length = 0;
   }
 
-  return { spawnFromBrood, update, count, dispose, workers };
+  return { spawnFromBrood, update, count, countByCaste, dispose, workers };
 }

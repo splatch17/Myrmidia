@@ -100,6 +100,35 @@ export const WORKER = {
   cam: { dist: 36, min: 10, max: 85 },
 };
 
+// #38: the second caste the queen can choose to lay, alongside WORKER. Same
+// body vocabulary (WORKER_LEGS, WORKER_BODY spread) with only the mandible
+// swapped and the chitine darkened — see design/castes-et-micro-macro.md §2
+// for why each number is what it is; every value below is copied verbatim
+// from that spec (§2b), not re-derived here, so a disagreement between the
+// two files is a diff away from being caught rather than silent.
+export const DIGGER = {
+  id: 'digger',
+  label: 'creuseuse',
+  scale: 1.08,
+  legs: WORKER_LEGS,
+  body: {
+    ...WORKER_BODY,
+    mandible: { root: [0.52, 1.42, 3.35], tip: [0.34, 1.10, 4.30], gape: 0.32, r: 0.27 },
+  },
+  breathes: false,
+  colors: { chitinA: 0x5c3b18, chitinB: 0x2c1e0e, limb: 0x472d15, mandible: 0x855f2a, eye: 0x100c06 },
+  maxSpeed: 12.5,
+  sprint: 1.75,
+  turnRate: 6.5,
+  legLen: [2.7, 2.9],
+  stride: 6.0,
+  climbSpeed: 20,
+  bodyR: 1.5, // note piège #6 (design doc §2b's own table): scale 1.08 makes
+              // collideRadius(DIGGER) === 1.62, not 1.5 — deliberate, not a
+              // stale copy of WORKER's bodyR.
+  cam: { dist: 36, min: 10, max: 85 },
+};
+
 export const FOUNDING_QUEEN = {
   id: 'queen',
   label: 'reine fondatrice',
@@ -129,6 +158,19 @@ export const FOUNDING_QUEEN = {
 
 /** The body the player currently drives. #32: the game opens on the queen. */
 export const PLAYER_AVATAR = FOUNDING_QUEEN;
+
+/** Every avatar profile that exists, in one place. #38's own structural
+ *  constraint ("une caste est une ligne, pas un fichier") only holds if
+ *  nothing downstream hand-copies the list of profiles: entities.js's
+ *  id->profile lookup table and antMesh.js's shared-pool sizing both derive
+ *  from THIS array now instead of each spelling out `[WORKER,
+ *  FOUNDING_QUEEN]` on its own — see PROGRESS.md tour 14 on the two places a
+ *  third caste used to have to be remembered by hand (a silent pool
+ *  overflow in one of them, no error in the other). Adding a caste is:
+ *  define its object above, append it here, done — nothing else in
+ *  player/** should need editing for a new profile to be spawnable, drawn
+ *  and resolved by id. */
+export const ALL_PROFILES = [WORKER, FOUNDING_QUEEN, DIGGER];
 
 /* Derived, so nobody re-multiplies by hand:
    scaled leg bone lengths, stride, and collision radius. */
