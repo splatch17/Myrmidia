@@ -1,9 +1,13 @@
 import { clamp, damp } from '../core/noise.js';
 import { nrm3, cross3 } from '../core/vecmath.js';
 import { dampAngle } from './mathUtil.js';
-import { containUnderground, containSurface, groundY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '../world/index.js';
+import {
+  containUnderground, containSurface, groundY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS,
+  foundedNestEntry, containFoundedNest, foundedNestFloorY,
+} from '../world/index.js';
 import { resolveDecorCollision } from './decorCollision.js';
 import { PLAYER_AVATAR, collideRadius, strideOf } from './avatar.js';
+import { NEST_ENTRY_STATE, createNestEntryState, update as nestEntryUpdate } from './nestEntry.js';
 
 /* ==========================================================================
    Ground movement + underground/lawn containment — ported from the tail of
@@ -31,7 +35,36 @@ import { PLAYER_AVATAR, collideRadius, strideOf } from './avatar.js';
    exactly as the old prototype ordered it: containUnderground() then has the
    last word, so being pushed off a mushroom can never shove the ant through
    a wall.
+
+   #58 (contract §8a/§8b) adds a THIRD region, alongside the pre-built
+   gallery and the lawn: the founded nest's own shaft and chamber. Gated on
+   `p.nestDescentSpeed != null` (only FOUNDING_QUEEN carries that field, see
+   avatar.js) rather than a profile-id check, so an unpiloted worker/digger —
+   driven through this SAME stepAnt() by player/entities.js's updateEntity(),
+   not just the player — walks over a crater exactly as it did before this
+   ticket instead of falling in on the world's behalf. player/nestEntry.js
+   owns the whole state machine (when to fall in, the descent itself, when to
+   climb back out); this file only builds its `ctx` and applies whatever
+   position it hands back. See nestEntry.js's own header for why
+   resolveDecorCollision() and containUnderground()/containSurface() never
+   run in the same frame as it: while DESCENDING/ASCENDING the position is
+   fully dictated by the shaft's own tilted segment (no lateral freedom to
+   collide with anything), and while INSIDE, ROCKS/MUSHROOMS/GRASS are
+   indexed in (x, z) only — a lawn pebble sitting "above" the chamber in
+   (x, z) is nowhere near the queen 20 units underground, so decor collision
+   is skipped there rather than fighting containFoundedNest() for the last
+   word the way it does on the lawn.
    ========================================================================== */
+
+// CAMERA NOT UPDATED FOR THIS TICKET (contract's own explicit exclusion —
+// "elle ne sait pas cadrer un puits vertical, ticket à part"). camera.js
+// still decides close/iso purely off `ant.z < TUNNEL_MOUTH`, so a queen
+// standing in the founded chamber (z >= TUNNEL_MOUTH, same region as the
+// open lawn) keeps the ordinary outdoor framing throughout DESCENDING/
+// INSIDE/ASCENDING — no crater-shaft-aware boom, no darkening for being
+// underground. Left exactly as camera.js already was; flagged here because
+// it is the one place in this ticket's own code where the mismatch is
+// visible without opening camera.js at all.
 
 // The old prototype's "you walk around the queen, not through her", plus the
 // player's own half-width: an avatar 2.2x a worker (#32) would otherwise have
@@ -47,11 +80,42 @@ export function computeWishDir(intent, camEye, camAim) {
   };
 }
 
+// #58: `ant.nestEntry`'s own bob formula, needed at two return points below
+// (the INSIDE branch and the ordinary tail) — factored out so a change to
+// one can't silently diverge from the other.
+function updateBob(ant, p, s) {
+  ant.bob = Math.sin(ant.travel * (Math.PI * 2 / strideOf(p)) * 2) * 0.13 * s * clamp(ant.speed / (8 * s), 0, 1);
+}
+
 export function stepAnt(ant, wish, intent, dt) {
   const p = ant.profile || PLAYER_AVATAR;
   const s = ant.scale || 1;
   const bodyR = collideRadius(p);
   const maxSpeed = p.maxSpeed * (intent.sprint ? p.sprint : 1);
+
+  // #58: only a profile carrying nestDescentSpeed (FOUNDING_QUEEN today) is
+  // ever eligible for the founded-nest shaft — see the header on why that
+  // gate, rather than a caste-id check, is what keeps this a no-op for every
+  // worker/digger this same stepAnt() also drives.
+  const queenEntry = p.nestDescentSpeed != null;
+  if (queenEntry && !ant.nestEntry) ant.nestEntry = createNestEntryState();
+
+  // Mid-transit (DESCENDING/ASCENDING): the shaft's own tilted segment
+  // dictates x, y AND z together (contract §8a — not a vertical drop), with
+  // no lateral freedom at all this frame, so none of the ordinary
+  // steering/decor-collision/containment code below ever runs for it.
+  if (queenEntry
+    && (ant.nestEntry.state === NEST_ENTRY_STATE.DESCENDING || ant.nestEntry.state === NEST_ENTRY_STATE.ASCENDING)) {
+    const res = nestEntryUpdate(ant.nestEntry, {
+      x: ant.x, z: ant.z,
+      entry: foundedNestEntry, contain: containFoundedNest, floorAt: foundedNestFloorY, surfaceY: groundY,
+      descentSpeed: p.nestDescentSpeed, bodyR,
+    }, dt);
+    ant.x = res.pos.x; ant.y = res.pos.y; ant.z = res.pos.z;
+    ant.speed = 0;
+    ant.bob = 0;
+    return;
+  }
 
   if (intent.mag > 0.02) {
     ant.yaw = dampAngle(ant.yaw, Math.atan2(wish.wishX, wish.wishZ), p.turnRate, dt);
@@ -64,6 +128,27 @@ export function stepAnt(ant, wish, intent, dt) {
   ant.x += Math.sin(ant.yaw) * step;
   ant.z += Math.cos(ant.yaw) * step;
   ant.travel += step;
+
+  // OUTSIDE (watching for the fall-in trigger) or INSIDE (watching for the
+  // climb-out trigger), both on the ordinary steering result just above —
+  // see nestEntry.js's header for why this can't be a single shared radius.
+  if (queenEntry && ant.z >= TUNNEL_MOUTH
+    && (ant.nestEntry.state === NEST_ENTRY_STATE.OUTSIDE || ant.nestEntry.state === NEST_ENTRY_STATE.INSIDE)) {
+    const res = nestEntryUpdate(ant.nestEntry, {
+      x: ant.x, z: ant.z,
+      entry: foundedNestEntry, contain: containFoundedNest, floorAt: foundedNestFloorY, surfaceY: groundY,
+      descentSpeed: p.nestDescentSpeed, bodyR,
+    }, dt);
+    if (res.pos) {
+      ant.x = res.pos.x; ant.y = res.pos.y; ant.z = res.pos.z;
+      if (res.state === NEST_ENTRY_STATE.INSIDE) updateBob(ant, p, s);
+      else { ant.speed = 0; ant.bob = 0; }
+      return;
+    }
+    // res.state === 'outside', not triggered: fall through below exactly as
+    // a profile with no nestDescentSpeed at all always has, using the
+    // tentative (x, z) the ordinary steering above already computed.
+  }
 
   resolveDecorCollision(ant, step);
 
@@ -106,5 +191,5 @@ export function stepAnt(ant, wish, intent, dt) {
   }
 
   ant.y = groundY(ant.x, ant.z);
-  ant.bob = Math.sin(ant.travel * (Math.PI * 2 / strideOf(p)) * 2) * 0.13 * s * clamp(ant.speed / (8 * s), 0, 1);
+  updateBob(ant, p, s);
 }

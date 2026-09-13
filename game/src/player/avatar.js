@@ -168,6 +168,27 @@ export const FOUNDING_QUEEN = {
   // 36*2.2 on purpose — the prologue is played outdoors, where too long a
   // boom flattens the meadow into a map.
   cam: { dist: 58, min: 16, max: 140 },
+  // #58 (contract §8b): "où vit la vitesse de descente — pas world/
+  // founding.js, une propriété du corps qui descend". World units per second
+  // along the shaft's own tilted axis (player/nestEntry.js converts this to
+  // a fraction of the segment's own length via `descentSpeed*dt/pathLength`,
+  // read fresh from world/founding.js's foundedNestEntry() every frame,
+  // never a copied distance — see that module's header). Deliberately NOT
+  // scaled by `scale` the way climbSpeed is: the shaft's ~21-unit length
+  // (Atta's own measurement) is a property of the WORLD, not of her body, so
+  // a bigger queen does not cover it faster for the same reason a bigger
+  // queen does not make DIG_GALLERY_LEN shorter. At 5, a ~21-unit shaft
+  // takes ~4.2s to descend — long enough to read as a real descent (this
+  // ticket's own "une durée plutôt qu'instantanée", same requirement §4
+  // already put on a dig), short enough not to stall a play session on a
+  // transition nobody steers. Only FOUNDING_QUEEN carries this field: it is
+  // the gate player/movement.js's third branch uses to decide an entity even
+  // CAN engage the founded nest's shaft at all (`p.nestDescentSpeed != null`)
+  // — a worker/digger patrol with no such field walks straight over a
+  // crater exactly as it did before this ticket, never falls in. See the
+  // session report for why that matters: stepAnt() is shared by every ant in
+  // the game, not just the player.
+  nestDescentSpeed: 5,
 };
 
 /** The body the player currently drives. #32: the game opens on the queen. */
