@@ -18,6 +18,8 @@ import { RESOURCE_NODES, harvestNode, nodesNear, buildResources } from './resour
 import {
   initFounding, canFoundAt, foundNest, nestOrigin, getFoundedNest,
   populateNest, sealNest, updateFounding, MAX_BROOD,
+  DIG_SITES_MAX, DIG_GALLERY_LEN, DIG_GALLERY_R,
+  planDigSite, digSites, openDigSite, advanceDig, digProgress, containFoundedNest,
 } from './founding.js';
 import { createSpatialIndex } from '../core/spatialIndex.js';
 import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
@@ -29,8 +31,10 @@ import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './
 // player controller (#20/#21): spawn point, queen avoidance, and the
 // underground-vs-outdoor switch the old prototype's frame() used.
 // MUSHROOMS/ROCKS/mushroomCollideR are the decor collision footprints the old
-// prototype kept (resolveDecorCollision); exported for a later gameplay pass,
-// deliberately not wired into the player controller from here.
+// prototype kept (resolveDecorCollision); player/decorCollision.js has
+// consumed them for several rounds now — this note used to say "deliberately
+// not wired into the player controller", which stopped being true then and
+// was left uncorrected until #57 (PROGRESS.md flagged it four rounds running).
 // applyNestShading/daylightAt are the lighting rig's public surface (main.js).
 //
 // SURFACE TERRAIN (#31), for the controller/legs/camera and for gameplay that
@@ -69,6 +73,14 @@ import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './
 //                             populateNest(n) / sealNest() are the #12 half
 //                             (empty chamber that fills up) and are an
 //                             addition to the contract — see the report.
+//   §7 DIG_SITES_MAX / DIG_GALLERY_LEN / DIG_GALLERY_R, planDigSite/digSites/
+//                             openDigSite/advanceDig/digProgress,
+//                             containFoundedNest — round 15 (#57): chantiers
+//                             radiating from the founded chamber, progressive
+//                             digging, and the containment clamp for the
+//                             volume actually dug. See world/founding.js's
+//                             own "#57" section for the geometry and the
+//                             rebuild-throttling rationale.
 // RIG_PROLOGUE/RIG_FOUNDED/sunDir/foundedMix/setFoundedMix are the sky rig
 // main.js drives and shadeAt() reads, kept in one place so the light the
 // player is told about and the light drawn on screen cannot diverge.
@@ -87,6 +99,8 @@ export {
   shadeAt,
   RESOURCE_NODES, harvestNode, nodesNear,
   canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest, MAX_BROOD,
+  DIG_SITES_MAX, DIG_GALLERY_LEN, DIG_GALLERY_R,
+  planDigSite, digSites, openDigSite, advanceDig, digProgress, containFoundedNest,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
 

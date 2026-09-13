@@ -127,6 +127,20 @@ export const DIGGER = {
               // collideRadius(DIGGER) === 1.62, not 1.5 — deliberate, not a
               // stale copy of WORKER's bodyR.
   cam: { dist: 36, min: 10, max: 85 },
+  // #57 (contract §7): "où vit la vitesse de creusement — pas [world/
+  // founding.js], une propriété du corps qui creuse". World units per second
+  // along a chantier's own axis (player/dig.js converts this to a fraction
+  // of world/founding.js's DIG_GALLERY_LEN via `digSpeed*dt/site.length`,
+  // never the other way round). Calibrated against DIG_GALLERY_LEN=48: one
+  // digger alone opens a full gallery in 48/0.8 = 60 s; three on the same
+  // chantier (additive by construction, world/founding.js's own doc on
+  // advanceDig) cut that to 20 s — a chantier reads as a real, watchable
+  // project across a short session, never an instant toggle
+  // (design/boucle-de-jeu.md §4's own requirement) and never a multi-session
+  // grind. WORKER has no such field on purpose: `ctx.digSpeed ?? 0` in
+  // dig.js is what makes "a forager never digs" true by construction rather
+  // than by a caller remembering to keep her out of that file.
+  digSpeed: 0.8,
 };
 
 export const FOUNDING_QUEEN = {

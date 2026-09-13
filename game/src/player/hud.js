@@ -27,6 +27,12 @@
                    before the colony is founded, there being nothing to
                    report yet. brood.js/index.js decide *what* happened; this
                    file only ever prints the sentence player/index.js hands it.
+     #diginfo    — the chantier (#57): which dig site(s) are being worked
+                   right now, at what percent each, and how many diggers are
+                   on each one — contract §7's "additive by construction"
+                   made legible rather than only true offstage. Same recipe
+                   as #broodinfo (amber, small type), not a new layout idea.
+                   Empty while no chantier is open.
      #controls   — the key bindings, open at first launch, toggled with H
 
    The controls panel is not decoration. The player's report on the previous
@@ -56,7 +62,7 @@ function el(id, style) {
 function nullHud() {
   return {
     setSite() {}, setPrompt() {}, setObjective() {}, setStock() {}, setEvent() {},
-    setHold() {}, setBrood() {}, toggleControls() {}, closeControls() {}, dispose() {},
+    setHold() {}, setBrood() {}, setDig() {}, toggleControls() {}, closeControls() {}, dispose() {},
   };
 }
 
@@ -88,6 +94,11 @@ export function createHud() {
      is 5px where every other slot is a 19px line, and it has to sit tight
      under the prompt it belongs to. First attempt put it at 98 and it landed
      on the objective line — again caught on a capture. */
+  // #57: sits above #event, same 20px rhythm as the rest of the stack
+  // (142+20=162, matching every other gap in this column) rather than
+  // squeezed into an existing slot — one new line, one new offset, nothing
+  // else moves.
+  const dig = el('diginfo', 'left:12px;bottom:162px;font-size:12px;color:#e8c98f;');
   const event = el('event', 'left:12px;bottom:142px;color:#cfe0a8;');
   const prompt = el('prompt', 'left:12px;bottom:122px;font-size:14px;color:#ffe6b0;');
   const objective = el('objective', 'left:12px;bottom:88px;color:#f0dfb8;');
@@ -121,7 +132,7 @@ export function createHud() {
   let controlsOpen = true;
 
   let lastSite = null, lastDetail = null, lastPrompt = null;
-  let lastObjective = null, lastStock = null, lastEvent = null, lastBrood = null;
+  let lastObjective = null, lastStock = null, lastEvent = null, lastBrood = null, lastDig = null;
 
   // every setter writes only on change: these run every frame, and
   // reassigning textContent unconditionally dirties layout for nothing
@@ -151,6 +162,8 @@ export function createHud() {
     setEvent(text) { lastEvent = setText(event, text, lastEvent); },
     /** the ponte readout (#6 §2) — null before the colony is founded */
     setBrood(text) { lastBrood = setText(brood, text, lastBrood); },
+    /** the chantier readout (#57) — null while no dig site is open */
+    setDig(text) { lastDig = setText(dig, text, lastDig); },
     /** 0..1 while a held action runs, null when none is. */
     setHold(progress) {
       const on = progress !== null && progress > 0.001;
@@ -170,7 +183,7 @@ export function createHud() {
       controls.style.display = 'none';
     },
     dispose() {
-      for (const n of [objective, stock, site, detail, prompt, event, brood, holdOuter, controls]) {
+      for (const n of [objective, stock, site, detail, prompt, event, brood, dig, holdOuter, controls]) {
         if (n.parentNode) n.parentNode.removeChild(n);
       }
     },

@@ -61,6 +61,51 @@ const WARM_MOUTH_LIGHT = [1.05, 0.62, 0.24];   // ambiance §2b: the one warm
 const BROOD_LIGHT = [0.85, 0.55, 0.22];        // ambiance §2c plan 5
 const GLOW_LIGHT = [1.95, 1.20, 0.52];         // ambiance §2c plan 6
 
+/* ---- run-time digging (#57, contract §7) --------------------------------
+   A dig site is a straight, horizontal tunnel that starts on the chamber
+   wall and grows outward as diggers work it. Reuses buildShell's swept-tube
+   idiom (rings of a wobbled circle, wobbleAt, the earth palette) but along a
+   flat horizontal axis instead of the chamber's near-vertical one, because
+   contract §7 requires `dir` to be horizontal.
+
+   SIZED AGAINST (piège #6, PROGRESS.md — the nest-bore trap happened with
+   this exact shape of number before): FOUNDING_QUEEN's collision radius is
+   3.3 (player/avatar.js, bodyR 1.5 * scale 2.2). containFoundedNest()'s own
+   per-site clamp shrinks DIG_GALLERY_R by the same 0.82/-1.2 fudge
+   containUnderground() applies to every corridor (see that function for
+   why): Math.max(7.5*0.82-1.2, 2.2) = 4.95, a 1.65-unit (50%) margin over
+   3.3 — comfortable, not the 0.9-unit margin the shaft (SHAFT_R=4.2) barely
+   cleared. DIG_GALLERY_LEN=48 is ~3.4x the chamber's own radius (ROOM_R=14):
+   long enough that growth reads as a real tunnel over many advanceDig()
+   calls, short enough that a mouth chosen by canFoundAt's own slope/water
+   margins is unlikely to have its far end break the surface (MAX_SLOPE=0.62
+   over 48 units is a 30-unit worst-case rise — not checked against the
+   terrain here, an item for visual review). */
+export const DIG_SITES_MAX = 4;
+export const DIG_GALLERY_LEN = 48;
+export const DIG_GALLERY_R = 7.5;
+
+/* How often advanceDig() rebuilds a site's mesh, not how often it accepts
+   progress. advanceDig() is called once per digger per frame (#38's whole
+   arbitrage is "several diggers on the same site go faster"), so rebuilding
+   the swept tube on every call would run a ~34-ring geometry build every
+   image, for every open site, for every digger on it — a vertex-count storm
+   for a number nobody can see change frame to frame. Instead the mesh is
+   rebuilt only when `progress` crosses one of DIG_REBUILD_STEPS equal steps
+   (1/24 ≈ 2 world units of new tunnel per rebuild, roughly a queen's
+   collision diameter — coarse enough to matter, fine enough to look
+   continuous). A gallery dug from 0 to 1 therefore costs at most
+   DIG_REBUILD_STEPS + 1 = 25 rebuilds over its whole life, however many
+   diggers or frames that takes — the throttle is on distance dug, not time
+   or call count. containFoundedNest() never reads the mesh: the walkable
+   volume it clamps into is computed straight from `progress`, continuously,
+   so a caller can never fall through the lag between "progress advanced"
+   and "mesh caught up". */
+const DIG_REBUILD_STEPS = 24;
+function digStepOf(progress) {
+  return Math.min(DIG_REBUILD_STEPS, Math.floor(clamp(progress, 0, 1) * DIG_REBUILD_STEPS + 1e-9));
+}
+
 /* Exported (and re-exported by world/index.js) because player/index.js needs
    the same number to size the brood room's capacity, and used to carry its
    own hand-copied BROOD_ROOM_CAPACITY = 6 — a silent divergence waiting to
@@ -71,6 +116,7 @@ export const MAX_BROOD = 6;
 
 let host = null;          // the THREE.Group foundNest() may add to
 let nest = null;          // the founded nest, or null
+let sites = new Array(DIG_SITES_MAX).fill(null); // dig sites, index-keyed, null until opened
 const mixColor = (a, b, t) => new THREE.Color(a).lerp(b, clamp(t, 0, 1));
 
 /** Called once by createWorld(): where a nest dug later should be attached. */
@@ -381,10 +427,221 @@ export function updateFounding(dt) {
   nest._coldLight.c[2] = COLD_SHAFT_LIGHT[2] * f;
 }
 
+/* ---- dig sites, the public act of #57 ------------------------------------
+   Four candidate directions, evenly spaced around the chamber's own circle
+   (theta measured from world +X, nothing to do with wallPoint's th convention
+   in world/underground.js — there is no shared wall here to be consistent
+   with, this chamber's cross-section is a plain horizontal circle). Pure and
+   deterministic in `i` alone: no RNG, so planDigSite(i) can be asked before
+   anything is open, from a HUD, over and over, for the same answer. */
+function siteAngle(i) { return (2 * Math.PI * i) / DIG_SITES_MAX + Math.PI / 4; }
+
+function sitePlan(i) {
+  const C = nest.chamber;
+  const theta = siteAngle(i);
+  const dir = { x: Math.cos(theta), z: Math.sin(theta) };
+  return {
+    id: `dig-${i}`,
+    mouth: { x: C.x + dir.x * C.r, y: nest.floorY, z: C.z + dir.z * C.r },
+    dir, length: DIG_GALLERY_LEN, r: DIG_GALLERY_R,
+  };
+}
+
+/**
+ * Describe dig site `i` around the founded chamber, without building or
+ * opening anything. `null` while nothing is founded, or if `i` is out of
+ * `[0, DIG_SITES_MAX)` — same nest, same `i`, same answer, always.
+ */
+export function planDigSite(i) {
+  if (!nest || !Number.isInteger(i) || i < 0 || i >= DIG_SITES_MAX) return null;
+  return { ...sitePlan(i), progress: 0 };
+}
+
+function siteView(s) {
+  return { id: s.id, mouth: s.mouth, dir: s.dir, length: s.length, r: s.r, progress: s.progress };
+}
+
+/** The chantiers actually opened — digSites().length <= DIG_SITES_MAX. */
+export function digSites() {
+  return sites.filter(Boolean).map(siteView);
+}
+
+/**
+ * Open chantier `i` at progress 0. Re-opening one already open is a no-op
+ * that returns the same site (contract §7) rather than resetting it — a
+ * digger arriving at an in-progress site must not undo her sisters' work.
+ */
+export function openDigSite(i) {
+  if (!nest) return { ok: false, reason: 'not-founded' };
+  if (!Number.isInteger(i) || i < 0 || i >= DIG_SITES_MAX) return { ok: false, reason: 'bad-index' };
+  if (sites[i]) return { ok: true, site: siteView(sites[i]) };
+  const plan = sitePlan(i);
+  const site = {
+    ...plan, index: i, progress: 0,
+    // same seed formula as foundNest()'s own chamber seed, salted by index so
+    // sibling sites don't all wobble in lockstep
+    seed: Math.floor(Math.abs(nest.x) * 131 + Math.abs(nest.z) * 977 + i * 613) % 9973,
+    mesh: null, _meshStep: -1,
+  };
+  sites[i] = site;
+  return { ok: true, site: siteView(site) };
+}
+
+function findSite(id) { return sites.find((s) => s && s.id === id) || null; }
+
+/**
+ * Add `dFraction` (any sign, but the caller only ever adds — see contract
+ * §7's note on where the digging *speed* lives) to a site's progress, bound
+ * to [0, 1], and rebuild its mesh if that crossed a rebuild step (see
+ * DIG_REBUILD_STEPS above). `reason: 'unknown-site'` covers a stale or
+ * mistyped id without throwing on a caller that raced a reset.
+ */
+export function advanceDig(id, dFraction) {
+  const site = findSite(id);
+  if (!site) return { ok: false, progress: 0, done: false, reason: 'unknown-site' };
+  const d = Number.isFinite(dFraction) ? dFraction : 0;
+  site.progress = clamp(site.progress + d, 0, 1);
+  const step = digStepOf(site.progress);
+  if (step !== site._meshStep) {
+    site._meshStep = step;
+    rebuildGalleryMesh(site);
+  }
+  return { ok: true, progress: site.progress, done: site.progress >= 1 };
+}
+
+/** 0 for an id that was never opened (or is stale) — never throws. */
+export function digProgress(id) {
+  const site = findSite(id);
+  return site ? site.progress : 0;
+}
+
+/* Rebuild (never construct twice from scratch): the mesh object and its
+   material are made once per site, on the first rebuild past progress 0;
+   every later rebuild only swaps the geometry, so a site's up-to-25-rebuild
+   life costs 25 geometry builds and exactly one material. */
+function buildGalleryGeometry(site, dugLen) {
+  const dir3 = [site.dir.x, 0, site.dir.z];
+  // side/up: cross(worldUp, dir) and cross(dir, side) collapse to a clean
+  // (horizontal-perp, world-up) pair whenever dir itself is horizontal and
+  // unit — unlike buildShell's e1/e2, this never degenerates for any dir3
+  // this file ever hands it (see the session report for the derivation).
+  const side = [dir3[2], 0, -dir3[0]];
+  const up = [0, 1, 0];
+  const floorY = site.mouth.y - site.r * 0.85;
+  const ANG = 16;
+
+  const M = new MeshBuilder();
+  const rows = [];
+  for (let u = 0; ; u += 1.5) {
+    const uu = Math.min(u, dugLen);
+    const row = [];
+    const cx = site.mouth.x + dir3[0] * uu, cz = site.mouth.z + dir3[2] * uu;
+    for (let a = 0; a < ANG; a++) {
+      const th = (2 * Math.PI * a) / ANG;
+      const wob = wobbleAt(th, uu, site.seed);
+      const r = site.r * wob;
+      const px = cx + (side[0] * Math.cos(th) + up[0] * Math.sin(th)) * r;
+      const py = site.mouth.y + (side[1] * Math.cos(th) + up[1] * Math.sin(th)) * r;
+      const pz = cz + (side[2] * Math.cos(th) + up[2] * Math.sin(th)) * r;
+      // freshly dug, same earth as buildShell — this is more of the same hole
+      const c = mixColor(C_WALL_B, C_WALL_A, 0.5).lerp(C_SOIL_A, 0.18).multiplyScalar(0.88);
+      row.push(M.addVertex(px, Math.max(py, floorY), pz, c.toArray()));
+    }
+    rows.push(row);
+    if (uu >= dugLen) break;
+  }
+  for (let r = 0; r < rows.length - 1; r++) {
+    for (let a = 0; a < ANG; a++) {
+      const n = (a + 1) % ANG;
+      M.addQuad(rows[r][a], rows[r][n], rows[r + 1][n], rows[r + 1][a]);
+    }
+  }
+  // the working face: a flat cap so the front of the dig reads as a wall,
+  // not an open pipe
+  const last = rows[rows.length - 1];
+  const capC = M.addVertex(
+    site.mouth.x + dir3[0] * dugLen, floorY, site.mouth.z + dir3[2] * dugLen,
+    mixColor(C_WALL_B, C_SOIL_A, 0.35).toArray(),
+  );
+  for (let a = 0; a < ANG; a++) M.addTri(capC, last[a], last[(a + 1) % ANG]);
+  return M.toBufferGeometry();
+}
+
+function rebuildGalleryMesh(site) {
+  const dugLen = site.progress * site.length;
+  if (dugLen < 1e-3) { if (site.mesh) site.mesh.visible = false; return; }
+  const geometry = buildGalleryGeometry(site, dugLen);
+  if (!site.mesh) {
+    const material = applyNestShading(texturedSurfaceMaterial({ map: dirtAlbedo(), strength: 0.62, side: THREE.DoubleSide }));
+    site.mesh = new THREE.Mesh(geometry, material);
+    site.mesh.name = 'dig-gallery-' + site.index;
+    site.mesh.receiveShadow = true;
+    nest.group.add(site.mesh);
+  } else {
+    site.mesh.geometry.dispose();
+    site.mesh.geometry = geometry;
+    site.mesh.visible = true;
+  }
+}
+
+/**
+ * Twin of world/underground.js's containUnderground() for the chamber dug at
+ * run time: clamps (x, z) into the nearest legal point of the volume actually
+ * dug — the chamber's own footprint, plus each open site's tunnel *up to its
+ * dug length only* (progress * length). What is not dug is not walkable: a
+ * front de taille clamps like a wall, not like the end of an infinite tube.
+ * `null` while nothing is founded, so a caller can tell "no nest" apart from
+ * "clamped to (x0, z0)".
+ *
+ * Same two-tier shape and the same fudge constants as containUnderground():
+ * a point already inside one specific site's own lane is clamped there first
+ * (radius shrunk by the 0.82/-1.2 rule, see the DIG_GALLERY_R comment above);
+ * everything else falls back to the chamber's own circular footprint, widened
+ * along the arc facing each open door (the same "doorFalloff" idea
+ * containUnderground applies along z, generalised here to an angle since
+ * these doors sit anywhere around a circle rather than only at +-x).
+ */
+export function containFoundedNest(x, z) {
+  if (!nest) return null;
+  for (let i = 0; i < sites.length; i++) {
+    const s = sites[i];
+    if (!s) continue;
+    const dugLen = s.progress * s.length;
+    const relX = x - s.mouth.x, relZ = z - s.mouth.z;
+    const u = relX * s.dir.x + relZ * s.dir.z;
+    if (u <= -0.5 || u >= dugLen + 1) continue;
+    const lx = relX * -s.dir.z + relZ * s.dir.x;
+    const rr = Math.max(s.r * 0.82 - 1.2, 2.2);
+    if (Math.abs(lx) >= rr + 3) continue;
+    const uc = clamp(u, -0.5, dugLen - 0.2);
+    const lxc = clamp(lx, -rr, rr);
+    return [s.mouth.x + s.dir.x * uc - s.dir.z * lxc, s.mouth.z + s.dir.z * uc + s.dir.x * lxc];
+  }
+  const C = nest.chamber;
+  const relX = x - C.x, relZ = z - C.z;
+  const rho = Math.hypot(relX, relZ);
+  const theta = Math.atan2(relZ, relX);
+  let reach = Math.max(C.r * 0.82 - 1.6, 3);
+  for (const s of sites) {
+    if (!s) continue;
+    const doorTheta = Math.atan2(s.dir.z, s.dir.x);
+    let dth = Math.abs(theta - doorTheta) % (Math.PI * 2);
+    if (dth > Math.PI) dth = Math.PI * 2 - dth;
+    const arc = dth * C.r;
+    const fall = clamp(1 - arc / (s.r * 2.2), 0, 1);
+    if (fall <= 0) continue;
+    const doorReach = lerp(reach, C.r + 1.5, fall);
+    if (doorReach > reach) reach = doorReach;
+  }
+  const rc = clamp(rho, 0, reach);
+  return [C.x + Math.cos(theta) * rc, C.z + Math.sin(theta) * rc];
+}
+
 /** Test seam only: forget the founded nest so a harness can dig again. Not
  *  gameplay — nothing in player/** should ever call this. */
 export function _resetFounding() {
   if (nest && nest.group.parent) nest.group.parent.remove(nest.group);
   nest = null;
+  sites = new Array(DIG_SITES_MAX).fill(null);
   setNestPit(0, 0, 0, 0, 0);
 }
