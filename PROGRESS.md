@@ -745,6 +745,136 @@ Par ordre d'importance :
 
 ---
 
+## Round du 2026-09-13 (tour 15 — nocturne, VPS ARM sans GPU)
+
+**Ticket travaillé : #57 — « La creuseuse creuse : chantier, progression,
+galerie qui s'allonge (étape 2/4) ».** Il **n'existait pas** : le tour 14 le
+désignait comme la suite (« Quoi faire ensuite », point 2) en disant qu'il
+était à ouvrir. Ouvert ce round **avant** toute ligne de code. Choisi parce que
+la creuseuse livrée au tour 14 ne creusait pas — l'arbitrage de #38 n'avait
+donc qu'un seul plateau — et parce que son cœur (géométrie d'un volume creusé,
+machine à états d'un chantier) est vérifiable sans écran. Aucun `verify-*.mjs`
+n'a été lancé.
+
+### Où on en est
+
+**Le nid s'agrandit pendant la partie.** Une creuseuse marche jusqu'au bord de
+la chambre fondée, se poste au front de taille et creuse ; la galerie
+s'allonge dans le temps, son volume devient marchable au fur et à mesure, et
+trois creuseuses vont trois fois plus vite qu'une.
+
+| Fichier | Rôle |
+|---|---|
+| `design/api-monde-gameplay.md` **§7** | Le contrat, écrit par l'orchestrateur **avant** distribution, comme le §6 au tour 11. C'est lui qui a empêché les deux moitiés d'être spécifiées séparément (l'accident du round 5) |
+| `world/founding.js` | `planDigSite` / `digSites` / `openDigSite` / `advanceDig` / `digProgress` / `containFoundedNest`, plus la géométrie de galerie. **La coque de la chambre n'est jamais reconstruite** (règle de #12) |
+| `world/index.js` | Le baril réexporte le §7. Et l'en-tête menteur (« deliberately not wired into the player controller ») est **enfin corrigé**, quatre tours après avoir été noté |
+| `player/dig.js` **(nouveau)** | La machine à états SEEK_SITE → DIG → DONE. **Module pur, zéro `import`** — comme `brood.js` (t. 10), `spatialIndex.js` (t. 11), `entities.js` (t. 12), `forage.js` (t. 13) : `test-logic.mjs` l'importe directement, sans hook de résolution ni stub de `texturing.js` |
+| `player/workers.js` | Assigne une creuseuse à un chantier (tourniquet sur `DIG_SITES_MAX`), construit le `ctx`, agrège `digSummary()` |
+| `player/avatar.js` | `digSpeed: 0.8` unité/s dans le profil `DIGGER` — **une valeur de plus dans la table**, toujours pas de `digger.js` |
+| `player/hud.js`, `index.js` | Ligne `#diginfo` : quel chantier, à combien de %, combien de creuseuses |
+
+**Chiffres, et contre quoi ils sont écrits** (piège n°6 traité aux deux bouts) :
+
+| Constante | Valeur | Calibrée contre |
+|---|---|---|
+| `DIG_GALLERY_R` | 7,5 | la reine fondatrice, rayon de collision **3,3**. Après le clamp (règle `0,82 / −1,2` de `containUnderground`), il reste 4,95 de demi-largeur, soit **50 % de marge** — délibérément plus confortable que le puits d'entrée (`SHAFT_R = 4,2`, qui ne la dégage que de 0,9) |
+| `DIG_GALLERY_LEN` | 48 | ≈ 3,4 × le rayon de chambre (`ROOM_R = 14`) |
+| `digSpeed` | 0,8 u/s | **60 s** pour une galerie complète à une creuseuse, **20 s** à trois. Vit côté `avatar.js` parce que c'est une propriété du corps ; la conversion `digSpeed·dt / site.length` lit la longueur publiée par le monde, aucun des deux côtés ne recopie la constante de l'autre |
+| reconstruction du maillage | 1/24 de progression | **au plus 25 reconstructions** pour une galerie entière, quel que soit le nombre de creuseuses ou d'images. `containFoundedNest()` ne lit jamais le maillage : la marchabilité se calcule en continu depuis `progress`, donc « le sol est creusé » et « le maillage a rattrapé » ne peuvent pas diverger |
+
+**Tests : 166 → 214, 0 échec.** `npx vite build` passe (2,48 s). Je les ai
+relancés moi-même après chaque agent, pas seulement lus dans leur rapport, et
+j'ai vérifié sur le disque que `player/dig.js` n'a effectivement **aucun**
+`import` et qu'aucun fichier de `player/**` ne recopie un chiffre du §7.
+
+**Validation en négatif, quatre ruptures, restaurées, vert re-constaté :**
+`DIG_GALLERY_R` ramené à 3,3 → le test de dégagement latéral tombe ;
+`containFoundedNest` qui ignore `progress` → les deux tests du front de taille
+tombent (portée 47,8 au lieu de ~14,4) ; la garde « arrivée au front » retirée
+→ 2 tests ; `site.length` remplacé par le littéral `48` → 1 test, et c'est
+**celui qui utilise exprès un chantier factice de longueur 20** pour que la
+substitution ne puisse pas passer inaperçue. Les tests à 48 ne l'auraient pas
+vue — c'est noté en commentaire à côté, plutôt que caché.
+
+### Arbitrages pris pendant le round
+
+1. **Le contrat d'abord, comme au tour 11.** `design/api-monde-gameplay.md` §7
+   a été écrit avant de lancer le moindre agent, et aucun des deux n'avait le
+   droit de le modifier. C'est ce qui fait que la moitié gameplay a consommé la
+   moitié monde sans une seule renégociation.
+2. **La creuseuse repasse `controlled: true` — contre le `controlled: false`
+   que le tour 14 lui avait donné.** Ce n'est pas un retour en arrière gratuit :
+   un front de taille est un point **mobile** (il avance avec `progress`, et
+   une consœur peut le devancer), ce que `makePatrolGoal()` — deux points
+   fixes — ne sait pas exprimer. La creuseuse est donc le même contrôleur que
+   la butineuse, avec un `drive` venu de `dig.js` au lieu de `forage.js`. Les
+   deux tests du tour 14 qui affirmaient l'inverse ont été **réécrits, pas
+   supprimés**. Le pourquoi est en tête de `workers.js`.
+3. **La position de travail est dérivée du monde, jamais d'un compteur local.**
+   `dig.js` recalcule le front depuis `site.mouth/dir/progress/length` à chaque
+   image. Un compteur local aurait dérivé dès la deuxième creuseuse.
+4. **La galerie démarre contre la paroi de la chambre, sans y percer de trou** —
+   conséquence assumée de « la coque n'est jamais reconstruite ». Un léger
+   chevauchement géométrique est probable à la jonction ; c'est le premier point
+   à regarder à l'œil.
+
+### Ce qui est cassé ou en attente
+
+- **#57 n'est pas fermé, et il s'en faut de la capture.** Son critère de fin
+  n°1 (la preuve sans écran) **est atteint** : 214 tests dont la galerie à
+  100 % qui laisse passer 3,3 et la galerie à 30 % dont le front est un mur. Le
+  n°2 est une capture de la galerie plus longue qu'au début de la partie, avec
+  des creuseuses au front — impossible ici, par construction.
+- **La galerie est sans doute noire.** Aucune lampe n'y a été posée : le décor
+  était hors périmètre. À juger avant de décider si le front de taille est
+  seulement lisible.
+- **Le bout d'une galerie de 48 unités pourrait percer la surface** sur un site
+  en pente proche de `MAX_SLOPE`. Non vérifié géométriquement contre le terrain
+  réel ce round. C'est le risque le plus concret de la livraison.
+- **`containFoundedNest()` n'est branchée nulle part.** C'est délibéré et
+  nommé dans le ticket : faire entrer la reine dans le nid fondé est l'étape
+  3/4, `player/movement.js` n'a pas été touché. La fonction existe, elle est
+  testée, personne ne l'appelle encore.
+- **Pas d'évitement mutuel entre fourmis**, inchangé depuis le tour 13 — et
+  désormais plus voyant : plusieurs creuseuses convergent vers le **même** point
+  de travail. C'est le cas le plus défavorable possible pour ce défaut.
+- **Rien de tout ça n'a été vu**, comme aux cinq tours précédents.
+
+### À juger à l'œil, sur une machine avec GPU
+
+Par ordre d'importance :
+
+1. **La jonction chambre ↔ galerie** (arbitrage 4) : chevauchement, clipping,
+   ou trou qui laisse voir la terre. C'est le point le plus incertain du round.
+2. **Que la galerie s'allonge, et non qu'elle apparaisse** : pas de popping
+   visible aux 24 paliers de reconstruction. C'est le mot d'ordre de
+   `boucle-de-jeu.md` §4 (« une durée de creusement plutôt qu'instantanée »).
+3. **La creuseuse au front de taille** : postée contre la paroi et non dedans,
+   sans flottement de va-et-vient (le rayon d'arrivée est `bodyR × 1,4`).
+4. **La ligne HUD `#diginfo`** (20 px au-dessus de `#event`, même ambre que
+   `#broodinfo`) : lisible, et compréhensible sans explication ?
+5. Tout l'arriéré des tours 10-14, toujours jamais vu : la ponte, l'éclosion et
+   ses ouvrières (#37/#36), les deux castes côte à côte (#38), la bascule
+   crépuscule → jour à la remontée, la fondation (défaut 1). Le lien de test
+   marche depuis le tour 12 et le build publié est celui de ce round.
+
+### Quoi faire ensuite
+
+1. **Une session avec écran.** Sept tickets s'y ferment d'un coup (#36, #37,
+   #38, #57, et l'arriéré), et ils se ferment tous sur **la même partie** :
+   récolter, fonder, pondre des ouvrières, pondre des creuseuses, attendre les
+   éclosions, regarder la galerie s'allonger. C'est la seule chose qui manque
+   au projet depuis cinq tours.
+2. **Ouvrir et faire l'étape 3/4 : « pouvoir y entrer »** — brancher
+   `containFoundedNest()` dans `player/movement.js`, qui ne confine
+   aujourd'hui que la galerie pré-construite hors jeu (`ant.z < TUNNEL_MOUTH`).
+   C'est ce qui lèvera enfin le défaut 1. Ticket à ouvrir.
+3. Éclairer la galerie, et vérifier qu'une galerie de 48 unités ne perce pas la
+   surface sur un site en pente.
+4. Le reste de la liste ci-dessous est inchangé.
+
+---
+
 ## Défauts connus (vus sur captures, non corrigés)
 
 | # | Défaut | Gravité |
@@ -775,6 +905,12 @@ Par ordre d'importance :
 2 quater. ~~**#37 — l'éclosion donne des ouvrières**~~ — **faite au tour 13**,
    machine à états de butineuse et naissance branchée sur
    `brood.workersAvailable`. Reste sa capture, la même session que #36.
+2 sexies. ~~**#57 — la creuseuse creuse (étape 2/4)**~~ — **fait au tour 15** :
+   chantier ancré sur la chambre fondée, galerie qui s'allonge avec la
+   progression, volume creusé marchable, `digSpeed` dans le profil `DIGGER`.
+   Reste sa capture — la galerie plus longue qu'au début, creuseuses au front.
+   Puis l'**étape 3/4** : brancher `containFoundedNest()` dans `movement.js`
+   pour pouvoir enfin entrer dans le nid fondé. Ce ticket-là est à ouvrir.
 2 quinquies. ~~**#38 — le choix de caste à la ponte**~~ — **fait au tour 14**,
    `DIGGER` dans la table d'`avatar.js`, touche `C`, compteur HUD par caste, une
    creuseuse qui ne butine pas. Reste sa capture — **les deux castes côte à côte
@@ -797,6 +933,7 @@ Par ordre d'importance :
 | Ce que vaut un sol | `world/terrain.js` `sampleTerrain()` → `player/siteQuality.js` traduit en verdict de jeu |
 | Les ressources | `world/resources.js` (données + mesh), `player/harvest.js` (ce qu'on en fait) |
 | Ce que fait une ouvrière toute seule | `player/forage.js` (la machine à états, module pur) et `player/workers.js` (la naissance, le mesh, les vraies requêtes monde) |
+| Ce que fait une creuseuse | `player/dig.js` (machine à états, module pur) côté gameplay ; `world/founding.js` côté monde (chantier, progression, géométrie). Le contrat entre les deux est `design/api-monde-gameplay.md` §7 |
 | Creuser le nid | `world/founding.js` — `canFoundAt` / `foundNest` / `populateNest` |
 | Le ciel, le soleil, la bascule prologue→colonie | `world/sun.js` (`RIG_PROLOGUE`, `RIG_FOUNDED`, `setFoundedMix`) |
 | Les tailles/vitesses de la fourmi | `player/avatar.js` — un second corps = une entrée de plus, pas un contrôleur. `ALL_PROFILES` est la liste canonique des castes : tout code qui itère les castes en dérive, personne ne la recopie |
@@ -886,6 +1023,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 15 | **La creuseuse creuse** (#57, ticket ouvert ce round — il n'existait pas) : contrat `api-monde-gameplay.md` §7 écrit **avant** distribution, puis les deux moitiés livrées sans une renégociation. Côté monde, un chantier ancré sur la chambre fondée, une galerie qui s'allonge avec `progress` (maillage rebâti au plus 25 fois pour une galerie entière, jamais par image) et `containFoundedNest()` qui rend marchable **ce qui est creusé seulement** — un front de taille est un mur. Côté gameplay, `player/dig.js` pur (SEEK_SITE → DIG → DONE), `digSpeed: 0.8` u/s dans le profil `DIGGER` : 60 s à une creuseuse, 20 s à trois. `DIG_GALLERY_R = 7,5` calibrée contre la reine (3,3) avec 50 % de marge, contre 0,9 pour le puits d'entrée. L'en-tête menteur de `world/index.js` corrigé, quatre tours après. Tests 166 → 214. Round nocturne sur VPS sans GPU, **aucune galerie n'a été vue s'allonger** | *(voir la note de round)* |
 | 14 | **Le choix de caste à la ponte** (#38) : `DIGGER` ajoutée comme **une ligne de plus** dans la table d'`avatar.js` (pas de `digger.js` — le signal d'échec nommé par le ticket), `ALL_PROFILES` supprime les deux listes de castes recopiées à la main, `brood.workersAvailable` passe de `number` à `{ [casteId]: count }` sans que `brood.js` gagne un seul `import`. Touche `C`, compteur HUD par caste. Arbitrage : **une creuseuse ne butine pas** — sinon « creuser plus vite et récolter moins » serait faux et le joueur n'arbitrerait rien. `design/castes-et-micro-macro.md`, que le ticket citait comme faisant autorité, **n'existait pas** : écrit ce round, silhouette chiffrée contre `WORKER`. Tests 145 → 166. Round nocturne sur VPS sans GPU, **les deux castes n'ont jamais été vues côte à côte** | *(voir la note de round)* |
 | 13 | **L'éclosion peuple le monde** (#37) : `player/forage.js` pur (SEEK → HARVEST → RETURN → DEPOSIT), `player/workers.js` qui draine `brood.workersAvailable` et fait naître par le chemin commun du tour 12. Une ouvrière récolte et dépose dans la réserve du joueur sans intervention. `nearestNode()` corrigé d'un rayon fixe de 2000 (≈10⁵ cellules balayées, pire que le balayage que le tour 11 avait supprimé) vers une recherche à rayon croissant : 49 cellules dans le cas courant. Tests 113 → 145. Round nocturne sur VPS sans GPU, **aucune ouvrière n'a été vue marcher** | *(voir la note de round)* |
 | 12 | **La couche d'entités** (#36, les deux volets) : `core/entities.js` pur et sérialisable, `player/entities.js` avec `updateEntity()` unique — **le joueur passe par le même chemin que les PNJ**. Rendu instancié : 72–74 draw calls par fourmi → **4, constants quel que soit l'effectif**, matériaux 4–6 → 2. Tests 86 → 113. `dist/` sorti du `.gitignore` : le lien de test, page blanche depuis le tour 10, est réparé. Round nocturne sur VPS sans GPU, **aucune fourmi n'a été vue marcher** | *(voir la note de round)* |

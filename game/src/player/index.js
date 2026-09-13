@@ -238,6 +238,24 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     return `${line} · P (dans le couvoir) — pondre, coûte ${EGG_COST}`;
   }
 
+  /** The chantier HUD line (#57): one clause per dig site currently worked
+   *  by at least one live digger — workerSwarm.digSummary() already knows
+   *  the index, the live progress and the digger count (it built that from
+   *  the very same openDigSite()/advanceDig() calls that drive them, see
+   *  workers.js), so this only formats it. `null` (not an empty string) when
+   *  nothing is being dug, so hud.setDig(null) hides the line the same way
+   *  hud.setBrood(null) does before founding. */
+  function digStatusText() {
+    const summary = workerSwarm.digSummary();
+    if (!summary.length) return null;
+    const parts = summary.map((s) => {
+      const n = s.diggers;
+      return `chantier ${s.index + 1} : ${Math.round(s.progress * 100)}% `
+        + `(${n} creuseuse${n === 1 ? '' : 's'})`;
+    });
+    return `Creusement — ${parts.join(' · ')}`;
+  }
+
   let siteTimer = 0, siteAt = null, site = null, nestCard = null;
 
   function refreshSite(dt) {
@@ -374,6 +392,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     hud.setEvent(interaction.message());
     hud.setHold(interaction.holdProgress(act));
     hud.setBrood(isFounded() ? broodStatusText() : null);
+    hud.setDig(digStatusText());
     /* The ring reads the same `act` the prompt does, so what is circled and
        what is named can never be two different things. */
     const mark = interaction.targetMark(ant, act);

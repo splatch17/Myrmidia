@@ -43,6 +43,9 @@ const entitiesCore = await import('../src/core/entities.js');
 // player/forage.js (#37) is pure by the same discipline (see its header):
 // direct import, no loader hook needed.
 const forage = await import('../src/player/forage.js');
+// player/dig.js (#57) is pure by the same discipline (see its header):
+// direct import, no loader hook needed.
+const dig = await import('../src/player/dig.js');
 // player/antMesh.js (#36's rendering half) and core/outline.js pull in
 // THREE.js core objects (BufferGeometry, InstancedMesh, Matrix4, Color) —
 // all pure CPU data structures, no canvas/WebGL needed, so they run under
@@ -58,13 +61,17 @@ function check(name, cond, detail) {
 }
 
 /** Binary search, along `axis`, for the largest offset from (x0, z0) at which
- *  containUnderground still reports "not clamped" — i.e. the walkable
- *  half-width the real containment clamp actually enforces at that point, to
- *  a tenth of a unit. axis is a unit [dx, dz]. */
-function walkableHalfWidth(x0, z0, axis, maxProbe = 40) {
+ *  `containFn` (containUnderground by default) still reports "not clamped"
+ *  — i.e. the walkable half-width the real containment clamp actually
+ *  enforces at that point, to a tenth of a unit. axis is a unit [dx, dz]
+ *  (2 components read — a 3-component [x,y,z] vector passed here would
+ *  silently probe its y as if it were z; every caller below is careful to
+ *  pass a true horizontal [dx, dz]). `containFn` is the extension point #57
+ *  uses to run the exact same probe against containFoundedNest(). */
+function walkableHalfWidth(x0, z0, axis, maxProbe = 40, containFn = underground.containUnderground) {
   const free = (r) => {
     const x = x0 + axis[0] * r, z = z0 + axis[1] * r;
-    const [cx, cz] = underground.containUnderground(x, z);
+    const [cx, cz] = containFn(x, z);
     return Math.abs(cx - x) < 1e-6 && Math.abs(cz - z) < 1e-6;
   };
   if (!free(0)) return 0; // centreline itself isn't clear; caller picked a bad probe point
@@ -133,6 +140,108 @@ console.log('the run-time-dug founding shaft vs the queen:');
         `mouth radius ${founding.getFoundedNest().mouth.r} <= queen radius ${queenR.toFixed(2)}`);
     }
   }
+}
+
+console.log('dig sites growing out of the founded chamber (#57, contract §7):');
+{
+  // Undo the previous block's foundNest() so this block starts from "nothing
+  // founded" and can test that state honestly, independent of it.
+  founding._resetFounding();
+
+  check('planDigSite(0) is null before anything is founded', founding.planDigSite(0) === null);
+  check('containFoundedNest returns null before anything is founded', founding.containFoundedNest(0, 0) === null);
+  check('digSites() is empty before anything is founded', founding.digSites().length === 0);
+
+  // Same site-scan idiom as the block above, redone here because that
+  // block's own `site` variable is out of scope and this block just reset
+  // founding anyway.
+  let site = null;
+  for (let x = -180; x <= 180 && !site; x += 20) {
+    for (let z = 60; z <= 230 && !site; z += 20) {
+      if (founding.canFoundAt(x, z).ok) site = { x, z };
+    }
+  }
+  check('a legal founding site exists (dig-site block)', !!site);
+
+  if (site) {
+    founding.foundNest(site.x, site.z);
+    const chamber = founding.getFoundedNest().chamber;
+    const queenR = avatar.collideRadius(avatar.FOUNDING_QUEEN);
+
+    check('a point already at the chamber centre is returned unchanged by containFoundedNest', (() => {
+      const [cx, cz] = founding.containFoundedNest(chamber.x, chamber.z);
+      return cx === chamber.x && cz === chamber.z;
+    })());
+
+    // Pure and deterministic: same nest, same i, same answer, no Math.random()
+    // in between — the two calls must agree field for field.
+    const p1 = founding.planDigSite(1), p2 = founding.planDigSite(1);
+    check('planDigSite(1) is deterministic across repeated calls',
+      JSON.stringify(p1) === JSON.stringify(p2), JSON.stringify({ p1, p2 }));
+    check('planDigSite is null for i out of [0, DIG_SITES_MAX)',
+      founding.planDigSite(-1) === null && founding.planDigSite(founding.DIG_SITES_MAX) === null);
+
+    const opened0 = founding.openDigSite(0);
+    check('openDigSite(0) opens ok', opened0.ok === true, JSON.stringify(opened0));
+    check('opening a bad index fails with bad-index', founding.openDigSite(999).reason === 'bad-index');
+    check('re-opening an already-open site is a no-op: same site, progress untouched', (() => {
+      founding.advanceDig(opened0.site.id, 0.4);
+      const reopened = founding.openDigSite(0);
+      return reopened.ok === true && reopened.site.id === opened0.site.id
+        && founding.digProgress(opened0.site.id) === 0.4;
+    })());
+
+    // A fresh site for the additive/bounded/done checks, so the 0.4 stashed
+    // on site 0 above can't contaminate them.
+    const s1 = founding.openDigSite(1).site;
+    check('advanceDig is additive', (() => {
+      founding.advanceDig(s1.id, 0.1);
+      const r = founding.advanceDig(s1.id, 0.2);
+      return Math.abs(r.progress - 0.3) < 1e-9;
+    })());
+    check('advanceDig bounds progress to 1, never past it, and done only becomes true there', (() => {
+      const r = founding.advanceDig(s1.id, 5);
+      return r.progress === 1 && r.done === true;
+    })());
+    check('digProgress agrees with the last advanceDig() result', founding.digProgress(s1.id) === 1);
+    check('digProgress is 0 for an id that was never opened', founding.digProgress('dig-never-opened') === 0);
+    check('advanceDig on an unknown id is refused, not silently accepted', (() => {
+      const r = founding.advanceDig('dig-never-opened', 0.1);
+      return r.ok === false && r.reason === 'unknown-site';
+    })());
+
+    // The geometric core of #57's own acceptance criterion: a fully-dug
+    // gallery lets a queen-radius body walk (almost) its whole length; a
+    // 30%-dug one stops one near 30% of it. Probed with the exact same
+    // dichotomy idiom as walkableHalfWidth uses on containUnderground above
+    // — never by recomputing the containment formula by hand.
+    const s2 = founding.openDigSite(2).site;
+    founding.advanceDig(s2.id, 1.0);
+    const fullReach = walkableHalfWidth(
+      s2.mouth.x, s2.mouth.z, [s2.dir.x, s2.dir.z], s2.length + 5, founding.containFoundedNest);
+    check(`a fully-dug gallery (r=${founding.DIG_GALLERY_R}) lets the founding queen (r=${queenR.toFixed(2)}) walk nearly its whole length`,
+      fullReach > s2.length * 0.9,
+      `walkable reach ${fullReach.toFixed(2)} of length ${s2.length}`);
+
+    const midU = s2.length * 0.5;
+    const midX = s2.mouth.x + s2.dir.x * midU, midZ = s2.mouth.z + s2.dir.z * midU;
+    const lateralAxis = [-s2.dir.z, s2.dir.x];
+    const lateralHalf = walkableHalfWidth(midX, midZ, lateralAxis, 20, founding.containFoundedNest);
+    check(`a fully-dug gallery's lateral clearance at mid-length clears the founding queen (r=${queenR.toFixed(2)})`,
+      lateralHalf > queenR, `walkable half-width ${lateralHalf.toFixed(2)} <= queen radius ${queenR.toFixed(2)}`);
+
+    const s3 = founding.openDigSite(3).site;
+    founding.advanceDig(s3.id, 0.3);
+    const partialReach = walkableHalfWidth(
+      s3.mouth.x, s3.mouth.z, [s3.dir.x, s3.dir.z], s3.length + 5, founding.containFoundedNest);
+    check(`a 30%-dug gallery stops a body near 30% of its length (~${(s3.length * 0.3).toFixed(1)}), the working face is a wall`,
+      Math.abs(partialReach - s3.length * 0.3) < 1.5,
+      `walkable reach ${partialReach.toFixed(2)}, expected ~${(s3.length * 0.3).toFixed(2)}`);
+    check('...and specifically does NOT let a body walk anywhere near the full length',
+      partialReach < s3.length * 0.9, `walkable reach ${partialReach.toFixed(2)} of length ${s3.length}`);
+  }
+
+  founding._resetFounding();
 }
 
 console.log('groundY() continuity at the gallery-mouth seam:');
@@ -688,6 +797,275 @@ console.log('\nthe forager state machine (player/forage.js, #37), against a fake
   }
 
   void DEFAULT_HARVEST_SECONDS; // exported for callers' fallback; nothing here needs its exact value
+}
+
+console.log('\nthe digger state machine (player/dig.js, #57), against a fake ctx:');
+{
+  const { DIG_STATE, createDigState, update, DEFAULT_ARRIVE_FACTOR } = dig;
+
+  /** A tiny in-memory chantier, shaped exactly like design/api-monde-
+   *  gameplay.md §7's site object and world/founding.js's own advanceDig()
+   *  — separate from world/founding.js on purpose (dig.js cannot import it,
+   *  see the module header), so a mismatch here would be a real one. `dir`
+   *  points along +x for every fixture below: simple to reason about, and
+   *  dig.js's own math (frontOf) never special-cases an axis. */
+  function makeFakeSite({ mouthX = 0, mouthZ = 0, length = 48, progress = 0, id = 'dig-0' } = {}) {
+    const site = { id, mouth: { x: mouthX, y: 0, z: mouthZ }, dir: { x: 1, z: 0 }, length, r: 7.5, progress };
+    return {
+      site,
+      advanceDig(siteId, dFraction) {
+        if (siteId !== site.id) return { ok: false, progress: site.progress, done: false, reason: 'unknown-site' };
+        site.progress = Math.max(0, Math.min(1, site.progress + dFraction));
+        return { ok: true, progress: site.progress, done: site.progress >= 1 };
+      },
+    };
+  }
+
+  function frontX(site) { return site.mouth.x + site.dir.x * site.progress * site.length; }
+
+  /** Integrate a digger's own position with the wish update() hands back —
+   *  the exact same "walk in the direction of the wish" loop forage.js's own
+   *  tests use, on purpose (dig.js's contract is the same shape). */
+  function run(dg, w, bodyR, digSpeed, speed, dt, ticks) {
+    for (let i = 0; i < ticks; i++) {
+      const wish = update(dg, { x: dg._x, z: dg._z, bodyR, site: w.site, digSpeed, advanceDig: w.advanceDig }, dt);
+      dg._x += wish.wishX * wish.mag * speed * dt;
+      dg._z += wish.wishZ * wish.mag * speed * dt;
+    }
+  }
+
+  /** Same loop as run(), but stops on the FIRST tick `pred(dg)` is true (or
+   *  after maxTicks, in which case the caller's own check will notice
+   *  nothing satisfied it) — needed for justArrived/justFinished, which are
+   *  one-frame events cleared at the top of every update() call: running
+   *  many ticks past the transition and THEN inspecting them (as
+   *  forage.js's own tests never need to, having no terminal state) would
+   *  always see them cleared back to null by a later, unrelated tick. */
+  function runUntil(dg, w, bodyR, digSpeed, speed, dt, pred, maxTicks) {
+    for (let i = 0; i < maxTicks; i++) {
+      const wish = update(dg, { x: dg._x, z: dg._z, bodyR, site: w.site, digSpeed, advanceDig: w.advanceDig }, dt);
+      dg._x += wish.wishX * wish.mag * speed * dt;
+      dg._z += wish.wishZ * wish.mag * speed * dt;
+      if (pred(dg)) return i + 1;
+    }
+    return -1; // never satisfied within maxTicks
+  }
+
+  /* ---- 1. SEEK_SITE -> DIG -> DONE, and never digs before arriving ------ */
+  {
+    const LEN1 = 20, SPEED1 = 5, DT1 = 1 / 30;
+    // A big fake bodyR here too (see the note above test 6, moved earlier
+    // so this test can use it): isolates the digging duration below from
+    // the walk-forward-to-follow-the-face overhead test 4 already covers,
+    // AND — because LEN1 (20) is deliberately NOT world/founding.js's real
+    // DIG_GALLERY_LEN (48) — makes the duration check below sensitive to a
+    // copied `48` literal standing in for ctx.site.length, which test 6/7's
+    // own LEN=48 fixture could never have caught (see the session report's
+    // negative test).
+    const bodyR = isolatedBodyR(LEN1), digSpeed = SPEED1;
+    const w = makeFakeSite({ length: LEN1 });
+    const dg = createDigState();
+    dg._x = -40; dg._z = 0; // far from the mouth
+    check('a fresh digger starts in SEEK_SITE', dg.state === DIG_STATE.SEEK_SITE);
+
+    // One single frame, far away: she must be walking, and progress must be
+    // untouched — this is the ticket's own criterion in its most literal
+    // form ("ne creuse pas tant qu'elle n'est pas arrivée au front de taille").
+    const wishFar = update(dg, { x: dg._x, z: dg._z, bodyR, site: w.site, digSpeed, advanceDig: w.advanceDig }, DT1);
+    check('far from the face: still SEEK_SITE, progress is exactly 0 (not advanced from a distance)',
+      dg.state === DIG_STATE.SEEK_SITE && w.site.progress === 0, `state=${dg.state} progress=${w.site.progress}`);
+    check('...and the wish actually points toward the mouth', wishFar.wishX > 0 && wishFar.mag === 1);
+
+    const arrivedAt = runUntil(dg, w, bodyR, digSpeed, 12, DT1, (d) => d.state === DIG_STATE.DIG, 2000);
+    check('she reaches DIG once close enough to the (still undug, so mouth-at-0) face',
+      arrivedAt > 0, `never arrived within 2000 ticks, state=${dg.state}`);
+    check('...and justArrived fired on the exact transition tick',
+      dg.justArrived && dg.justArrived.siteId === w.site.id, JSON.stringify(dg.justArrived));
+
+    // She arrived somewhere within arriveR of the mouth (a big radius here,
+    // see isolatedBodyR's own doc), not necessarily centred on it — snap
+    // her onto the face itself before timing the dig, same starting point
+    // test 6/7 use (dgSolo._x=0), so the duration check just below measures
+    // digging alone, not however many ticks her particular walk happened
+    // to stop short by.
+    dg._x = w.site.mouth.x + w.site.dir.x * w.site.progress * w.site.length;
+    dg._z = w.site.mouth.z + w.site.dir.z * w.site.progress * w.site.length;
+    const finishedAt = runUntil(dg, w, bodyR, digSpeed, 12, DT1, (d) => d.state === DIG_STATE.DONE, 5000);
+    check('given enough time she digs the whole chantier to completion and lands in DONE',
+      finishedAt > 0 && w.site.progress === 1, `finishedAt=${finishedAt} progress=${w.site.progress}`);
+    check('justFinished fired on the exact transition tick', dg.justFinished && dg.justFinished.siteId === w.site.id);
+    // The digging itself took LEN1/SPEED1 seconds (no arrival-walk mixed
+    // in, since `finishedAt` only counts ticks from the moment she is
+    // already in DIG — see runUntil's own doc): read off LEN1/SPEED1 as
+    // variables of THIS fixture, not world/founding.js's DIG_GALLERY_LEN
+    // (48) — a hardcoded 48 inside dig.js's own dFraction formula would
+    // pass test 6/7 below (which happen to also use 48) but fail HERE.
+    const expectedDigTicks = LEN1 / SPEED1 / DT1;
+    check(`the digging itself took ${(expectedDigTicks * DT1).toFixed(2)}s (LEN1/SPEED1), off THIS fixture's own length, not a copied 48`,
+      Math.abs(finishedAt - expectedDigTicks) <= 2, `expected ~${expectedDigTicks} ticks, got ${finishedAt}`);
+
+    // DONE is terminal for this round (see the module header): further
+    // frames must not move her, error, or touch progress past 1.
+    const before = { x: dg._x, z: dg._z };
+    run(dg, w, bodyR, digSpeed, 12, DT1, 60);
+    check('DONE is terminal: no further movement, no progress past 1',
+      dg._x === before.x && dg._z === before.z && w.site.progress === 1 && dg.state === DIG_STATE.DONE);
+  }
+
+  /* ---- 2. no chantier assigned: parks, never invents a destination ------ */
+  {
+    const dg = createDigState();
+    const wish = update(dg, { x: 0, z: 0, bodyR: 1.62, site: null, digSpeed: 5, advanceDig: () => { throw new Error('must not be called'); } }, 1 / 30);
+    check('ctx.site === null returns a zero wish and stays in SEEK_SITE, no crash',
+      wish.wishX === 0 && wish.wishZ === 0 && wish.mag === 0 && dg.state === DIG_STATE.SEEK_SITE);
+  }
+
+  /* ---- 3. a body with no digging cadence never advances anything -------- */
+  {
+    const w = makeFakeSite({ length: 10 });
+    const dg = createDigState();
+    dg._x = 0; dg._z = 0; // right at the mouth == right at the undug face
+    const bodyR = 1.5;
+    // digSpeed omitted (undefined), the exact shape a WORKER profile (no
+    // digSpeed field at all) would hand this file via `ctx.digSpeed ?? 0`.
+    for (let i = 0; i < 300; i++) {
+      update(dg, { x: dg._x, z: dg._z, bodyR, site: w.site }, 1 / 30);
+    }
+    check('digSpeed undefined (a forager\'s own shape): she reaches DIG but progress never leaves 0',
+      dg.state === DIG_STATE.DIG && w.site.progress === 0, `state=${dg.state} progress=${w.site.progress}`);
+  }
+
+  /* ---- 4. the face receding out of reach sends her back to SEEK_SITE ---- */
+  {
+    const w = makeFakeSite({ length: 40 });
+    const dg = createDigState();
+    dg._x = 0; dg._z = 0; // at the mouth, arrived
+    update(dg, { x: 0, z: 0, bodyR: 1.62, site: w.site, digSpeed: 1, advanceDig: w.advanceDig }, 1 / 30);
+    check('arrived at the (still-at-the-mouth) face: DIG', dg.state === DIG_STATE.DIG);
+    // A sibling digger (or the world's own mesh) advances the face far past
+    // where this one is standing, all in one frame — nothing here should
+    // credit progress from that distance.
+    w.advanceDig(w.site.id, 0.9); // 90% of 40 units = 36 units away now
+    update(dg, { x: 0, z: 0, bodyR: 1.62, site: w.site, digSpeed: 1, advanceDig: w.advanceDig }, 1 / 30);
+    check('the face receding out of reach sends her back to SEEK_SITE, not digging from a distance',
+      dg.state === DIG_STATE.SEEK_SITE, dg.state);
+  }
+
+  /* ---- 5. NO SIZE CONSTANT IS COPIED: arrival scales with bodyR, exactly
+     bodyR * DEFAULT_ARRIVE_FACTOR — dig.js's own version of piège #6, mirror
+     of forage.js's own test 5 above. */
+  {
+    for (const bodyR of [avatar.collideRadius(avatar.WORKER), avatar.collideRadius(avatar.DIGGER)]) {
+      const reach = bodyR * DEFAULT_ARRIVE_FACTOR;
+      const w1 = makeFakeSite({ length: 30 });
+      const justOutside = createDigState();
+      update(justOutside, { x: reach + 0.05, z: 0, bodyR, site: w1.site, digSpeed: 1, advanceDig: w1.advanceDig }, 1 / 30);
+      check(`bodyR=${bodyR.toFixed(2)}: just outside the reach (${(reach + 0.05).toFixed(2)}) stays in SEEK_SITE`,
+        justOutside.state === DIG_STATE.SEEK_SITE);
+
+      const w2 = makeFakeSite({ length: 30 });
+      const justInside = createDigState();
+      update(justInside, { x: reach - 0.05, z: 0, bodyR, site: w2.site, digSpeed: 1, advanceDig: w2.advanceDig }, 1 / 30);
+      check(`bodyR=${bodyR.toFixed(2)}: just inside the reach (${(reach - 0.05).toFixed(2)}) starts digging`,
+        justInside.state === DIG_STATE.DIG);
+    }
+  }
+
+  /* Isolates the digging CADENCE from the walk-forward-to-follow-the-face
+     behaviour test 4 above already covers on its own: a real body's arriveR
+     (bodyR * DEFAULT_ARRIVE_FACTOR, a few units) is far smaller than a full
+     48-unit gallery, so a real digger periodically has to step forward as
+     the face recedes out of her reach — correct (that IS test 4), but it
+     would fold a second, harder-to-predict-exactly effect (how fast she
+     walks, rounded to whole ticks) into a test whose whole point is the
+     dFraction=digSpeed*dt/length arithmetic. A fake bodyR big enough that
+     the WHOLE gallery fits inside one arriveR sidesteps that without
+     touching dig.js itself — she simply never needs to move for these two
+     tests, exactly as if test 4's own behaviour had a zero-tick cost. */
+  function isolatedBodyR(length) { return (length + 10) / DEFAULT_ARRIVE_FACTOR; }
+
+  /* ---- 6. THE SENTENCE THE WHOLE CASTE EXISTS TO PROVE: two diggers on the
+     same chantier dig it exactly twice as fast as one alone. Additive by
+     construction (world/founding.js's own advanceDig doc) — this proves
+     dig.js's own call site of that function actually delivers it, end to
+     end, against a real dFraction computed from a real digSpeed. */
+  {
+    const LEN = 48, SPEED = 0.8, DT = 1 / 30, BODY_R = isolatedBodyR(LEN);
+
+    const solo = makeFakeSite({ length: LEN });
+    const dgSolo = createDigState();
+    dgSolo._x = 0; dgSolo._z = 0;
+    let soloTicks = 0;
+    while (solo.site.progress < 1 && soloTicks < 100000) {
+      update(dgSolo, { x: 0, z: 0, bodyR: BODY_R, site: solo.site, digSpeed: SPEED, advanceDig: solo.advanceDig }, DT);
+      soloTicks++;
+    }
+    check('a solo digger reaches progress 1 in a finite number of ticks',
+      solo.site.progress === 1, solo.site.progress);
+
+    // Two diggers, same chantier (the same fake site object, exactly what
+    // workers.js's shared world/founding.js chantier means for real
+    // diggers), both already at the face.
+    const duo = makeFakeSite({ length: LEN });
+    const dgA = createDigState(); dgA._x = 0; dgA._z = 0;
+    const dgB = createDigState(); dgB._x = 0; dgB._z = 0;
+    let duoTicks = 0;
+    while (duo.site.progress < 1 && duoTicks < 100000) {
+      update(dgA, { x: 0, z: 0, bodyR: BODY_R, site: duo.site, digSpeed: SPEED, advanceDig: duo.advanceDig }, DT);
+      update(dgB, { x: 0, z: 0, bodyR: BODY_R, site: duo.site, digSpeed: SPEED, advanceDig: duo.advanceDig }, DT);
+      duoTicks++;
+    }
+    check('two diggers on the same chantier finish in almost exactly half the ticks of one alone',
+      Math.abs(duoTicks - soloTicks / 2) <= 1,
+      `solo=${soloTicks} duo=${duoTicks} (expected duo ~= solo/2)`);
+
+    // ---- and the exact conversion the contract names by formula:
+    // dFraction = digSpeed*dt/LEN, so a solo digger should take LEN/SPEED
+    // seconds — read off LEN/SPEED as VARIABLES, never DIG_GALLERY_LEN
+    // retyped as a literal (piège #6, applied to a duration rather than a
+    // size, exactly as contract §7 warns). Tolerance is 3 ticks, not 1: one
+    // tick is the arrival transition itself (SEEK_SITE -> DIG spends a tick
+    // moving into place before the first advanceDig() call, same as any
+    // real digger), one more is float rounding at the exact instant
+    // progress clamps to 1 — both are real, deterministic, and this small,
+    // not slop being papered over.
+    const expectedSoloSeconds = LEN / SPEED;
+    const actualSoloSeconds = soloTicks * DT;
+    check(`a solo digger takes DIG_GALLERY_LEN/digSpeed = ${expectedSoloSeconds}s to finish, not a different pace`,
+      Math.abs(actualSoloSeconds - expectedSoloSeconds) < DT * 3,
+      `expected ${expectedSoloSeconds}s, got ${actualSoloSeconds.toFixed(3)}s`);
+  }
+
+  /* ---- 7. no chantier is ever dug from world/founding.js's real
+     DIG_GALLERY_LEN by a copied literal: read the constant off the barrel
+     module (world/index.js) and confirm dig.js's own conversion agrees with
+     it exactly, for a real (not faked) site length. */
+  {
+    const world = await import('../src/world/index.js');
+    check('world/index.js exports DIG_GALLERY_LEN, DIG_GALLERY_R, DIG_SITES_MAX for player/** to read (never recopy)',
+      typeof world.DIG_GALLERY_LEN === 'number' && typeof world.DIG_GALLERY_R === 'number'
+      && typeof world.DIG_SITES_MAX === 'number',
+      `${world.DIG_GALLERY_LEN} ${world.DIG_GALLERY_R} ${world.DIG_SITES_MAX}`);
+
+    const w = makeFakeSite({ length: world.DIG_GALLERY_LEN });
+    const dg = createDigState();
+    dg._x = 0; dg._z = 0;
+    const digSpeed = avatar.DIGGER.digSpeed;
+    check('avatar.DIGGER.digSpeed exists and is positive (contract §7: "où vit la vitesse — une propriété du corps")',
+      typeof digSpeed === 'number' && digSpeed > 0, digSpeed);
+    const bodyR = isolatedBodyR(world.DIG_GALLERY_LEN); // see the note above test 6 — cadence only, not the walk
+    let ticks = 0;
+    while (w.site.progress < 1 && ticks < 200000) {
+      update(dg, { x: 0, z: 0, bodyR, site: w.site, digSpeed, advanceDig: w.advanceDig }, 1 / 30);
+      ticks++;
+    }
+    const expected = world.DIG_GALLERY_LEN / digSpeed;
+    // Same 3-tick tolerance as test 6, same two real reasons (the arrival
+    // transition tick, float rounding at the progress==1 boundary) — see
+    // that test's comment.
+    check(`DIGGER.digSpeed against the REAL world.DIG_GALLERY_LEN: a full gallery takes ${expected}s`,
+      Math.abs(ticks / 30 - expected) < (1 / 30) * 3, `${(ticks / 30).toFixed(2)}s vs expected ${expected}s`);
+  }
 }
 
 console.log('\nant-part instancing (player/antMesh.js + core/outline.js, #36):');
@@ -1503,14 +1881,17 @@ console.log('\nthe shared world index (world/index.js):');
           return hit && hit.id === w.entity.id && Math.abs(hit.extent - avatar.collideRadius(avatar.DIGGER)) < 1e-9;
         }));
 
-      /* #38's own arbitrage: a digger does not forage. Every digger entity is
-         NOT controlled and carries a patrol goal, never forage.js state. */
-      check('every digger entity is controlled:false with a patrol goal, never controlled:true',
+      /* #38's own arbitrage still holds: a digger does not forage. #57
+         replaced the placeholder patrol goal with real digger.js state, so
+         she is now controlled:true (same mechanism as a forager, see
+         workers.js's header) with `dig` set and `forage` null, no `goal` at
+         all — the flip of what this same assertion checked before #57. */
+      check('every digger entity is controlled:true with dig.js state, never a patrol goal',
         swarm.workers.filter((w) => w.caste === avatar.DIGGER.id)
-          .every((w) => w.entity.controlled === false && w.entity.goal && w.entity.goal.type === 'patrol' && w.forage === null));
-      check('every worker entity is still controlled:true with forage.js state, unchanged by #38',
+          .every((w) => w.entity.controlled === true && w.entity.goal === null && w.dig !== null && w.forage === null));
+      check('every worker entity is still controlled:true with forage.js state, unchanged by #38/#57',
         swarm.workers.filter((w) => w.caste === avatar.WORKER.id)
-          .every((w) => w.entity.controlled === true && w.forage !== null));
+          .every((w) => w.entity.controlled === true && w.forage !== null && w.dig === null));
 
       /* Run the swarm for real, next to an actual resource node and a real
          cache, and confirm a digger never touches either: no unit taken off
@@ -1531,16 +1912,102 @@ console.log('\nthe shared world index (world/index.js):');
       // A digger never leaves forage.js's SEEK state because she never
       // enters it: w.forage is null for her for her whole life (checked
       // above), so there is no state to have moved. This one instead checks
-      // the flip side directly: standing on the node did not even nudge her
-      // out of the patrol goal she was given at spawn (goal.target still one
-      // of 'a'/'b' — goalWish() only ever sets these two).
-      check('...and her own patrol goal is untouched by standing on a node (never switched to a forage state)',
+      // the flip side directly: no nest is founded in this test (see the
+      // header on founding._resetFounding() well above this block), so
+      // dig.js's own ctx.site is null for every digger every tick — standing
+      // on the node did not somehow manufacture a chantier for her to work;
+      // she is still exactly where dig.js's SEEK_SITE state parks with
+      // nothing assigned.
+      check('...and her own dig.js state is still parked in SEEK_SITE (no chantier exists in this test)',
         swarm.workers.filter((w) => w.caste === avatar.DIGGER.id)
-          .every((w) => w.entity.goal.type === 'patrol' && ['a', 'b'].includes(w.entity.goal.target)));
+          .every((w) => w.dig.state === dig.DIG_STATE.SEEK_SITE));
 
       swarm.dispose();
       antMeshMod._resetPoolsForTest();
     }
+  }
+
+  /* ---- 8. #57 END TO END: a real digger, spawned by the real
+     workers.js, actually grows a real world/founding.js chantier through
+     real openDigSite()/advanceDig() calls — no fake ctx anywhere in this
+     block, unlike the dedicated player/dig.js unit tests above (which
+     prove the pure state machine in isolation, against a fixture). This is
+     the one that would have caught a wiring mistake between the two (a
+     wrong ctx.site shape, a digSiteIndex never advancing the RIGHT
+     chantier id, digSpeed read off the wrong profile field) that a fixture
+     built to match dig.js's own expectations could never expose. --------- */
+  console.log('\n#57 end to end — a real workers.js digger grows a real world/founding.js chantier:');
+  {
+    founding._resetFounding(); // start clean; the earlier blocks above already restored this, but don't trust it silently
+    let site = null;
+    for (let x = -180; x <= 180 && !site; x += 20) {
+      for (let z = 60; z <= 230 && !site; z += 20) {
+        if (founding.canFoundAt(x, z).ok) site = { x, z };
+      }
+    }
+    check('a legal founding site exists for the end-to-end digger test', !!site);
+    if (site) {
+      founding.foundNest(site.x, site.z);
+      const workersMod = await import('../src/player/workers.js');
+      const antMeshMod = await import('../src/player/antMesh.js');
+      antMeshMod._resetPoolsForTest();
+      const fakeScene = { add() {} };
+      const swarm = workersMod.createWorkerSwarm({ scene: fakeScene });
+
+      const N_DIGGER = 2;
+      const b = brood.createBroodState(N_DIGGER);
+      const cache = { x: 0, y: 0, z: 0, items: { graine: brood.EGG_COST * N_DIGGER }, total: brood.EGG_COST * N_DIGGER };
+      const FOUNDED = { founded: true, inChamber: true };
+      for (let i = 0; i < N_DIGGER; i++) brood.lay(b, cache, FOUNDED, avatar.DIGGER.id);
+      brood.update(b, brood.EGG_INCUBATION_SECONDS + 0.01);
+      const origin = founding.nestOrigin();
+      swarm.spawnFromBrood(b, origin.x, origin.z);
+      check(`${N_DIGGER} real diggers spawned via the real hatch pipeline`,
+        swarm.countByCaste()[avatar.DIGGER.id] === N_DIGGER, JSON.stringify(swarm.countByCaste()));
+
+      // workers.js's own round-robin (diggerSeq % DIG_SITES_MAX) would put
+      // these two on chantiers 0 and 1 — forced onto the SAME index here
+      // instead (test-only; production code never reaches into `.workers`)
+      // because "plusieurs creuseuses sur le même chantier vont plus vite"
+      // is exactly the sentence this block exists to prove for real, not a
+      // side effect of how many diggers happen to have hatched.
+      for (const w of swarm.workers) if (w.caste === avatar.DIGGER.id) w.digSiteIndex = 0;
+
+      const DT = 1 / 30;
+      let ticks = 0;
+      while (founding.digProgress('dig-0') < 1 && ticks < 400000) {
+        swarm.update(DT, ticks * DT, null);
+        ticks++;
+      }
+      check('a real chantier reaches progress 1 through real diggers (world/founding.js\'s own advanceDig, called by dig.js, called by workers.js)',
+        founding.digProgress('dig-0') === 1, founding.digProgress('dig-0'));
+
+      const openSite = founding.digSites().find((s) => s.id === 'dig-0');
+      check('the finished chantier is reachable through the public digSites() list too',
+        !!openSite && openSite.progress === 1, JSON.stringify(openSite));
+
+      // The HUD's own summary (player/index.js's digStatusText()) reads
+      // exactly this: both diggers on chantier 0, fully progressed.
+      const summary = swarm.digSummary();
+      const entry = summary.find((s) => s.index === 0);
+      check('workerSwarm.digSummary() (the HUD line\'s data) reports both diggers on chantier 0 at 100%',
+        !!entry && entry.progress === 1 && entry.diggers === N_DIGGER, JSON.stringify(summary));
+
+      // containFoundedNest() actually opened up: a point near the far end
+      // of the now fully-dug tunnel is walkable, not clamped back into the
+      // original chamber footprint the way it would be at progress 0.
+      const farX = openSite.mouth.x + openSite.dir.x * (openSite.length - 2);
+      const farZ = openSite.mouth.z + openSite.dir.z * (openSite.length - 2);
+      const [cx, cz] = founding.containFoundedNest(farX, farZ);
+      check('a point near the far end of the fully-dug chantier is walkable, not clamped back to the chamber',
+        Math.hypot(cx - farX, cz - farZ) < 3, `(${farX.toFixed(1)},${farZ.toFixed(1)}) clamped to (${cx.toFixed(1)},${cz.toFixed(1)})`);
+
+      swarm.dispose();
+      antMeshMod._resetPoolsForTest();
+    }
+    // Leave founding state clean for anything a future round adds after
+    // this block, same courtesy every earlier founding-touching block pays.
+    founding._resetFounding();
   }
 }
 

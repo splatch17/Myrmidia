@@ -190,3 +190,71 @@ distance au centre avec sa propre borne. Il ne pousse **pas** son rayon dans
 l'index : un rayon ajusté dépend du corps qui marche, et `maxExtent` ne
 décroît jamais, donc l'écrire dans une structure partagée le ferait grossir
 définitivement pour toutes les autres fourmis.
+
+---
+
+## 7. Creusement à l'exécution — à livrer par Atta (round 15, #57)
+
+Étape 2/4 vers « voir le premier tunnel se creuser et pouvoir y entrer ».
+Écrit **avant** distribution, comme le §6 au round 11. Aucun agent ne le
+modifie : si une signature ci-dessous se révèle impraticable, l'agent le
+signale dans son rapport et l'orchestrateur tranche.
+
+`world/founding.js` étend le nid **fondé** (celui que `foundNest()` creuse à
+l'exécution), pas la galerie pré-construite de `world/underground.js`, qui est
+hors jeu depuis le round 8 (`SHOW_PREBUILT_NEST = false`).
+
+```
+DIG_SITES_MAX                -> number   chantiers possibles (constante)
+DIG_GALLERY_LEN              -> number   longueur d'une galerie complète, en unités monde
+DIG_GALLERY_R                -> number   demi-largeur creusée, en unités monde
+
+planDigSite(i)               -> site | null          // pur, ne construit rien
+digSites()                   -> site[]               // les chantiers ouverts
+openDigSite(i)               -> { ok, reason?, site? }
+advanceDig(id, dFraction)    -> { ok, progress, done, reason? }
+digProgress(id)              -> 0..1                 // 0 si l'id est inconnu
+containFoundedNest(x, z)     -> [x, z] | null
+```
+
+Un **site** est un objet nu, sérialisable, sans maillage ni fermeture :
+
+```
+{ id: string, mouth: { x, y, z }, dir: { x, z }, length: number,
+  r: number, progress: number }
+```
+
+- `dir` est **horizontal et normé** ; la galerie part de `mouth` (un point de
+  la paroi de la chambre fondée, au niveau du sol) et s'enfonce dans cette
+  direction. `mouth` et `dir` suffisent à un appelant pour savoir **où aller
+  se poster** : `player/**` ne recalcule jamais la géométrie du nid.
+- `planDigSite(i)` est **pur et déterministe** : même nid, même `i`, même
+  réponse, aucun `Math.random()`. `null` si rien n'est fondé ou si `i` sort de
+  `[0, DIG_SITES_MAX)`.
+- `openDigSite(i)` ouvre le chantier à `progress = 0`. Ré-ouvrir un chantier
+  déjà ouvert rend le même site sans le réinitialiser (`ok: true`). `reason`
+  est une chaîne technique stable comme au §4 (`'not-founded'`,
+  `'bad-index'`), jamais une phrase pour le joueur.
+- `advanceDig(id, dFraction)` ajoute une **fraction de galerie** (sans unité,
+  bornée à `[0, 1]` au total) et rend l'état après coup. `done` est vrai
+  quand `progress` atteint 1. Additif par construction : deux creuseuses qui
+  appellent la même image avancent deux fois plus vite, et c'est tout le sens
+  de la caste.
+
+**Où vit la vitesse de creusement.** Pas ici. La cadence est une propriété du
+corps qui creuse, donc une valeur de `player/avatar.js` exprimée en **unités
+monde par seconde** ; l'appelant la convertit avec la longueur que le monde
+publie : `dFraction = digSpeed * dt / DIG_GALLERY_LEN`. Aucun des deux côtés
+ne recopie la constante de l'autre — c'est le piège n°6 de `PROGRESS.md`
+appliqué à une durée plutôt qu'à une taille.
+
+**`containFoundedNest(x, z)`** est le jumeau de `containUnderground()` pour le
+nid fondé : il rend le point légal le plus proche dans le volume réellement
+creusé — la chambre, plus chaque galerie ouverte **sur sa longueur creusée
+seulement** (`progress * length`). Ce qui n'est pas creusé n'est pas
+marchable, et un front de taille est un mur. Il rend `null` tant que rien
+n'est fondé, pour que l'appelant distingue « pas de nid » de « clampé ».
+
+**Ce que ce contrat ne couvre pas, volontairement :** le branchement de
+`containFoundedNest()` dans `player/movement.js` (étape 3/4, ça se juge à
+l'écran), le coût en ressources, et le décor de la galerie.
