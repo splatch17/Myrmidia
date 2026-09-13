@@ -213,7 +213,17 @@ console.log('egg laying and incubation (#6 §2), against a fake harvest cache:')
     const hatched = brood.update(b, brood.EGG_INCUBATION_SECONDS + 0.01);
     check(`all ${cap} clutches hatch once incubation has elapsed`, hatched === cap, hatched);
     check('hatching frees the brood room back to zero in progress', brood.broodCount(b) === 0);
-    check('hatching credits workersAvailable', b.workersAvailable === cap, b.workersAvailable);
+    // #38: workersAvailable is `{ [casteId]: count }` — every one of these
+    // lays used the default caste (brood.DEFAULT_CASTE), so they all land in
+    // the same bucket. totalWorkersAvailable() is the sum-across-castes a
+    // caller who does not care which caste wants; workersAvailableOf() below
+    // is the same number read the other way, by name, to also prove the
+    // default caste is really the one that got credited (not just "some
+    // caste, somewhere", which a bare total could not tell apart).
+    check('hatching credits workersAvailable under the default caste',
+      brood.totalWorkersAvailable(b) === cap
+      && brood.workersAvailableOf(b, brood.DEFAULT_CASTE) === cap,
+      JSON.stringify(b.workersAvailable));
     // The exact regression the ambiance report caught: laidTotal (what
     // populateNest(n) must be driven by, so a lit lamp stays lit) must NOT
     // follow clutches.length/broodCount() (what capacity/refusal is measured
@@ -1220,17 +1230,24 @@ console.log('\nthe shared world index (world/index.js):');
       const swarm = workersMod.createWorkerSwarm({ scene: fakeScene });
       const b = brood.createBroodState(6);
 
-      b.workersAvailable = 3; // e.g. a whole clutch hatching on the same tick
+      // #38: workersAvailable is now `{ [casteId]: count }`, not a bare
+      // number — see brood.js's header. 'worker' is a literal here (not
+      // avatar.WORKER.id) on purpose: this whole block existed before #38
+      // and is deliberately left exercising the string convention brood.js
+      // itself is built on, independent of avatar.js agreeing with it (the
+      // agreement itself is checked by the dedicated #38 block below).
+      b.workersAvailable = { worker: 3 }; // e.g. a whole clutch hatching on the same tick
       const spawned3 = swarm.spawnFromBrood(b, 0, 0);
       check('a clutch of 3 hatching at once spawns exactly 3 workers, not 6 or 0',
         spawned3 === 3 && swarm.count() === 3, `spawned=${spawned3} count=${swarm.count()}`);
-      check('...and drains workersAvailable to zero', b.workersAvailable === 0);
+      check('...and drains workersAvailable to empty',
+        Object.keys(b.workersAvailable).length === 0, JSON.stringify(b.workersAvailable));
 
       const spawnedAgain = swarm.spawnFromBrood(b, 0, 0);
       check('draining again before the next hatch spawns nothing (idempotent)',
         spawnedAgain === 0 && swarm.count() === 3, `spawned=${spawnedAgain} count=${swarm.count()}`);
 
-      b.workersAvailable = 1; // a single later hatch
+      b.workersAvailable = { worker: 1 }; // a single later hatch
       const spawned1 = swarm.spawnFromBrood(b, 100, 100);
       check('one later hatch adds exactly one more worker, never two',
         spawned1 === 1 && swarm.count() === 4, `spawned=${spawned1} count=${swarm.count()}`);
@@ -1272,7 +1289,7 @@ console.log('\nthe shared world index (world/index.js):');
       const node = world.RESOURCE_NODES.find((n) => n.amount > 0);
       const before = node.amount;
       const b = brood.createBroodState(6);
-      b.workersAvailable = 1;
+      b.workersAvailable = { worker: 1 };
       swarm.spawnFromBrood(b, node.x, node.z);
       const w = swarm.workers[0];
       w.entity.x = node.x; w.entity.z = node.z; // co-located: arrival is immediate
@@ -1308,7 +1325,7 @@ console.log('\nthe shared world index (world/index.js):');
       const sumBefore = world.RESOURCE_NODES.reduce((s, n) => s + n.amount, 0);
       const cache = { x: node.x + 60, y: 0, z: node.z + 40, items: {}, total: 0 }; // a real drop-shaped cache, far enough to walk
       const b = brood.createBroodState(6);
-      b.workersAvailable = 1;
+      b.workersAvailable = { worker: 1 };
       swarm.spawnFromBrood(b, node.x, node.z); // born right by the node
       const w = swarm.workers[0];
 
@@ -1332,6 +1349,198 @@ console.log('\nthe shared world index (world/index.js):');
     }
 
     antMeshMod._resetPoolsForTest();
+  }
+
+  /* ---- 7. castes at the ponte (#38): DIGGER exists, is chosen at lay time,
+     is resolvable/drawable by construction (not by a hand-copied list), and
+     does not forage. ------------------------------------------------------ */
+  console.log('\ncastes at the ponte (#38) — DIGGER exists, is chosen at lay, and does not forage:');
+  {
+    const entMod = await import('../src/player/entities.js');
+    const workersMod = await import('../src/player/workers.js');
+    const antMeshMod = await import('../src/player/antMesh.js');
+
+    check('DIGGER exists as a profile object, not a separate module',
+      !!avatar.DIGGER && avatar.DIGGER.id === 'digger');
+    check('collideRadius(DIGGER) is 1.62 (scale 1.08 x bodyR 1.5), not WORKER\'s 1.5 — piège #6',
+      Math.abs(avatar.collideRadius(avatar.DIGGER) - 1.62) < 1e-9,
+      avatar.collideRadius(avatar.DIGGER));
+
+    /* The structural constraint the ticket names by number: "une caste est
+       une ligne dans avatar.js, pas un fichier", i.e. nothing downstream may
+       hand-copy the list of profiles. avatar.ALL_PROFILES is that one list;
+       this loop walks IT (not [WORKER, FOUNDING_QUEEN, DIGGER] retyped here)
+       so a FUTURE 4th caste added only to ALL_PROFILES is covered by this
+       same test without editing it — the exact protection PROGRESS.md's
+       tour 14 asks for against player/entities.js's PROFILES_BY_ID and
+       player/antMesh.js's pool-sizing reduce. */
+    {
+      let allResolve = true, detail = '';
+      for (const p of avatar.ALL_PROFILES) {
+        const got = entMod.resolveProfile(p.id);
+        if (got !== p) { allResolve = false; detail = `resolveProfile('${p.id}') !== avatar.js's own ${p.id} object`; break; }
+      }
+      check('resolveProfile() resolves EVERY profile in avatar.ALL_PROFILES by id (derived, not a hand-copied pair)',
+        allResolve, detail);
+    }
+
+    /* antMesh.js's shared pools must be sized against avatar.ALL_PROFILES,
+       not a stale [WORKER, FOUNDING_QUEEN] pair. Re-derive the same
+       partCounts()/reduce arithmetic independently here (not imported from
+       antMesh.js — same discipline as this file's own partsOf() above) and
+       actually EXERCISE the capacity it predicts: fill the sphere pool with
+       exactly that many instances of whichever profile needs the most, and
+       confirm the pool holds exactly that many and no more (the existing
+       "MAX_ANTS+1 throws" check above already proves the ceiling for
+       WORKER; this proves the ceiling is the one avatar.ALL_PROFILES as a
+       WHOLE predicts, DIGGER included in the walk, even though — honestly —
+       DIGGER's own footprint happens to tie WORKER's this round and so
+       cannot by itself distinguish "iterates ALL_PROFILES" from "iterates a
+       stale pair": this is real, immediate protection for a caste whose
+       footprint exceeds the others (which #38's own DIGGER does not), and
+       real, immediate protection for resolveProfile() above (which DOES
+       distinguish this round, since 'digger' is absent from any hard-coded
+       WORKER/QUEEN-only pair). See the round's report for the negative test
+       that confirms this honestly rather than assuming it. */
+    {
+      const partCountsOf = (p) => ({
+        sphere: p.body.gaster.length + 5 + p.legs.length * 2,
+        cyl: 6 + p.legs.length * 2,
+      });
+      const maxOf = (key) => avatar.ALL_PROFILES.reduce((m, p) => Math.max(m, partCountsOf(p)[key]), 0);
+      const worstSphereProfile = avatar.ALL_PROFILES.reduce(
+        (best, p) => (partCountsOf(p).sphere > partCountsOf(best).sphere ? p : best), avatar.ALL_PROFILES[0]);
+
+      // Fill the sphere pool with EXACTLY MAX_ANTS ants of the profile that
+      // (per this independent, not-imported recomputation over
+      // avatar.ALL_PROFILES) needs the most spheres each — that must exactly
+      // exhaust the pool if antMesh.js's own sizing agrees with this
+      // computation, with room for not even one more sphere afterwards.
+      antMeshMod._resetPoolsForTest();
+      let threw = null, builtOne = 0;
+      try {
+        for (let i = 0; i < antMeshMod.MAX_ANTS; i++) { antMeshMod.buildAntMesh(worstSphereProfile); builtOne++; }
+      } catch (e) { threw = e; }
+      check(`MAX_ANTS (${antMeshMod.MAX_ANTS}) ants of the worst case in avatar.ALL_PROFILES (${worstSphereProfile.id}, ${maxOf('sphere')} spheres/ant) all build`,
+        threw === null && builtOne === antMeshMod.MAX_ANTS, threw ? threw.message : builtOne);
+      // Exactly one ant of ANY profile past that must overflow — proving the
+      // pool was sized to this exact ceiling, not a larger one that would
+      // silently hide a wrong (too-generous, coincidentally not caught)
+      // computation elsewhere.
+      check('...and the sphere pool is then exactly full: one more ant of ANY profile overflows it',
+        (() => {
+          try { antMeshMod.buildAntMesh(avatar.ALL_PROFILES[0]); return false; }
+          catch (e) { return /instanced pool exhausted/.test(e.message); }
+        })());
+      antMeshMod._resetPoolsForTest();
+    }
+
+    /* ---- brood.js: caste travels from lay() through update() into
+       workersAvailable, per caste, never blended into one bucket. -------- */
+    {
+      const fakeCache = (total, items) => ({ x: 0, y: 0, z: 0, items, total });
+      const FOUNDED = { founded: true, inChamber: true };
+      const b = brood.createBroodState(10);
+      const cache = fakeCache(brood.EGG_COST * 10, { graine: brood.EGG_COST * 10 });
+
+      const rw1 = brood.lay(b, cache, FOUNDED, avatar.WORKER.id);
+      const rd1 = brood.lay(b, cache, FOUNDED, avatar.DIGGER.id);
+      const rw2 = brood.lay(b, cache, FOUNDED); // no 4th arg: defaults to 'worker'
+      check('lay() accepts an explicit casteId for worker and digger, and defaults to worker',
+        rw1.ok && rd1.ok && rw2.ok, JSON.stringify([rw1, rd1, rw2]));
+
+      const hatched = brood.update(b, brood.EGG_INCUBATION_SECONDS + 0.01);
+      check('all 3 clutches (2 worker, 1 digger) hatch together', hatched === 3, hatched);
+      check('workersAvailable credits the WORKER caste with exactly 2, not 1 or 3',
+        brood.workersAvailableOf(b, avatar.WORKER.id) === 2, JSON.stringify(b.workersAvailable));
+      check('...and the DIGGER caste with exactly 1, kept in its own bucket',
+        brood.workersAvailableOf(b, avatar.DIGGER.id) === 1, JSON.stringify(b.workersAvailable));
+      check('totalWorkersAvailable() sums across both castes', brood.totalWorkersAvailable(b) === 3, brood.totalWorkersAvailable(b));
+
+      const drained = brood.drainHatched(b);
+      check('drainHatched() hands back the exact per-caste map',
+        drained[avatar.WORKER.id] === 2 && drained[avatar.DIGGER.id] === 1, JSON.stringify(drained));
+      check('...and resets workersAvailable to empty, atomically',
+        Object.keys(b.workersAvailable).length === 0, JSON.stringify(b.workersAvailable));
+    }
+
+    /* ---- end to end, THE ticket's own conservation criterion: N lays of a
+       given caste produce exactly N bodies of that caste in the swarm —
+       never N+1, never N-1, and never bled into the other caste's count. -- */
+    {
+      antMeshMod._resetPoolsForTest();
+      const fakeScene = { add() {} };
+      const swarm = workersMod.createWorkerSwarm({ scene: fakeScene });
+      const fakeCache = (total, items) => ({ x: 0, y: 0, z: 0, items, total });
+      const FOUNDED = { founded: true, inChamber: true };
+      const N_WORKER = 4, N_DIGGER = 3;
+      const b = brood.createBroodState(N_WORKER + N_DIGGER);
+      const cache = fakeCache(brood.EGG_COST * (N_WORKER + N_DIGGER), { graine: brood.EGG_COST * (N_WORKER + N_DIGGER) });
+      for (let i = 0; i < N_WORKER; i++) brood.lay(b, cache, FOUNDED, avatar.WORKER.id);
+      for (let i = 0; i < N_DIGGER; i++) brood.lay(b, cache, FOUNDED, avatar.DIGGER.id);
+      brood.update(b, brood.EGG_INCUBATION_SECONDS + 0.01); // all 7 hatch together, laid on the same tick
+
+      const spawned = swarm.spawnFromBrood(b, 0, 0);
+      check(`${N_WORKER} worker lays + ${N_DIGGER} digger lays spawn exactly ${N_WORKER + N_DIGGER} bodies, not ${N_WORKER + N_DIGGER + 1} or ${N_WORKER + N_DIGGER - 1}`,
+        spawned === N_WORKER + N_DIGGER, spawned);
+      const pop = swarm.countByCaste();
+      check(`...exactly ${N_WORKER} of them WORKER`, pop[avatar.WORKER.id] === N_WORKER, JSON.stringify(pop));
+      check(`...exactly ${N_DIGGER} of them DIGGER, never blended with the worker count`,
+        pop[avatar.DIGGER.id] === N_DIGGER, JSON.stringify(pop));
+
+      // A second drain before the next hatch spawns nothing more, same
+      // idempotence guarantee as #37's own test, now proven across two castes.
+      const spawnedAgain = swarm.spawnFromBrood(b, 0, 0);
+      check('draining again before the next hatch spawns nothing, for either caste',
+        spawnedAgain === 0 && swarm.count() === N_WORKER + N_DIGGER, spawnedAgain);
+
+      /* Every DIGGER-caste entity is indexed at DIGGER's own collideRadius
+         (1.62), not WORKER's (1.5) — the piège #6 the ticket names by value,
+         checked against the real spatial index rather than trusted. */
+      check('every spawned digger is indexed at DIGGER\'s own collideRadius, not WORKER\'s 1.5',
+        swarm.workers.filter((w) => w.caste === avatar.DIGGER.id).every((w) => {
+          const hit = world.worldIndex.nearest(w.entity.x, w.entity.z, 0.01, 'ant');
+          return hit && hit.id === w.entity.id && Math.abs(hit.extent - avatar.collideRadius(avatar.DIGGER)) < 1e-9;
+        }));
+
+      /* #38's own arbitrage: a digger does not forage. Every digger entity is
+         NOT controlled and carries a patrol goal, never forage.js state. */
+      check('every digger entity is controlled:false with a patrol goal, never controlled:true',
+        swarm.workers.filter((w) => w.caste === avatar.DIGGER.id)
+          .every((w) => w.entity.controlled === false && w.entity.goal && w.entity.goal.type === 'patrol' && w.forage === null));
+      check('every worker entity is still controlled:true with forage.js state, unchanged by #38',
+        swarm.workers.filter((w) => w.caste === avatar.WORKER.id)
+          .every((w) => w.entity.controlled === true && w.forage !== null));
+
+      /* Run the swarm for real, next to an actual resource node and a real
+         cache, and confirm a digger never touches either: no unit taken off
+         the node, no credit to the cache, attributable to her. A worker in
+         the same swarm is left free to forage normally (not stubbed out),
+         so this proves "diggers don't forage" rather than "nothing forages
+         this tick". */
+      const node = world.RESOURCE_NODES.find((n) => n.amount > 0);
+      const before = node.amount;
+      const cache2 = { x: node.x, y: 0, z: node.z, items: {}, total: 0 };
+      // put every digger right on top of the node — if she were foraging at
+      // all, standing on a node is exactly when it would show
+      for (const w of swarm.workers) if (w.caste === avatar.DIGGER.id) { w.entity.x = node.x; w.entity.z = node.z; }
+      const DT = 1 / 30;
+      for (let i = 0; i < 300; i++) swarm.update(DT, i * DT, cache2);
+      check('a digger standing on a resource node never harvests it (no forage state to drive her there)',
+        node.amount === before, `${before} -> ${node.amount}`);
+      // A digger never leaves forage.js's SEEK state because she never
+      // enters it: w.forage is null for her for her whole life (checked
+      // above), so there is no state to have moved. This one instead checks
+      // the flip side directly: standing on the node did not even nudge her
+      // out of the patrol goal she was given at spawn (goal.target still one
+      // of 'a'/'b' — goalWish() only ever sets these two).
+      check('...and her own patrol goal is untouched by standing on a node (never switched to a forage state)',
+        swarm.workers.filter((w) => w.caste === avatar.DIGGER.id)
+          .every((w) => w.entity.goal.type === 'patrol' && ['a', 'b'].includes(w.entity.goal.target)));
+
+      swarm.dispose();
+      antMeshMod._resetPoolsForTest();
+    }
   }
 }
 

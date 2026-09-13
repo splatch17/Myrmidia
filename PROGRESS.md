@@ -14,9 +14,9 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ## État au 2026-09-05
 
-> **Le tour le plus récent est le 13 (2026-09-12, l'éclosion peuple le monde).**
+> **Le tour le plus récent est le 14 (2026-09-13, le choix de caste à la ponte).**
 > Sa section est plus bas, juste avant « Défauts connus », précédée de celles
-> des tours 10 à 12. Ce qui suit ici est l'état du tour 9, conservé parce qu'il
+> des tours 10 à 13. Ce qui suit ici est l'état du tour 9, conservé parce qu'il
 > décrit encore correctement la stack et la procédure de reprise — **sauf le
 > lien de test, qui a été cassé au tour 10 et réparé au tour 12.**
 
@@ -619,6 +619,132 @@ Par ordre d'importance :
 
 ---
 
+## Round du 2026-09-13 (tour 14 — nocturne, VPS ARM sans GPU)
+
+**Ticket travaillé : #38 — « Choisir la caste à la ponte : ouvrière ou
+creuseuse ».** Désigné nommément par « Quoi faire ensuite » du tour 13 (point 2) ;
+ses trois dépendances (#35, #36, #37) sont livrées aux tours 11-13 ; `brood.js`
+et `workers.js` portaient la frontière déjà tracée des deux côtés depuis le
+tour 10. C'était le dernier morceau de logique pure de la chaîne, donc le seul
+faisable sans écran — le point 1 du tour 13 (la session avec écran qui ferme
+#37/#36) reste impossible ici et n'a pas été tenté. Aucun `verify-*.mjs` lancé.
+
+### Où on en est
+
+**Le joueur arbitre enfin quelque chose.** `C` fait tourner la caste
+sélectionnée, `P` pond une couvée **de cette caste**, et la couvée éclôt en
+corps de cette caste. Pondre des creuseuses, c'est ne pas pondre d'ouvrières :
+c'est la première décision réelle du jeu, et elle ne demande aucun système
+supplémentaire pour être un vrai arbitrage.
+
+| Fichier | Rôle |
+|---|---|
+| `design/castes-et-micro-macro.md` **(nouveau)** | **Le ticket #38 le citait comme faisant autorité — il n'existait pas sur le disque.** Écrit ce round par Cephalotes : §1 la caste comme décision, §2 la silhouette chiffrée valeur par valeur contre `WORKER`, §3 la contrainte structurelle, §4 micro/macro |
+| `player/avatar.js` | `DIGGER` — **une entrée de plus dans la table**, pas un fichier (§3 du doc, exigence explicite du ticket). Et `ALL_PROFILES`, la liste canonique dont dérivent désormais `entities.js` et `antMesh.js` au lieu de recopier `[WORKER, FOUNDING_QUEEN]` chacun de leur côté |
+| `player/brood.js` | **`workersAvailable` change de forme : `number` → `{ [casteId]: count }`.** `lay(..., casteId)` prend une **chaîne**, jamais un objet importé — le module reste à zéro `import`, donc `test-logic.mjs` continue de l'importer directement. `drainHatched()` est le « lis tout, remets à zéro » atomique |
+| `player/workers.js` | Naissance par caste. Une ouvrière reste `controlled:true` pilotée par `forage.js` ; une creuseuse naît `controlled:false` avec un `goal` de patrouille |
+| `player/index.js` | La touche `C` (même patron edge-triggered que `P`), `selectedCaste`, la population par caste dans la ligne couvain |
+| `player/hud.js` | `C` dans le panneau de commandes, caste sélectionnée et compteur par caste |
+| `player/entities.js`, `antMesh.js` | Dérivent d'`ALL_PROFILES` : plus aucune liste de castes recopiée à la main |
+
+**Tests : 145 → 166, 0 échec.** `npx vite build` passe (2,36 s). Je les ai
+relancés moi-même après l'agent, pas seulement lus dans son rapport. Périmètre
+vérifié sur le disque : seuls `design/castes-et-micro-macro.md`, sept fichiers
+de `player/**` et `scripts/test-logic.mjs` ont bougé — ni `world/**`, ni
+`core/**`, ni `main.js`, et **pas de `digger.js`**, ce qui était le signal
+d'échec nommé par le ticket.
+
+**Arbitrages pris pendant le round :**
+
+1. **Une creuseuse ne butine pas — imposé par l'orchestrateur, contre la
+   facilité.** Le creusement lui-même est l'étape 2/4 (ticket non encore ouvert).
+   Mais si une creuseuse récoltait comme une ouvrière en attendant, la phrase qui
+   justifie tout le ticket — « creuser plus vite et récolter moins » — serait
+   fausse et le joueur n'arbitrerait rien. Elle patrouille donc entre la bouche
+   du nid et son point de dispersion (`makePatrolGoal` du tour 12, réutilisé
+   sans toucher `core/entities.js`). L'endroit exact où le creusement se
+   branchera est marqué en commentaire dans `spawnOne`.
+2. **`controlled: false` pour la creuseuse, contre le `controlled: true` que le
+   tour 13 avait donné à la butineuse.** Ce n'est pas une incohérence : la
+   butineuse a un `drive` calculé par `forage.js` à chaque image, la creuseuse
+   n'a qu'un but. `updateEntity()` route déjà les deux par le même chemin
+   (`goalWish` si non contrôlée) — vérifié dans `player/entities.js:96`.
+3. **`workersAvailable` devient une carte par caste plutôt qu'un compteur plus
+   une file.** L'éclosion doit livrer *quelle* caste éclôt, pas seulement
+   *combien* ; l'ordre entre castes n'a pas d'importance puisque la dispersion
+   en spirale du tour 13 n'en dépend pas.
+4. **Aucun chiffre de silhouette n'a été réinventé par l'implémenteur.** Les
+   valeurs de `DIGGER` viennent verbatim du §2b du doc de DA, chacune justifiée
+   là-bas contre la valeur `WORKER` correspondante — piège n°6 traité à la source.
+
+### Ce qui est cassé ou en attente
+
+- **#38 n'est pas fermé, et il s'en faut de la capture.** Son critère de fin est
+  « une capture montrant les deux castes **côte à côte, distinguables**, et le
+  compteur du HUD qui les sépare ». La distinguabilité à hauteur de fourmi dans
+  l'herbe est précisément ce qu'aucun test ne peut prouver. Le compteur existe,
+  la silhouette est chiffrée, **rien n'a été vu.**
+- **Trou de couverture assumé, signalé par l'agent plutôt que caché.** Le test
+  qui protège le dimensionnement des pools d'instances (`antMesh.js`) itère bien
+  `ALL_PROFILES` au lieu d'une liste recopiée, mais **il ne tombe pas** si on
+  retire `DIGGER` de ce `reduce` : la creuseuse a exactement le même nombre de
+  segments que l'ouvrière (seule la mandibule change), donc son empreinte ne
+  dépasse jamais celle de la reine. Le filet est réel pour une **future** caste
+  plus grosse, pas pour l'oubli d'aujourd'hui. Les trois autres ruptures
+  volontaires, elles, ont bien mordu (voir ci-dessous).
+- **Pas d'évitement mutuel entre fourmis**, inchangé depuis le tour 13. Les
+  creuseuses qui patrouillent près de la bouche du nid vont rendre ce défaut
+  plus visible qu'avec des butineuses dispersées : à regarder avant de décider
+  si ça vaut un ticket.
+- Le commentaire d'en-tête de `world/index.js` ment toujours (« deliberately not
+  wired into the player controller »). Quatre tours que je le note ; il est hors
+  du périmètre `player/**` de ce round, c'est une ligne pour un round côté Atta.
+- **Rien de tout ça n'a été vu**, comme aux quatre tours précédents.
+
+**Validation en négatif (4 ruptures, restaurées, 166/0 re-constaté à chaque
+fois) :** `PROFILES_BY_ID` privé de `digger` → 3 tests tombent ; `lay()` qui
+ignore la caste passée → 5 ; `workers.js` forçant `isForager = true` pour tout
+profil → 2 échecs francs plus un crash plus loin ; le `reduce` d'`antMesh.js`
+privé de `DIGGER` → **0 test, c'est le trou ci-dessus.**
+
+### À juger à l'œil, sur une machine avec GPU
+
+Par ordre d'importance :
+
+1. **Le critère de fin de #38** : une ouvrière et une creuseuse côte à côte dans
+   l'herbe, à hauteur de fourmi. Sont-elles distinguables ? La spec parie sur
+   deux choses — la mandibule (`r` 0,27 contre 0,17) et l'assombrissement
+   uniforme ×0,66 de la chitine. Si ça ne se lit pas, c'est la spec qu'il faut
+   refaire, pas le code : les chiffres sont dans `design/castes-et-micro-macro.md`
+   §2b et rien d'autre ne les duplique.
+2. **La touche `C` et la ligne HUD** : la caste sélectionnée est-elle visible
+   *avant* de pondre, et le compteur par caste lisible ?
+3. **Le comportement de la creuseuse** : une patrouille aller-retour près de la
+   bouche du nid doit lire comme « elle attend d'avoir quelque chose à creuser »,
+   pas comme une fourmi cassée. C'est le point le plus incertain du round.
+4. **Les creuseuses entre elles** : elles patrouillent au même endroit et ne
+   s'évitent pas. Combien faut-il qu'il y en ait pour que ça devienne laid ?
+5. Tout l'arriéré des tours 10-13, toujours jamais vu : la ponte, l'éclosion et
+   ses ouvrières qui marchent (#37/#36), la bascule crépuscule → jour à la
+   remontée, la fondation (défaut 1). Le lien de test marche depuis le tour 12.
+
+### Quoi faire ensuite
+
+1. **Une session avec écran qui ferme #38, #37 et #36 d'un coup** : jouer la
+   boucle entière — récolter, fonder, pondre une couvée d'ouvrières, pondre une
+   couvée de creuseuses, attendre les deux éclosions — et capturer. Six tickets
+   de suite se sont arrêtés faute de cet œil, et ils se ferment tous sur la même
+   partie.
+2. **Ouvrir l'étape 2/4 : la creuseuse creuse.** C'est la suite nommée par le
+   ticket #38 lui-même (« étape 1/4 vers voir le premier tunnel se creuser et
+   pouvoir y entrer »). Le point d'insertion est déjà marqué dans
+   `workers.js spawnOne`, et `world/founding.js` sait déjà creuser à
+   l'exécution. Ce ticket n'existe pas encore — il est à ouvrir.
+3. Corriger l'en-tête menteur de `world/index.js` (une ligne, côté Atta).
+4. Le reste de la liste ci-dessous est inchangé.
+
+---
+
 ## Défauts connus (vus sur captures, non corrigés)
 
 | # | Défaut | Gravité |
@@ -648,8 +774,12 @@ Par ordre d'importance :
    capturer**.
 2 quater. ~~**#37 — l'éclosion donne des ouvrières**~~ — **faite au tour 13**,
    machine à états de butineuse et naissance branchée sur
-   `brood.workersAvailable`. Reste sa capture, la même session que #36. Puis
-   **#38**, le choix de caste, dont la frontière est tracée des deux côtés.
+   `brood.workersAvailable`. Reste sa capture, la même session que #36.
+2 quinquies. ~~**#38 — le choix de caste à la ponte**~~ — **fait au tour 14**,
+   `DIGGER` dans la table d'`avatar.js`, touche `C`, compteur HUD par caste, une
+   creuseuse qui ne butine pas. Reste sa capture — **les deux castes côte à côte
+   et distinguables** —, la même session que #36 et #37. Puis l'**étape 2/4**
+   nommée par #38 : la creuseuse creuse. Ce ticket-là est à ouvrir.
 3. **La colonie abandonnée** — remettre le nid pré-construit sur la carte comme
    petit nid mort à trouver : entrée effondrée avec du relief, champignons
    toujours luminescents (le champignon survit à la colonie). Corrige aussi le
@@ -669,7 +799,8 @@ Par ordre d'importance :
 | Ce que fait une ouvrière toute seule | `player/forage.js` (la machine à états, module pur) et `player/workers.js` (la naissance, le mesh, les vraies requêtes monde) |
 | Creuser le nid | `world/founding.js` — `canFoundAt` / `foundNest` / `populateNest` |
 | Le ciel, le soleil, la bascule prologue→colonie | `world/sun.js` (`RIG_PROLOGUE`, `RIG_FOUNDED`, `setFoundedMix`) |
-| Les tailles/vitesses de la fourmi | `player/avatar.js` — un second corps = une entrée de plus, pas un contrôleur |
+| Les tailles/vitesses de la fourmi | `player/avatar.js` — un second corps = une entrée de plus, pas un contrôleur. `ALL_PROFILES` est la liste canonique des castes : tout code qui itère les castes en dérive, personne ne la recopie |
+| Ce qu'est une caste, et pourquoi le choix à la ponte | `design/castes-et-micro-macro.md` — §2 chiffre chaque silhouette contre celle de `WORKER` |
 | Les textures | `world/texturing.js` (triplanaire), `scripts/generate-procedural-textures.mjs` (génération) |
 | L'éclairage du nid | `world/lighting.js` — `applyNestShading()` s'applique à toute la scène depuis `main.js` |
 | Qu'y a-t-il près d'ici ? | `core/spatialIndex.js` (la grille, module pur) et `worldIndex` exporté par `world/index.js`. **Aucun code ne rebalaie un tableau entier par image** — voir `design/api-monde-gameplay.md` §6 |
@@ -755,6 +886,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 14 | **Le choix de caste à la ponte** (#38) : `DIGGER` ajoutée comme **une ligne de plus** dans la table d'`avatar.js` (pas de `digger.js` — le signal d'échec nommé par le ticket), `ALL_PROFILES` supprime les deux listes de castes recopiées à la main, `brood.workersAvailable` passe de `number` à `{ [casteId]: count }` sans que `brood.js` gagne un seul `import`. Touche `C`, compteur HUD par caste. Arbitrage : **une creuseuse ne butine pas** — sinon « creuser plus vite et récolter moins » serait faux et le joueur n'arbitrerait rien. `design/castes-et-micro-macro.md`, que le ticket citait comme faisant autorité, **n'existait pas** : écrit ce round, silhouette chiffrée contre `WORKER`. Tests 145 → 166. Round nocturne sur VPS sans GPU, **les deux castes n'ont jamais été vues côte à côte** | *(voir la note de round)* |
 | 13 | **L'éclosion peuple le monde** (#37) : `player/forage.js` pur (SEEK → HARVEST → RETURN → DEPOSIT), `player/workers.js` qui draine `brood.workersAvailable` et fait naître par le chemin commun du tour 12. Une ouvrière récolte et dépose dans la réserve du joueur sans intervention. `nearestNode()` corrigé d'un rayon fixe de 2000 (≈10⁵ cellules balayées, pire que le balayage que le tour 11 avait supprimé) vers une recherche à rayon croissant : 49 cellules dans le cas courant. Tests 113 → 145. Round nocturne sur VPS sans GPU, **aucune ouvrière n'a été vue marcher** | *(voir la note de round)* |
 | 12 | **La couche d'entités** (#36, les deux volets) : `core/entities.js` pur et sérialisable, `player/entities.js` avec `updateEntity()` unique — **le joueur passe par le même chemin que les PNJ**. Rendu instancié : 72–74 draw calls par fourmi → **4, constants quel que soit l'effectif**, matériaux 4–6 → 2. Tests 86 → 113. `dist/` sorti du `.gitignore` : le lien de test, page blanche depuis le tour 10, est réparé. Round nocturne sur VPS sans GPU, **aucune fourmi n'a été vue marcher** | *(voir la note de round)* |
 | 11 | **L'index spatial** (#35) : `core/spatialIndex.js` pur, grille uniforme partagée de 1862 objets, cellule 12 u. Les 5 balayages par image rebranchés (`nearestClimbable` ×13, collision décor ×43). Second champ d'herbe du gameplay supprimé, `MAX_BROOD` enfin exporté. Tests 38 → 86, moitié d'équivalence contre les balayages d'avant. Round nocturne sur VPS sans GPU, rien de vu | *(voir la note de round)* |

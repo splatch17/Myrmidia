@@ -17,12 +17,16 @@
      #event      — a short-lived line for what just happened (took a seed,
                    founded the colony)
      #hold       — a bar that fills while a held action runs, under #prompt
-     #broodinfo  — the ponte (#6 §2): couvain in progress / capacity, time to
-                   the next hatch, workers hatched, and (for a few seconds)
-                   whatever the last P press just said — success or refusal.
-                   Empty before the colony is founded, there being nothing to
-                   report yet. brood.js decides *what* happened; this file
-                   only ever prints the sentence player/index.js hands it.
+     #broodinfo  — the ponte (#6 §2, extended by #38): couvain in progress /
+                   capacity, time to the next hatch, the live population
+                   split by caste (#38's own HUD criterion — "un compteur de
+                   population par caste"), which caste C currently has
+                   selected for the NEXT lay (visible before P is ever
+                   pressed, not only after), and (for a few seconds) whatever
+                   the last P press just said — success or refusal. Empty
+                   before the colony is founded, there being nothing to
+                   report yet. brood.js/index.js decide *what* happened; this
+                   file only ever prints the sentence player/index.js hands it.
      #controls   — the key bindings, open at first launch, toggled with H
 
    The controls panel is not decoration. The player's report on the previous
@@ -67,6 +71,7 @@ const CONTROLS = [
   ['Souris (glisser)', 'tourner la caméra'],
   ['Molette', 'reculer / rapprocher la vue'],
   ['E', 'action — appui court, ou maintenu quand la barre apparaît'],
+  ['C', 'choisir la caste à pondre (ouvrière / creuseuse)'],
   ['P', 'pondre (dans le couvoir, une fois la colonie fondée)'],
   ['H', 'afficher / masquer cette aide'],
 ];

@@ -20,7 +20,7 @@
 import { worldIndex } from '../world/index.js';
 import { createEntity, goalWish, snapshotEntity, restoreEntity, makePatrolGoal } from '../core/entities.js';
 import { clamp } from '../core/noise.js';
-import { WORKER, FOUNDING_QUEEN, collideRadius } from './avatar.js';
+import { ALL_PROFILES, collideRadius } from './avatar.js';
 import { makeLegState, updateLegs } from './legs.js';
 import { computeWishDir, stepAnt } from './movement.js';
 import { stepClimb } from './climb.js';
@@ -28,13 +28,16 @@ import { stepClimb } from './climb.js';
 export { makePatrolGoal };
 
 // avatar.js does not (and per its own header should not) index its profiles
-// by id — WORKER/FOUNDING_QUEEN are its whole public surface, read by
-// object. This is the one place that needs the reverse lookup (a
-// `profileId` string -> the object), so it lives here rather than growing
-// avatar.js an export nothing else needs.
-const PROFILES_BY_ID = { [WORKER.id]: WORKER, [FOUNDING_QUEEN.id]: FOUNDING_QUEEN };
+// by id itself — it only exports the flat ALL_PROFILES list (#38) alongside
+// each named object. This is the one place that needs the reverse lookup (a
+// `profileId` string -> the object), built FROM that list rather than
+// spelled out by hand here: a caste appended to ALL_PROFILES is resolvable
+// by id with no second edit in this file (see avatar.js's own doc on why —
+// piège #6's cousin, a table forgotten in exactly this spot, is what #38
+// flagged by name).
+const PROFILES_BY_ID = Object.fromEntries(ALL_PROFILES.map((p) => [p.id, p]));
 export function resolveProfile(profileId) {
-  return PROFILES_BY_ID[profileId] || WORKER;
+  return PROFILES_BY_ID[profileId] || ALL_PROFILES[0];
 }
 
 /**

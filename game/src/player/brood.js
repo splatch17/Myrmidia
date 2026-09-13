@@ -10,10 +10,10 @@
    no DOM stand-in — see that script's header.
 
    FRONTIER WITH #36 (the entity layer). A hatch increments
-   `brood.workersAvailable` and nothing else: no ant, no mesh, no AI is
-   created here. #36 is expected to poll (and drain) that counter to decide
-   how many worker entities to spawn — this module does not know entities
-   exist.
+   `brood.workersAvailable[caste]` and nothing else: no ant, no mesh, no AI is
+   created here. #36/#37/workers.js are expected to poll (and drain) that
+   counter to decide how many entities of which caste to spawn — this module
+   does not know entities exist.
 
    THE COST RULE (kept deliberately simple — see the header on §4 of the
    ticket for why this needed a decision, not a citation): an egg costs
@@ -21,10 +21,36 @@
    greedily in whatever order its `items` happen to be keyed (harvest.js is
    the only owner of that bookkeeping; this file asks it to remove units, it
    never keeps a second copy of the stockpile). A graine and a brindille are
-   worth the same egg-shaped nothing here — there is no cross-caste recipe
-   yet (design/boucle-de-jeu.md §2's open point on "une caste au hasard vs.
-   au choix" is not resolved by this round; every hatch is a plain worker).
-   ========================================================================== */
+   worth the same egg-shaped nothing here — the cost does not depend on caste
+   (design/castes-et-micro-macro.md does not ask for a different price, only
+   a different body).
+
+   #38 — CASTE AT THE POINT OF LAYING, KEPT AS A STRING. `lay(brood, cache,
+   ctx, casteId)` takes a plain caste id ('worker' | 'digger' | any future
+   one) rather than an avatar.js profile object, for the exact reason
+   core/entities.js's own header gives for `profileId`: this file imports
+   NOTHING (see above), so it cannot know avatar.js's WORKER/DIGGER objects
+   exist, only agree with player/index.js on the string their `.id` happens
+   to be. The default ('worker') is a literal for the same reason — it is
+   not `WORKER.id`, it is the string that literal currently equals, kept in
+   sync by convention rather than import (same discipline the whole entity
+   layer already runs on). A whole clutch is one caste: `lay()` takes ONE
+   casteId per call and every egg in that clutch hatches into that caste —
+   "pondre des creuseuses, c'est ne pas pondre d'ouvrières" only holds if a
+   single lay can't hedge across both.
+
+   `workersAvailable` CHANGED SHAPE FOR #38: it used to be a plain number (a
+   count of workers nobody had spawned yet). One caste per clutch means a
+   hatch is not just "how many", it is "how many, of WHICH caste" — a single
+   integer cannot answer that, and rounding it back down to one number here
+   would erase exactly the information workers.js needs to pick DIGGER vs.
+   WORKER's avatar.js profile. It is now a plain object keyed by caste id,
+   `{ [casteId]: count }`, absent keys reading as zero (see
+   `workersAvailableOf()`/`totalWorkersAvailable()` below rather than reading
+   the object directly, so a caller never has to remember that convention
+   itself). `drainHatched()` is the atomic "read everything, reset to
+   nothing" a spawner needs — see its own doc for why that has to be one
+   call, not a read followed by a separate reset. */
 
 /** Resource units per egg, any kind, see the module header's "cost rule".
  *  Calibrated against FOUND_STOCK (5, player/harvest.js — the stock a queen
@@ -99,12 +125,55 @@ export function createBroodState(capacity = DEFAULT_BROOD_CAPACITY) {
      *  turned a lamp off, so a colony succeeding at its one job would have
      *  gone dark. */
     laidTotal: 0,
-    /** hatched eggs nobody has turned into a worker entity yet (#36's job). */
-    workersAvailable: 0,
-    /** hatched, ever — for a HUD counter that does not reset when #36 drains
-     *  workersAvailable. */
+    /** hatched eggs nobody has turned into a body yet, PER CASTE — see the
+     *  module header's #38 section for why this is an object and not a
+     *  number. Read through workersAvailableOf()/totalWorkersAvailable()/
+     *  drainHatched() below rather than indexed directly, so "no key yet"
+     *  and "zero" never have to be told apart by the caller. */
+    workersAvailable: {},
+    /** hatched, ever, across every caste — for a HUD total that does not
+     *  reset when workers.js drains workersAvailable. Nothing downstream has
+     *  needed a per-caste lifetime total yet (only "how many bodies exist
+     *  right now", which workers.js answers by counting live entities, not
+     *  by asking this file) — add one the day something does, don't
+     *  presuppose it here. */
     hatchedTotal: 0,
   };
+}
+
+/** Default caste for a lay() call that does not name one — the string
+ *  avatar.js's WORKER.id currently equals (see the module header for why
+ *  this file cannot import that constant instead). */
+export const DEFAULT_CASTE = 'worker';
+
+/** `brood.workersAvailable[casteId]`, defined as 0 rather than undefined —
+ *  the one place that convention lives, so nobody else has to `|| 0` it. */
+export function workersAvailableOf(brood, casteId) {
+  return brood.workersAvailable[casteId] || 0;
+}
+
+/** Every hatched body currently waiting to be spawned, any caste — what a
+ *  HUD total (or an "is anything due" check) wants; NOT what a spawner
+ *  should drain from (see drainHatched(), which also tells you which caste
+ *  each one is). */
+export function totalWorkersAvailable(brood) {
+  let n = 0;
+  for (const k in brood.workersAvailable) n += brood.workersAvailable[k];
+  return n;
+}
+
+/** Hand back the whole `{ [casteId]: count }` map and reset it to empty, in
+ *  one call. ATOMIC ON PURPOSE, same reasoning as the old `n =
+ *  workersAvailable; workersAvailable = 0` two-liner it replaces (see
+ *  workers.js's own doc on "one hatch = one worker, never two, never zero"):
+ *  a caller that read-then-reset across two statements would spawn twice
+ *  for the same hatch if anything else ran between them. May return `{}` —
+ *  callers should treat a missing key or an empty object identically to
+ *  "nothing hatched", never throw on it. */
+export function drainHatched(brood) {
+  const drained = brood.workersAvailable;
+  brood.workersAvailable = {};
+  return drained;
 }
 
 /** Remove `total` units from `cache` (player/harvest.js's `{ items, total }`
@@ -127,23 +196,26 @@ function spendCost(cache, total) {
 }
 
 /**
- * Try to lay one egg. `cache` is player/harvest.js's `{ items, total }`
- * stockpile (or null/undefined if nothing has ever been dropped yet).
- * `ctx.founded` — is there a nest at all; `ctx.inChamber` — is the queen
- * standing in it right now (design/boucle-de-jeu.md §2 ties the gesture to
- * the couvoir, not to "anywhere on the map").
+ * Try to lay one clutch of eggs, all of them `casteId` (#38 — see the module
+ * header for why a whole clutch is one caste, and why that caste is a plain
+ * string rather than an avatar.js profile object). `cache` is
+ * player/harvest.js's `{ items, total }` stockpile (or null/undefined if
+ * nothing has ever been dropped yet). `ctx.founded` — is there a nest at
+ * all; `ctx.inChamber` — is the queen standing in it right now
+ * (design/boucle-de-jeu.md §2 ties the gesture to the couvoir, not to
+ * "anywhere on the map").
  *
  * Returns `{ ok, reason? }`, `reason` one of LAY_REASON's stable technical
  * strings — never a sentence (layRefusalText() phrases it). A refusal never
  * mutates `brood` or `cache`.
  */
-export function lay(brood, cache, ctx = {}) {
+export function lay(brood, cache, ctx = {}, casteId = DEFAULT_CASTE) {
   const { founded = false, inChamber = false } = ctx;
   if (!founded) return { ok: false, reason: LAY_REASON.NO_NEST };
   if (!inChamber) return { ok: false, reason: LAY_REASON.TOO_FAR };
   if (brood.clutches.length >= brood.capacity) return { ok: false, reason: LAY_REASON.BROOD_FULL };
   if (!spendCost(cache, EGG_COST)) return { ok: false, reason: LAY_REASON.NOT_ENOUGH_FOOD };
-  brood.clutches.push({ remaining: EGG_INCUBATION_SECONDS });
+  brood.clutches.push({ remaining: EGG_INCUBATION_SECONDS, caste: casteId });
   brood.laidTotal++; // never decremented — see its field doc in createBroodState()
   return { ok: true };
 }
@@ -151,23 +223,26 @@ export function lay(brood, cache, ctx = {}) {
 /**
  * Advance incubation by `dt`. Any clutch whose remaining time reaches 0
  * hatches: it leaves `clutches` (freeing a capacity slot for the next lay)
- * and becomes one more unit of `workersAvailable`/`hatchedTotal`. Returns how
- * many hatched *this call*, so a caller can react once — a HUD flash, a
- * sound — without polling workersAvailable for a delta.
+ * and becomes one more unit of `workersAvailable[clutch.caste]`/
+ * `hatchedTotal`. Returns how many hatched *this call*, across every caste
+ * — so a caller can react once (a HUD flash, a sound) without polling
+ * workersAvailable for a delta; a caller that needs to know WHICH caste
+ * hatched reads `workersAvailable`/`drainHatched()` after calling this, not
+ * this return value (see the module header: a single number cannot carry
+ * that, which is the whole reason workersAvailable stopped being one).
  */
 export function update(brood, dt) {
   let hatched = 0;
   const remaining = [];
   for (const c of brood.clutches) {
     c.remaining -= dt;
-    if (c.remaining > 0) remaining.push(c);
-    else hatched++;
+    if (c.remaining > 0) { remaining.push(c); continue; }
+    hatched++;
+    const caste = c.caste || DEFAULT_CASTE; // defensive: a hand-built clutch (a test, an old save) with no caste lays as a worker, never crashes
+    brood.workersAvailable[caste] = (brood.workersAvailable[caste] || 0) + 1;
   }
   brood.clutches = remaining;
-  if (hatched > 0) {
-    brood.workersAvailable += hatched;
-    brood.hatchedTotal += hatched;
-  }
+  if (hatched > 0) brood.hatchedTotal += hatched;
   return hatched;
 }
 
