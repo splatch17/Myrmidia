@@ -4,6 +4,7 @@ import { groundY } from '../world/index.js';
 import { antMatrix, localToWorld } from './legs.js';
 import { PLAYER_AVATAR } from './avatar.js';
 import { resourceNodes, nodesAreProvisional } from './resources.js';
+import { BURROW_DURATION } from './burrow.js';
 
 /* ==========================================================================
    The things the harvest loop has to *show* (#29).
@@ -22,6 +23,11 @@ import { resourceNodes, nodesAreProvisional } from './resources.js';
       resources.js is on its stand-in set: when world/** publishes
       RESOURCE_NODES it draws its own nodes (contract §3, "le monde met à jour
       le visuel du noeud lui-même") and this part switches itself off.
+   4. The founding burrow's own spoil mound (#68): a ring of dirt clods that
+      rises around her while she sinks in (burrow.js moves ant.y, not this
+      file — this only draws what comes up to meet her). Reuses the same
+      ellipsoid/newItem plumbing as the harvest items, under a shape key
+      ('terre') that is never a real inventory kind.
 
    Everything is preallocated and toggled with .visible: these meshes have to
    exist before main.js's one-shot scene.traverse() applies the nest shading,
@@ -35,11 +41,14 @@ const ITEM_SHAPE = {
   graine: { r: [0.95, 0.78, 1.30], color: 0xd9c184, emissive: 0x000000 },
   brindille: { r: [2.90, 0.26, 0.26], color: 0x7a5228, emissive: 0x000000 },
   miellat: { r: [0.90, 0.88, 0.90], color: 0xe8a83c, emissive: 0x3a2405 },
+  // not a harvest kind — the burrow beat's own spoil clods (#68)
+  terre: { r: [1, 1, 1], color: 0x4a3524, emissive: 0x000000 },
 };
 
 const GROUND_SCALE = 2.0;    // items lying on the ground are drawn at world
                              // scale, not at the queen's local scale
 const PILE_SLOTS = 12;       // how many dropped items are drawn on the pile
+const BURROW_CLODS = 6;      // how many spoil clods ring the burrow beat
 
 let itemGeo = null;
 function sharedGeo() {
@@ -110,6 +119,14 @@ export function createProps({ scene, profile = PLAYER_AVATAR }) {
   }
   let pileDrawn = -1;
 
+  // ---- the burrow beat's spoil mound (#68) --------------------------------
+  const clods = [];
+  for (let i = 0; i < BURROW_CLODS; i++) {
+    const m = newItem('terre');
+    clods.push(m);
+    group.add(m);
+  }
+
   // ---- stand-in node markers (only while the world has no nodes) ---------
   const provisional = nodesAreProvisional();
   const markers = [];
@@ -162,6 +179,29 @@ export function createProps({ scene, profile = PLAYER_AVATAR }) {
     for (; i < pile.length; i++) pile[i].visible = false;
   }
 
+  /** The ring of spoil clods, while the burrow beat is running. `ant.x/z`
+   *  hold still for the whole beat (burrow.js only moves ant.y), so the ring
+   *  is centred on wherever she is right now without needing a separate
+   *  "where did this start" of its own. */
+  function updateBurrow(ant, burrowState) {
+    if (!burrowState || !burrowState.active) {
+      for (const m of clods) m.visible = false;
+      return;
+    }
+    const k = Math.max(0, Math.min(1, burrowState.t / BURROW_DURATION));
+    const grow = k * k * (3 - 2 * k);   // same smoothstep burrow.js sinks her by
+    const baseY = groundY(ant.x, ant.z);
+    for (let i = 0; i < clods.length; i++) {
+      const a = (i / clods.length) * Math.PI * 2 + i * 0.55;   // organic scatter
+      const rXZ = 0.9 + 0.7 * grow, rY = 0.4 + 2.2 * grow;
+      const cx = ant.x + Math.cos(a) * 2.6, cz = ant.z + Math.sin(a) * 2.6;
+      const m = clods[i];
+      m.material = itemMaterial('terre');
+      placeEllipsoid(m, [cx, baseY + rY * 0.85, cz], [rXZ, 0, 0], [0, rY, 0], [0, 0, rXZ]);
+      m.visible = true;
+    }
+  }
+
   function updateCarried(ant, carrying) {
     for (const kind of Object.keys(carried)) carried[kind].visible = false;
     if (!carrying) return;
@@ -178,11 +218,14 @@ export function createProps({ scene, profile = PLAYER_AVATAR }) {
     mesh.visible = true;
   }
 
-  /** Call once a frame with the ant and harvest.js's state. */
-  function update(ant, hstate) {
+  /** Call once a frame with the ant, harvest.js's state, and — optionally —
+   *  interaction.burrow.state, so the spoil mound can rise while it runs
+   *  (#68). Fine to omit: no burrow state just means no mound gets drawn. */
+  function update(ant, hstate, burrowState) {
     updateCarried(ant, hstate.carrying);
     updatePile(hstate.cache);
     if (provisional) updateMarkers();
+    updateBurrow(ant, burrowState);
   }
 
   function dispose() {

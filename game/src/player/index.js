@@ -244,7 +244,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     antState.position.set(ant.x, ant.y, ant.z);
     antState.radius = collideRadius(profile); // footprint half-width, for grass contact bend
 
-    props.update(ant, interaction.harvest.state);
+    props.update(ant, interaction.harvest.state, interaction.burrow.state);
 
     /* A clutch becomes eggs the colony owns. laying.js counts clutches; this
        is the first thing that turns one into something that hatches. */
@@ -362,6 +362,9 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // be cut. The cut itself is a real keypress.
     window.__beginLaying = () => interaction.laying.begin(ant);
     window.__caste = () => ({ caste, msg: casteMsg, unlocked: casteUnlocked('digger') });
+    // what a clutch costs right now, pace included (verify-burrow.mjs checks
+    // the pile is spent by exactly this much, exactly once, across #68's beat)
+    window.__clutchCost = () => interaction.clutchCost();
     window.__queenMenu = (profileId) => ({
       open: queenMenu.isOpen(),
       // asked of a profile by id, so a harness can prove the panel is refused
@@ -378,6 +381,13 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__laying = () => {
       const st = interaction.laying.state;
       return { phase: st.phase, t: +st.t.toFixed(3), brood: st.brood, mix: foundedMix() };
+    };
+    // #68: the burrow beat between the founding hold and the laying
+    // cutscene — likewise not driven by keys (scripts/verify-burrow.mjs
+    // watches it run rather than pressing anything for its 3-5 s).
+    window.__burrow = () => {
+      const st = interaction.burrow.state;
+      return { active: st.active, t: +st.t.toFixed(3) };
     };
   }
 
