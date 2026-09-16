@@ -22,6 +22,13 @@
 //      down, because player/movement.js assigns ant.y = groundY(x, z)
 //      unconditionally and has no notion of falling.
 //
+//   2b. YOU DO NOT HAVE TO BE DEAD IN FRONT OF IT. The same walk, but taken
+//      straight in from a band of lateral offsets, with movement.js's own
+//      ledge rule applied at the boundary. It reports the width of frontage
+//      that actually accepts a walk-in. Added in round 17, when the porter
+//      said entering was awkward: every check above walks the centre line,
+//      where an entrance is never the problem.
+//
 //   3. NOTHING IS IN THE WAY. A THREE.Raycaster is run along the path at eye
 //      height, segment by segment, against the dug nest and the lawn only
 //      (not the grass, whose real shape lives in a vertex shader and whose
@@ -228,6 +235,103 @@ async function main() {
     check(walk.maxDrift <= 1.0, `descentPath() y agrees with groundY() (max drift ${walk.maxDrift.toFixed(2)})`);
   } else check(false, 'nestFootprint()/descentPath() both available');
 
+  /* ---- 2b. HOW MANY WAYS IN --------------------------------------------
+     The porter's round-17 note: "il faut pouvoir rentrer dans la fourmilliere
+     de maniere un peu plus pratique (pas forcement etre pile en face de la
+     'porte')". Everything above walks the centre line, which is precisely
+     where an entrance is never a problem — so none of it can see the defect.
+
+     This walks IN, straight, from a band of lateral offsets, and applies the
+     rule player/movement.js actually applies at the boundary: a step into the
+     nest is refused when the floor she would land on is more than NEST_LEDGE
+     below the ground she is standing on. A lane counts only if it gets her
+     properly down into the ravine, not merely over the footprint's edge.
+
+     Refused means the lane stops. The controller would slide along the wall
+     and might find the mouth eventually; that is exactly the "je glisse le
+     long d'un mur invisible en cherchant la porte" the note is about, so the
+     conservative reading is the one being measured.
+
+     TWO READINGS, because they answer different questions. (a) is what a
+     player does — head for the entrance and walk at it — and it is measured
+     as the arc of approach bearings that get in. (b) never steers at all, and
+     so measures the frontage itself. A funnel that narrows quickly can pass
+     (a) and fail (b); a slot in a cliff fails both. */
+  const GATE_ARC_MIN = 90;     // degrees of approach that must work
+  const GATE_BAND_MIN = 26;    // units of frontage accepted without steering
+  const gate = await page.evaluate(() => {
+    const W = window.__world6;
+    const fp = W.nestFootprint();
+    const p = W.descentPath();
+    if (!fp || !p || p.length < 2) return null;
+    const m = p[0];
+    const dx = p[1].x - m.x, dz = p[1].z - m.z;
+    const l = Math.hypot(dx, dz) || 1;
+    const hx = dx / l, hz = dz / l;          // the way the cut sets off
+    const px = -hz, pz = hx;                 // across it
+    const LEDGE = 2.0;                       // player/movement.js NEST_LEDGE
+    const STEP = 0.5, DEEP = 2.0;
+
+    /** One walk in a straight line. How deep she got, and what stopped her. */
+    const walkIn = (sx, sz, ux, uz, run) => {
+      let x = sx, z = sz;
+      let inside = fp.contains(x, z);
+      let prevY = W.groundY(x, z);
+      let deepest = 0;
+      for (let s = 0; s <= run; s += STEP) {
+        const nx = x + ux * STEP, nz = z + uz * STEP;
+        const nowIn = fp.contains(nx, nz);
+        if (!inside && nowIn && prevY - fp.floorY(nx, nz) > LEDGE) {
+          return { ok: false, why: 'walled', deepest: +deepest.toFixed(1) };
+        }
+        x = nx; z = nz; inside = nowIn; prevY = W.groundY(x, z);
+        if (inside) deepest = Math.max(deepest, m.y - prevY);
+        if (deepest >= DEEP) return { ok: true, why: 'in', deepest: +deepest.toFixed(1) };
+      }
+      return { ok: false, why: 'shallow', deepest: +deepest.toFixed(1) };
+    };
+
+    // (a) heading for the entrance, from all around it
+    const R = 35, N = 72;
+    const dirs = [];
+    for (let i = 0; i < N; i++) {
+      const a = (i / N) * Math.PI * 2;
+      const r = walkIn(m.x + Math.cos(a) * R, m.z + Math.sin(a) * R, -Math.cos(a), -Math.sin(a), R + 22);
+      dirs.push({ deg: Math.round((a * 180) / Math.PI), ...r });
+    }
+    let arc = 0, run = 0;
+    for (let i = 0; i < N * 2; i++) {      // wrapped once, so a sector across 0 counts
+      run = dirs[i % N].ok ? run + 1 : 0;
+      if (run > arc) arc = run;
+    }
+    arc = Math.min(arc, N);
+
+    // (b) straight in, parallel to the cut, from a band of lateral offsets
+    const lanes = [];
+    for (let off = -45; off <= 45; off += 1) {
+      const r = walkIn(m.x + px * off - hx * 26, m.z + pz * off - hz * 26, hx, hz, 70);
+      lanes.push({ off, ...r });
+    }
+    let band = 0, brun = 0;
+    for (const L of lanes) { brun = L.ok ? brun + 1 : 0; if (brun > band) band = brun; }
+    const tally = (rows) => rows.reduce((acc, r) => { acc[r.why] = (acc[r.why] || 0) + 1; return acc; }, {});
+    return {
+      arcDeg: Math.round((arc / N) * 360), okDirs: dirs.filter((d) => d.ok).length, dirWhy: tally(dirs),
+      band, okLanes: lanes.filter((L) => L.ok).length, laneWhy: tally(lanes),
+      laneDeep: lanes.filter((L) => !L.ok).slice(0, 6).map((L) => `${L.off}:${L.why}@${L.deepest}`),
+    };
+  });
+  console.log('\n=== ways in ===');
+  if (gate) {
+    console.log(`  approaching it: ${gate.okDirs}/72 bearings get in, widest sector ${gate.arcDeg} deg  ${JSON.stringify(gate.dirWhy)}`);
+    console.log(`  straight in:    ${gate.okLanes}/91 lanes, widest band ${gate.band} units  ${JSON.stringify(gate.laneWhy)}`);
+    console.log(`  sample of blocked lanes: ${gate.laneDeep.join('  ')}`);
+    check(gate.arcDeg >= GATE_ARC_MIN,
+      `she can walk at the entrance from a ${gate.arcDeg} degree sector (needs ${GATE_ARC_MIN})`);
+    check(gate.band >= GATE_BAND_MIN,
+      `and straight in across ${gate.band} units of frontage without steering (needs ${GATE_BAND_MIN})`);
+  } else check(false, 'the gate sweep could run');
+
   // ---- 3. nothing solid in the way --------------------------------------
   const rays = await page.evaluate(() => {
     const THREE = window.__world6.THREE;
@@ -264,6 +368,58 @@ async function main() {
   console.log('  raycast targets:', JSON.stringify(rays.targets));
   console.log('  raycast hits:', JSON.stringify(rays.hits));
   check(rays.hits.length === 0, `the descent line crosses no solid surface (${rays.hits.length} hits)`);
+
+  /* ---- 3b. NO HOLE IN THE GROUND ----------------------------------------
+     A grid of straight-down rays over the whole excavation. Every cell that
+     hits nothing at all is a hole in the world: underground, a hole shows the
+     sky THROUGH the ground, which is what the overhead shot of round 17 was
+     full of after the meadow stopped being pushed down out of the way.
+
+     Looking for it by eye found three of these one at a time, each costing a
+     build and a screenshot. The grid finds all of them at once and says where
+     they are, which is the difference between a defect and a coordinate. */
+  const holes = await page.evaluate(() => {
+    const THREE = window.__world6.THREE;
+    const W = window.__world6;
+    const targets = [];
+    window.__scene.traverse((o) => {
+      if (!o.isMesh) return;
+      let n = o, isNest = false;
+      while (n) { if (n.name === 'founded-nest') isNest = true; n = n.parent; }
+      if (isNest || o.name === 'lawn') targets.push(o);
+    });
+    const p = W.descentPath();
+    const rooms = W.dugRooms();
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const q of [...p, ...rooms.map((r) => ({ x: r.x, z: r.z }))]) {
+      x0 = Math.min(x0, q.x - 24); x1 = Math.max(x1, q.x + 24);
+      z0 = Math.min(z0, q.z - 24); z1 = Math.max(z1, q.z + 24);
+    }
+    const rc = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0);
+    const found = [];
+    let cells = 0;
+    for (let x = x0; x <= x1; x += 1.5) {
+      for (let z = z0; z <= z1; z += 1.5) {
+        cells++;
+        rc.set(new THREE.Vector3(x, 400, z), down);
+        rc.near = 0.01; rc.far = 900;
+        if (rc.intersectObjects(targets, true).length) continue;
+        const fp = W.nestFootprint();
+        found.push({
+          x: +x.toFixed(1), z: +z.toFixed(1),
+          inNest: fp ? fp.contains(x, z) : false,
+          head: fp ? (Number.isFinite(fp.headroom(x, z)) ? +fp.headroom(x, z).toFixed(1) : 'open') : '?',
+          gy: +W.groundY(x, z).toFixed(1),
+        });
+      }
+    }
+    return { cells, count: found.length, sample: found.slice(0, 12) };
+  });
+  console.log('\n=== the ground is closed ===');
+  console.log(`  ${holes.count} of ${holes.cells} cells over the excavation see straight through to the sky`);
+  if (holes.count) console.log('  ', JSON.stringify(holes.sample));
+  check(holes.count === 0, `no hole in the ground over the nest (${holes.count} cells)`);
 
   // ---- 4. what it looks like --------------------------------------------
   const p0 = pathInfo ? pathInfo.p : null;
