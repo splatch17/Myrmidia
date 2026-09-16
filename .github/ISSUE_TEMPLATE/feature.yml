@@ -1,0 +1,62 @@
+name: Fonctionnalité
+description: Quelque chose que le joueur pourra faire ou voir. Un ticket = un round au plus.
+labels: ["feature"]
+body:
+  - type: textarea
+    id: objectif
+    attributes:
+      label: Objectif joueur
+      description: Une phrase, du point de vue de celui qui joue. « La reine peut… », « On voit… ».
+    validations:
+      required: true
+  - type: textarea
+    id: acceptation
+    attributes:
+      label: Critère d'acceptation (vérifiable sur capture)
+      description: Ce qu'une capture ou un harnais doit montrer pour fermer le ticket. Pas de « ça marche ».
+      placeholder: |
+        - [ ] verify-xxx.mjs : …
+        - [ ] Capture : …
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      description: Qui le prend. Ajouter aussi le label correspondant.
+      options:
+        - atta-rendu (world/**, core/**, main.js)
+        - cataglyphis-gameplay (player/**)
+        - cephalotes-da (design/**, textures)
+        - agent-leger (ticket S, bien délimité, modèle économique)
+        - plusieurs (contrat d'interface à écrire d'abord)
+    validations:
+      required: true
+  - type: input
+    id: fichiers
+    attributes:
+      label: Fichiers touchés (pressentis)
+      placeholder: world/excavation.js, player/queenMenu.js
+  - type: dropdown
+    id: contrat
+    attributes:
+      label: Touche le contrat design/api-monde-gameplay.md ?
+      description: Si oui, le contrat est étendu ici AVANT de distribuer le travail.
+      options: ["non", "oui"]
+    validations:
+      required: true
+  - type: dropdown
+    id: taille
+    attributes:
+      label: Taille
+      options:
+        - "S — moins d'une heure d'agent"
+        - "M — un round"
+        - "L — à découper avant de commencer"
+    validations:
+      required: true
+  - type: textarea
+    id: contexte
+    attributes:
+      label: Contexte (facultatif)
+      description: Liens vers design/, demande du porteur citée, tickets liés.

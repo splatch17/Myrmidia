@@ -16,7 +16,7 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-09 (tour 16)
+## État au 2026-09-17 (tour 17)
 
 **Branche de travail :** `feature/threejs-migration`.
 **`main` :** la [PR #23](https://github.com/splatch17/Myrmidia/pull/23) est
@@ -100,8 +100,10 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 | # | Défaut | Gravité |
 |---|---|---|
 | 1 | ~~On ne peut pas entrer dans la galerie (#40)~~ **Fait au tour 15**, et le tour 16 a corrigé ce qui restait pénible (#48, #49) | ✅ |
-| 1b | **Le hall est nu.** C'est un volume correct et éclairé, mais il ne porte encore aucun front de taille sur ses parois : rien à y faire une fois qu'on y est. Le modèle le supporte, les nombres attendent le brainstorm demandé | À faire |
-| 2 | **Les touches 5/6 sont committées sans capture.** Mon harnais jetable n'envoie aucune touche (H n'y bascule pas le panneau non plus) alors que `verify-harvest.mjs` y arrive. Défaut du script, pas du jeu — mais à prouver | À vérifier |
+| 1b | **Le hall est nu** : aucun front de taille sur ses parois — [#62](https://github.com/splatch17/Myrmidia/issues/62), nombres en attente du brainstorm [#63](https://github.com/splatch17/Myrmidia/issues/63) | P1 |
+| 1c | **Fentes dans le sol du nid** : 2 et 3 rayons sur 144 s'échappent sous la chambre et le couloir, éclats de ciel sur la rampe — [#60](https://github.com/splatch17/Myrmidia/issues/60). Au tour 16 c'était pire : la paroi de la chambre bouchait le passage vers le hall | P1 |
+| 1d | « Grimper au brin d'herbe » s'affiche sous terre — [#64](https://github.com/splatch17/Myrmidia/issues/64) | P2 |
+| 2 | **Les touches 5/6 sont committées sans capture** — [#61](https://github.com/splatch17/Myrmidia/issues/61) | P1 |
 | 2b | ~~La reine surexposée sous la lampe de la bouche~~ **Corrigé au tour 16** : `WARM_MOUTH_LIGHT` ramenée à `[0.46,0.26,0.10]`, le plancher d'ambiance à 0,55 portant désormais l'entrée | ✅ |
 | 3 | La séquence de ponte est scriptée : ~14 s sans contrôle. Acceptable une fois, pas répétable | Design |
 | 4 | La reine reste sombre de corps ; le contour la détache mais sa chitine est à la valeur du sol | DA |
@@ -112,25 +114,9 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 
 ## Prochaines étapes
 
-L'objectif nommé par le porteur — **voir la première galerie se creuser et
-pouvoir y entrer** — est **atteint** (tour 15, `da6d7ce`). La rampe a été
-choisie plutôt que le puits, comme arbitré. Reste :
-
-1. **Le brainstorm sur l'économie du creusement**, que le porteur a annoncé
-   lui-même : combien de fourmis pour quel creusement, coût en
-   fourmis-secondes ou en effectif minimum, ce qu'on creuse après le hall, si
-   un tunnel se paye aussi en ressources. Rien n'est tranché à sa place ; les
-   75 fourmis-secondes du hall sont un point de départ.
-2. **Des fronts de taille sur les parois du hall**, une fois les nombres
-   décidés. Le modèle les supporte déjà (une liste, pas un cas particulier).
-3. ~~Le menu de gestion de la reine~~ ✅ fait. Ancien texte : (`castes-et-micro-macro.md` §2). Il
-   commence à exister dès qu'il y a deux castes à arbitrer, ce qui est le cas
-   depuis ce tour. Aujourd'hui le choix de caste est deux touches sans écran.
-3. **#34 — mode macro**, le nid en coupe vue de côté.
-4. **Contrôler n'importe quelle fourmi** — demande d'abord que le joueur cesse
-   d'être un cas particulier (#36, `etat-des-lieux.md` §2c).
-5. Finir la conversion à l'index (`nearestClimbable`, `harvest.target`).
-6. Lisibilité de la reine, arbitrage du rig, bloom, colonie abandonnée.
+La file vit dans GitHub, plus ici : **[tickets `P1-prochain-round`](https://github.com/splatch17/Myrmidia/issues?q=is%3Aopen+label%3AP1-prochain-round)** (3 à 5 par round), puis `P2`, `P3`.
+Round 18 : #60 fentes du sol · #61 touches 5/6 prouvées · #35 fin de l'index spatial · #59 direction de la galerie · #62 fronts de taille du hall.
+Le brainstorm sur l'économie du creusement (#63) appartient au porteur.
 
 ## Où sont les choses
 
@@ -199,43 +185,8 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 ## Comment on travaille
 
-- **Le contrat d'interface d'abord.** `design/api-monde-gameplay.md` fixe les
-  noms que `world/**` exporte et que `player/**` consomme, il est écrit avant
-  la distribution et aucun agent ne le modifie. Sans lui, au round 5, les deux
-  moitiés d'une même feature avaient été spécifiées séparément et ne se
-  parlaient pas — sans lever la moindre erreur. Au round 6 les deux agents ont
-  livré sous les mêmes noms sans se consulter.
-- **Trois agents, répertoires disjoints.** Atta → `world/**` + `main.js` +
-  `core/**`. Cataglyphis → `player/**`. Cephalotes → `design/**` + le
-  générateur de textures + `assets/textures/**`. Ils commitent en local et ne
-  poussent jamais ; l'intégration et le push se font ici.
-- **Rien n'est déclaré fini sans capture.** Les trois défauts corrigés dans
-  `dea42af` (brouillard du nid sur la pelouse, rivière noire, absence de
-  reflet) ont tous été trouvés en regardant les images, aucun en relisant le
-  code.
-- **Les harnais de vérification :** `game/scripts/verify-terrain.mjs` (12 vues
-  + perf + mémoire), `verify-descent.mjs` (la rampe : pente, à-pics, rien en
-  travers, 14 vues), `verify-gallery-walk.mjs` (la marche complète, sur vraies
-  touches, **y compris en appui contre les parois**), `verify-dig.mjs` (le
-  front de taille, la jauge regardée se remplir, le hall),
-  `verify-queen-menu.mjs` (le menu, et surtout **son refus à une non-reine**),
-  `verify-room-access.mjs`, `verify-textures.mjs`. **Un seul à la fois.**
-- **Publication :** la CI construit et publie sur poussée vers `preview`
-  (`git push origin HEAD:preview`). **`dist/` n'est plus committé.** Chromium **doit** être lancé avec
-  `--use-gl=angle --use-angle=d3d11`, sinon on mesure le rasteriseur logiciel.
-- **Piège récurrent :** tout albédo doit porter
-  `tex.colorSpace = THREE.SRGBColorSpace`. L'oubli ne lève aucune erreur, il
-  délave simplement le rendu. Les rampes toon et les cartes `_orm`/`_normal`
-  restent en `NoColorSpace`.
-- **Les agents tombent, et de deux façons différentes.** Tours 4, 5 et 6 :
-  coupés par la limite de session, systématiquement au moment d'écrire leur
-  harnais — mais leur implémentation était **sur le disque**, et la récupérer a
-  toujours été moins cher que la refaire. Tour 7 : les trois ont calé sur le
-  watchdog (600 s sans progrès) **sans produire une ligne**, et le travail a été
-  fait ici. Donc, dans l'ordre : `git status` d'abord ; si rien n'a été produit,
-  ne pas relancer le même agent, faire le travail.
-- Aux agents : **écrire et lancer le harnais tôt**, pas à la fin. C'est
-  exactement ce qui n'a jamais été atteint trois tours de suite.
+Tickets, labels, agents, cycle d'un round, harnais, publication : **[`CONTRIBUTING.md`](CONTRIBUTING.md)**.
+Rappel qui a déjà coûté un tour : les harnais servent `dist/` — **recompiler avant chaque passe**.
 
 ---
 
@@ -243,6 +194,7 @@ Chacun a coûté au moins une demi-session. Ils ne lèvent aucune erreur.
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 17 | **Habillage de MMORPG pour tous les menus** (`player/uiTheme.js`) ; **le passage chambre → hall est dégagé** (la paroi de la chambre le bouchait), pied des parois rentré sous le sol, couloir à sol plat. Dépôt structuré : gabarits de tickets/PR, `CONTRIBUTING.md`, labels de priorité | voir `git log` |
 | 16 | **Descente raccourcie, front de taille + jauge circulaire, le hall, le menu de la reine.** Les parois glissent, la galerie n'est plus plus étroite que la reine | `3175592`, `f3a5015` |
 | 15 | **On entre dans la galerie et on en ressort à pied**, rampe au lieu du puits, galerie éclairée sur sa longueur, palette d'avatar de la DA | `da6d7ce` |
 | 14 | Cadence de test, déblocage de la creuseuse à la 2e ponte | `4b0adb2` |
