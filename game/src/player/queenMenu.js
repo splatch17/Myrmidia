@@ -20,51 +20,46 @@
    KEYBOARD ONLY, and the same keys that already worked. 5 and 6 still choose
    the caste of the next clutch whether the panel is open or not: the panel is
    a place to SEE the state, not a second way to change it, and a menu that
-   introduces its own bindings is a menu the player has to learn twice. What it
-   adds is that the choice, its cost, what is in reserve, the headcount and the
-   work in progress are finally in one place instead of being a two-key
-   shortcut with no screen (#53).
+   introduces its own bindings is a menu the player has to learn twice.
+
+   Round 17 dressed it as an MMO window (player/uiTheme.js): a framed panel
+   with a gilded title, sections under ornamental rules, castes as slots with
+   their key-caps. Every word it says is the word it said before —
+   scripts/verify-queen-menu.mjs matches LA REINE, PONTE, COLONIE, CHANTIERS,
+   the reserve as "n /", "le hall", "personne" and "verrouill" in its text.
 
    It reads state it is handed. No world imports, no colony import: everything
    comes through render(), so this file cannot be the place two answers to the
    same question start to disagree.
    ========================================================================== */
 
+import { ensureUiTheme, keycap } from './uiTheme.js';
+
 const PANEL_ID = 'queenmenu';
 
 /* Kept out of the markup so a caste added to avatar.js shows up here without
-   this file being edited — the entry the panel does not know about is listed
-   by its own label rather than skipped. */
+   this file being edited. */
 const CASTE_ORDER = ['worker', 'digger'];
 
 export function createQueenMenu(root = document.body) {
+  ensureUiTheme();
   const el = document.createElement('div');
   el.id = PANEL_ID;
-  /* Below the controls panel rather than centred on the right edge: both are
-     right-aligned, and centred it sat straight on top of the help the player
-     is most likely to still have open the first time they press C. */
-  el.style.cssText = 'position:absolute;right:12px;top:288px;'
-    + 'width:290px;padding:12px 14px;font:12px/1.65 monospace;color:#e6d3ab;'
-    + 'background:rgba(12,10,8,0.78);border:1px solid rgba(255,214,150,0.18);'
-    + 'border-radius:6px;pointer-events:none;user-select:none;';
+  /* Left, under the unit frame: the portrait above it says whose panel this
+     is, which is the genre's own layout for a character window. */
+  el.className = 'mm mm-frame';
   el.style.display = 'none';
   root.appendChild(el);
 
   let open = false;
   let lastHtml = null;
 
-  const row = (label, value, dim) =>
-    `<div style="display:flex;justify-content:space-between;gap:10px${dim ? ';opacity:0.55' : ''}">`
-    + `<span style="opacity:0.75">${label}</span><span>${value}</span></div>`;
-
-  const heading = (t) =>
-    `<div style="margin:9px 0 3px;color:#ffe6b0;opacity:0.9;letter-spacing:0.06em">${t}</div>`;
-
-  function bar(p) {
+  const kv = (label, value) => `<div class="mm-kv"><span>${label}</span><b>${value}</b></div>`;
+  const heading = (t) => `<div class="mm-h">${t}</div>`;
+  const bar = (p) => {
     const w = Math.round(Math.max(0, Math.min(1, p)) * 100);
-    return '<div style="height:4px;background:rgba(0,0,0,0.5);border-radius:2px;overflow:hidden;margin:2px 0 4px">'
-      + `<div style="height:100%;width:${w}%;background:#d8a24e"></div></div>`;
-  }
+    return `<div class="mm-bar mm-thin"><i style="width:${w}%"></i></div>`;
+  };
 
   return {
     /** Is the profile currently controlled one that gets this panel at all? */
@@ -103,11 +98,11 @@ export function createQueenMenu(root = document.body) {
       const casteRows = CASTE_ORDER.map((id, i) => {
         const unlocked = s.casteUnlocked(id);
         const picked = s.caste === id;
-        const key = 5 + i;
-        const mark = picked ? '<span style="color:#ffc46a">&#9679;</span>' : '<span style="opacity:0.3">&#9675;</span>';
-        const name = s.casteLabel(id);
-        return row(`${mark} <span style="color:#ffe6b0">${key}</span> ${name}`,
-          unlocked ? (picked ? 'prochaine' : '') : 'verrouillée', !unlocked);
+        const cls = `mm-slot${picked ? ' mm-picked' : ''}${unlocked ? '' : ' mm-locked'}`;
+        const tag = unlocked ? (picked ? 'prochaine' : '') : 'verrouillée';
+        return `<div class="${cls}">${keycap(5 + i)}`
+          + `<span class="mm-slot-name">${s.casteLabel(id)}</span>`
+          + `<span class="mm-slot-tag">${tag}</span></div>`;
       }).join('');
 
       /* Work in progress, from the world's own face list. Listed even when
@@ -117,26 +112,26 @@ export function createQueenMenu(root = document.body) {
       const faceRows = (s.faces || []).length
         ? s.faces.map((f) => {
             const p = f.needed > 0 ? f.worked / f.needed : 0;
-            return row(f.id === 'face-hall' ? 'le hall' : f.id,
+            return kv(f.id === 'face-hall' ? 'le hall' : f.id,
               f.diggers > 0 ? `${f.diggers} au front` : 'personne')
               + bar(p);
           }).join('')
-        : '<div style="opacity:0.55">rien à creuser pour l\'instant</div>';
+        : '<div class="mm-empty">rien à creuser pour l\'instant</div>';
 
-      const html = '<div style="color:#ffe6b0;letter-spacing:0.08em;margin-bottom:4px">LA REINE</div>'
-        + `<div style="opacity:0.6;margin-bottom:2px">${profile.label}</div>`
+      const html = `<div class="mm-win-title"><span class="mm-title">LA REINE</span>${keycap('C')}</div>`
+        + `<div class="mm-win-sub">${profile.label}</div>`
         + heading('PONTE')
         + casteRows
-        + row('réserve', `${s.reserve} / ${s.cost}`)
-        + row('couvées', s.brood)
+        + kv('réserve', `${s.reserve} / ${s.cost}`)
+        + kv('couvées', s.brood)
         + heading('COLONIE')
-        + row(s.casteLabel('worker'), s.counts.worker)
-        + row(s.casteLabel('digger'), s.counts.digger)
-        + row('œufs', s.counts.eggs)
-        + row('salles creusées', s.rooms.length)
+        + kv(s.casteLabel('worker'), s.counts.worker)
+        + kv(s.casteLabel('digger'), s.counts.digger)
+        + kv('œufs', s.counts.eggs)
+        + kv('salles creusées', s.rooms.length)
         + heading('CHANTIERS')
         + faceRows
-        + '<div style="margin-top:9px;opacity:0.55">C — fermer  ·  E — pondre</div>';
+        + `<div class="mm-win-foot">${keycap('C')} — fermer  ·  ${keycap('E')} — pondre</div>`;
 
       // written only on change: this runs every frame
       if (html !== lastHtml) { el.innerHTML = html; lastHtml = html; }

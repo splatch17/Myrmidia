@@ -260,7 +260,10 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     if (casteMsgTimer > 0) { casteMsgTimer -= dt; if (casteMsgTimer <= 0) casteMsg = null; }
     hud.setEvent(casteMsg || interaction.message());
     hud.setHold(interaction.holdProgress(act));
-    queenMenu.render(profile, {
+    /* One reading of the colony per frame, handed to both the panel and the
+       unit frame: two calls that each built their own would be two answers
+       to "how many workers" a frame apart, on screen at the same time. */
+    const colonyView = {
       caste,
       casteUnlocked,
       casteLabel: (id) => profileById(id).label,
@@ -276,7 +279,9 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
       faces: digFaces().map((f) => ({
         ...f, diggers: colony.state.faceWork.get(f.id) || 0,
       })),
-    });
+    };
+    queenMenu.render(profile, colonyView);
+    hud.setUnit(profile, colonyView);
     /* The dig gauge is NOT drawn here. It is projected against the camera, and
        the camera is not final until cameraRig.update() further down — so main
        .js calls syncDigDial() once the camera is where the frame will be

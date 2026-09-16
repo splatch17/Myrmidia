@@ -109,7 +109,16 @@ export const FOUNDING_QUEEN = {
      the day the player hops into a forager the panel has to go away on its
      own. Absent on WORKER and DIGGER, which is the whole test. */
   manages: true,
-  scale: 2.2,
+  /* 2.2 -> 1.9. Not a change of mind about how big a queen is, a change of
+     mind about how big she should be ON SCREEN once the game moved indoors:
+     at 2.2 she filled a corridor she was meant to walk down, and the camera
+     spent the whole descent pressed into her gaster. Every bore in
+     world/excavation.js is still cut for the 2.2 body (QUEEN_R there says so
+     outright and is deliberately NOT following her down), so the nest keeps
+     ~15% more clearance than it was drawn with rather than getting tighter as
+     she shrinks. She is still nearly twice a worker, which is what the
+     silhouette has to say. */
+  scale: 1.9,
   legs: QUEEN_LEGS,
   body: QUEEN_BODY,
   breathes: true,
@@ -126,11 +135,12 @@ export const FOUNDING_QUEEN = {
   climbSpeed: 12,    // scaled by `scale` at use, i.e. ~26 u/s: fast in world
                      // units, slow relative to her own body
   bodyR: 1.5,
-  // #18's framing kept, not its literal: a body 2.2x as long needs a longer
-  // boom to occupy the same share of the screen. 58 is a touch tighter than
-  // 36*2.2 on purpose — the prologue is played outdoors, where too long a
-  // boom flattens the meadow into a map.
-  cam: { dist: 58, min: 16, max: 140 },
+  // #18's framing kept, not its literal: a body 1.9x as long needs a longer
+  // boom to occupy the same share of the screen. 50 is a touch tighter than
+  // 36*1.9 on purpose — the prologue is played outdoors, where too long a
+  // boom flattens the meadow into a map. Followed the body down from 58 so
+  // she keeps the same share of the frame, which is what was actually framed.
+  cam: { dist: 50, min: 14, max: 120 },
 };
 
 /* The digger (#38). A row in this table and not a file of its own — that is
