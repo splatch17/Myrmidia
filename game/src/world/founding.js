@@ -7,11 +7,11 @@ import {
 } from './terrain.js';
 import {
   makeExcavation, setExcavation, clearExcavation, getExcavation,
-  excavationFloorAt, excavationFootprint, excavationDescentPath,
+  excavationFloorAt, excavationHeadroomAt, excavationFootprint, excavationDescentPath,
   rampCentre, rampParam, rampOffset, rampFloorAt, chamberFloorAt, chamberRoofAt,
   addRoom, addLink, addDigFace, excavationDigFaces, advanceDigFace,
   RAMP_DESCEND, RAMP_TURN, CHAMBER_WALL, CHAMBER_ROOF, NEST_DEPTH, ROOF_COVER,
-  QUEEN_R,
+  QUEEN_R, hwAt, APRON_LEN,
 } from './excavation.js';
 import { texturedSurfaceMaterial, texturedEmissiveMaterial, dirtAlbedo, capAlbedo } from './texturing.js';
 import { addLocalLight, applyNestShading, setNestPit } from './lighting.js';
@@ -168,6 +168,21 @@ function wobbleAt(th, u, seed) {
   return 0.84 + 0.20 * n(1.6, 0.10) + 0.10 * n(4.1, 0.29) + 0.05 * n(9.3, 0.62);
 }
 
+/**
+ * Where a room's wall meets its floor: tucked in and sunk.
+ *
+ * The wall wobbles out to 1.08 of the room's radius and the floor disc stops
+ * at 1.0, so wherever the wobble was high there was a crack between the two —
+ * and under the crack, until this round, the meadow had been pushed down out
+ * of the way and happened to fill it. With the meadow now left alone under
+ * roofed ground (openTheMeadow), the cracks showed sky. So the wall's foot
+ * ring is pulled inside the floor's edge and dropped a little under it: the
+ * wall stands ON the floor, whatever the wobble does above.
+ */
+function wallFoot(ring, r, y, roomR) {
+  return ring === 0 ? [Math.min(r, roomR * 0.99), y - 0.3] : [r, y];
+}
+
 /* Freshly turned earth, damper and darker than the old gallery's weathered
    walls: this hole was dug an hour ago. */
 function digColour(proud, extra = 0.18) {
@@ -283,13 +298,21 @@ function buildShell(x, z, seed) {
   for (let u = 0; u <= uCut + 1e-4; u += 2.0) {
     const c = rampCentre(ex, u);
     const t = u / Math.max(ex.arc.len, 1e-3);
+    const hw = hwAt(ex, u);
+    /* The spoil stands out of the way of the apron. A bank is only a bank
+       where the cut is deep enough to have produced one, and at the mouth the
+       cut is flush with the meadow — so a rim there was earth from nowhere,
+       and it was the whole reason the entrance had to be walked into head-on.
+       Smoothstepped over the same run the flare uses, so the two read as one
+       shape: a ravine that shallows and widens as it comes up. */
+    const rimK = (() => { const k = clamp(u / APRON_LEN, 0, 1); return k * k * (3 - 2 * k); })();
     // lateral unit vector: the arc's own outward normal
     const nx = (c.x - ex.arc.ax) / ex.arc.R, nz = (c.z - ex.arc.az) / ex.arc.R;
     const row = [];
     const put = (lat, y, col) => row.push(M.addVertex(c.x + nx * lat, y, c.z + nz * lat, col));
     const bankAt = (side) => {
-      const rim = side * (ex.hw + CUT_BATTER);
-      const bank = side * (ex.hw + CUT_BATTER + CUT_BANK);
+      const rim = side * (hw + CUT_BATTER);
+      const bank = side * (hw + CUT_BATTER + CUT_BANK);
       const rx = c.x + nx * rim, rz = c.z + nz * rim;
       const bx = c.x + nx * bank, bz = c.z + nz * bank;
       const lump = 0.72 + 0.56 * vnoise(bx * 0.15 + seed, bz * 0.15 + seed);
@@ -298,16 +321,16 @@ function buildShell(x, z, seed) {
 
     const L = bankAt(-1);
     put(L.bank, lawnY(L.bx, L.bz) + 0.15 * L.lump, mixColor(digColour(L.lump, 0.34), C_CHITIN, 0.12).toArray());
-    put(L.rim, lawnY(L.rx, L.rz) + RIM_H * L.lump, mixColor(digColour(L.lump, 0.30), C_CHITIN, 0.10).toArray());
+    put(L.rim, lawnY(L.rx, L.rz) + RIM_H * L.lump * rimK, mixColor(digColour(L.lump, 0.30), C_CHITIN, 0.10).toArray());
     for (const k of LAT) {
-      const lat = k * ex.hw;
+      const lat = k * hw;
       const px = c.x + nx * lat, pz = c.z + nz * lat;
       const wob = wobbleAt(k * Math.PI, u, seed);
       put(lat, rampFloorAt(ex, px, pz, u, lat),
         digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.22 + t * 0.06).toArray());
     }
     const Rr = bankAt(1);
-    put(Rr.rim, lawnY(Rr.rx, Rr.rz) + RIM_H * Rr.lump, mixColor(digColour(Rr.lump, 0.30), C_CHITIN, 0.10).toArray());
+    put(Rr.rim, lawnY(Rr.rx, Rr.rz) + RIM_H * Rr.lump * rimK, mixColor(digColour(Rr.lump, 0.30), C_CHITIN, 0.10).toArray());
     put(Rr.bank, lawnY(Rr.bx, Rr.bz) + 0.15 * Rr.lump, mixColor(digColour(Rr.lump, 0.34), C_CHITIN, 0.12).toArray());
     rows.push(row);
   }
@@ -354,9 +377,9 @@ function buildShell(x, z, seed) {
     for (let a = 0; a < ANG; a++) {
       const th = (2 * Math.PI * a) / ANG;
       const wob = wobbleAt(th, i, seed);
-      const r2 = rr * (i <= wallRings ? 0.94 + (wob - 0.84) * 0.4 : 1);
+      const [r2, y2] = wallFoot(i, rr * (i <= wallRings ? 0.94 + (wob - 0.84) * 0.4 : 1), yy, C.r);
       const px = C.x + Math.cos(th) * r2, pz = C.z + Math.sin(th) * r2;
-      row.push({ i: M.addVertex(px, yy, pz, digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.20).toArray()), x: px, z: pz, y: yy });
+      row.push({ i: M.addVertex(px, y2, pz, digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.20).toArray()), x: px, z: pz, y: y2 });
     }
     shellRows.push(row);
   }
@@ -365,12 +388,25 @@ function buildShell(x, z, seed) {
      mesh is the hole in the height field and not an approximation of it. */
   const inDoorway = (p, q) => p.y - floorY <= CHAMBER_WALL + 0.1
     && rampParam(ex, (p.x + q.x) * 0.5, (p.z + q.z) * 0.5) !== null;
+  /* Every wall quad remembers WHERE it is and where its six indices live, so a
+     corridor dug later can take it out. This shell is baked once and never
+     rebuilt (see the header), which was fine while the only opening in it was
+     the one the cut arrives through — and then the hall was dug and its
+     corridor left through a wall that was still standing, which is exactly
+     what the player saw: a slab of earth across the tunnel mouth, and the
+     nest's own wall between her and the room she had just paid for. Nothing in
+     the numbers said so; footprint, headroom and floor step all passed. It was
+     only ever visible in a picture. */
+  const wallQuads = [];
   for (let i = 0; i < shellRows.length - 1; i++) {
     for (let a = 0; a < ANG; a++) {
       const b = (a + 1) % ANG;
       const p = shellRows[i][a], q = shellRows[i][b];
-      if (inDoorway(p, q) || inDoorway(shellRows[i + 1][a], shellRows[i + 1][b])) continue;
-      M.addQuad(p.i, q.i, shellRows[i + 1][b].i, shellRows[i + 1][a].i);
+      const r = shellRows[i + 1][a], s2 = shellRows[i + 1][b];
+      if (inDoorway(p, q) || inDoorway(r, s2)) continue;
+      const at = M.indices.length;
+      M.addQuad(p.i, q.i, s2.i, r.i);
+      wallQuads.push({ at, corners: [p, q, s2, r].map((v) => [v.x, v.z, v.y]) });
     }
   }
   const top = M.addVertex(C.x, floorY + CHAMBER_ROOF, C.z, digColour(0.5, 0.24).toArray());
@@ -423,11 +459,11 @@ function buildShell(x, z, seed) {
       const dc = Math.hypot(px - C.x, pz - C.z);
       const rp = dc > C.r * DOOR_LINE ? rampOffset(ex, px, pz, 4) : null;
       if (rp) {
-        const over = Math.abs(rp.lat) - ex.hw;
+        const over = Math.abs(rp.lat) - rp.hw;
         if (over <= 0) y = rampFloorAt(ex, px, pz, rp.u, rp.lat);
         else if (over < CUT_BATTER) {
           const k = over / CUT_BATTER;
-          y = lerp(rampFloorAt(ex, px, pz, rp.u, ex.hw * Math.sign(rp.lat)), y, k * k * (3 - 2 * k));
+          y = lerp(rampFloorAt(ex, px, pz, rp.u, rp.hw * Math.sign(rp.lat)), y, k * k * (3 - 2 * k));
         }
       }
       row.push({ i: M.addVertex(px, y, pz, mixColor(digColour(0.5 + lump, 0.34), C_CHITIN, 0.14).toArray()), x: px, z: pz, dc });
@@ -459,6 +495,7 @@ function buildShell(x, z, seed) {
   return {
     geometry: M.toBufferGeometry(),
     ex,
+    wallQuads,
     mouthY, floorY,
     origin: [x, mouthY, z],
     dir: [tangent[0], 0, tangent[1]],
@@ -474,44 +511,95 @@ function buildShell(x, z, seed) {
    disc in the middle of the spoil heap — the nest had no visible entrance at
    all, and nobody had noticed, because nobody had photographed it.
 
-   Vertices over the excavation are dropped below its floor rather than
-   removed: an index buffer with holes in it is a rebuild, this is a write to a
-   position attribute. They are only dropped where the floor is actually below
-   the meadow, so the threshold — where the two are level — keeps its lawn and
-   there is no step to walk over. Vertices merely *next* to the cut are
-   recoloured to soil, which is what hides the green slivers the grid's own
-   transition quads would otherwise show through the bank. */
+   A lawn vertex that is genuinely inside the excavation loses its triangles.
+   Not its height — a triangle that is not drawn cannot be at a wrong height,
+   and moving them was the whole problem. The grid is 6 units and the dug
+   shapes are not, so a removed triangle can leave a hole reaching up to a
+   cell beyond the footprint; every such hole is covered by something the dig
+   built, and that is not luck but the sizes: the cut's spoil banks run 11
+   units past the walkable width, the chamber's mound is 9 past its wall, and
+   a room's heap is HEAP_SKIRT past its own.
+
+   WHAT "GENUINELY INSIDE" MEANS, and why it is not simply "over the hole".
+   At the threshold the cut's floor IS the meadow — that is what makes the
+   entrance flush and walk-in-able — so there the lawn stays, or the mouth
+   would be a hole in the ground in front of a hole in the ground. Under a
+   roof the test is the ceiling instead: the meadow over a corridor is still
+   a meadow and keeps its grass, and only where the room would come through
+   it does it give way to the heap.
+
+   The index as built is kept aside, so every dig re-decides from the original
+   grid rather than from what the previous dig left. */
+const MEADOW_CLEAR = 1.2;   // lawn this far over a ceiling is left alone
+
+/** Is (x, z) in the part of the nest that is open to the sky? */
+function inOpenCut(x, z) {
+  return excavationFloorAt(x, z) !== null && !Number.isFinite(excavationHeadroomAt(x, z));
+}
+
+/**
+ * Is the meadow at (x, z) inside the dug volume, i.e. something to take out?
+ *
+ * The sunk-vertex version of this had one case it could not express, and
+ * verify-descent.mjs found it by ray-casting: a vertex over the chamber whose
+ * meadow sits above the dome keeps its height, its neighbour out in the cut
+ * is two and a half units under the floor, and the triangle between them
+ * dives through the trench the player is walking down. There is no height
+ * that fixes that, which is why the answer is now a yes/no about drawing.
+ */
+function meadowCut(x, z) {
+  const dug = excavationFloorAt(x, z);
+  if (dug === null) return false;
+  const hr = excavationHeadroomAt(x, z);
+  return Number.isFinite(hr)
+    ? lawnY(x, z) < dug + hr + MEADOW_CLEAR   // roofed: the room comes through
+    : lawnY(x, z) - dug > 1.5;                // open cut, but not the threshold
+}
+
 function openTheMeadow() {
   if (!lawnMesh || !lawnMesh.geometry) return 0;
-  const pos = lawnMesh.geometry.getAttribute('position');
-  const col = lawnMesh.geometry.getAttribute('color');
-  const SINK = 2.5, NEAR = 7.0;
+  const geo = lawnMesh.geometry;
+  const pos = geo.getAttribute('position');
+  const col = geo.getAttribute('color');
+  const index = geo.getIndex();
+  const NEAR = 7.0;
   const soil = C_WALL_B.clone().lerp(C_SOIL_A, 0.4);
+  const buried = new Uint8Array(pos.count);
   let moved = 0;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
-    const dug = excavationFloorAt(x, z);
-    if (dug !== null && lawnY(x, z) - dug > 1.5) {
-      pos.setY(i, dug - SINK);
-      moved++;
-      if (col) col.setXYZ(i, soil.r, soil.g, soil.b);
-      continue;
-    }
+    if (meadowCut(x, z)) { buried[i] = 1; moved++; continue; }
     if (!col) continue;
+    /* Soil-coloured only beside the OPEN cut, where the grid's transition
+       quads show through the bank. Beside a corridor the meadow is a meadow,
+       and painting it would draw the tunnel's plan on the lawn in brown. */
     for (let k = 0; k < 8; k++) {
       const a = (k / 8) * Math.PI * 2;
-      if (excavationFloorAt(x + Math.cos(a) * NEAR, z + Math.sin(a) * NEAR) !== null) {
+      if (inOpenCut(x + Math.cos(a) * NEAR, z + Math.sin(a) * NEAR)) {
         col.setXYZ(i, soil.r, soil.g, soil.b);
         break;
       }
     }
   }
+  if (index) {
+    if (!lawnMesh.userData.meadowIndex) lawnMesh.userData.meadowIndex = index.array.slice();
+    const orig = lawnMesh.userData.meadowIndex;
+    const arr = index.array;
+    for (let t = 0; t < orig.length; t += 3) {
+      const a = orig[t], b = orig[t + 1], c = orig[t + 2];
+      if (buried[a] || buried[b] || buried[c]) { arr[t] = a; arr[t + 1] = a; arr[t + 2] = a; }
+      else { arr[t] = a; arr[t + 1] = b; arr[t + 2] = c; }
+    }
+    index.needsUpdate = true;
+  }
   pos.needsUpdate = true;
   if (col) col.needsUpdate = true;
-  lawnMesh.geometry.computeVertexNormals();
-  lawnMesh.geometry.computeBoundingSphere();
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
   if (grassField && typeof grassField.clearIn === 'function') {
-    grassField.clearIn((bx, bz) => excavationFloorAt(bx, bz) !== null);
+    /* The same test, so no blade is left standing on a triangle that is no
+       longer drawn — and so the meadow over a corridor keeps its grass. */
+    grassField.clearIn(meadowCut);
   }
   return moved;
 }
@@ -630,11 +718,17 @@ export function foundNest(x, z) {
     axis: { origin: shell.origin, dir: shell.dir, length: shell.uMax },
     brood: 0,
     sealed: false,
+    /* The chamber's own wall, kept addressable so digging can open it later
+       (punchWall). Not a copy of the geometry — the quad list is six index
+       slots and a midpoint each, and the mesh is the mesh. */
+    _wall: { mesh: shellMesh, quads: shell.wallQuads },
     _furnishing: furnishing,
     _coldLight: coldLight,
     _warmLight: warmLight,
     _coldFade: 1,
   };
+
+  rebuildPan();
 
   /* Tell the shader where the hole is, so the sun stops shining into it.
      The nest is at z > 0, which world/lighting.js's daylight falloff calls
@@ -716,7 +810,7 @@ const HALL_GAP = 14;
  *  dig twice as fast" stays legible at the gauge. */
 const FIRST_FACE_SECONDS = 75;
 
-const ANG_TUNNEL = 16;
+const ANG_TUNNEL = 20;   // = SECTION's point count, below
 
 /**
  * Which way the queen is looking when she reaches the bottom.
@@ -759,47 +853,178 @@ function placeFirstFace(ex) {
 
 /* ---- meshes ------------------------------------------------------------- */
 
-/** A level corridor: a tube of half-width `hw` with its floor flattened onto
- *  the nest floor. Straight, because a meander is what let the round-13
- *  footprint and its own mesh disagree by three and a half units — the
- *  straight capsule claimed ground the bent tube did not cover, and she walked
- *  out through the wall (#49). */
+/* THE CORRIDOR'S SECTION, IN ONE PLACE.
+
+   Three things have to agree about the shape of a corridor: the tube's own
+   vertices, the hole it needs in the wall of the room it leaves, and the hole
+   it needs in the wall of the room it arrives at. Round 16 shipped one of the
+   three. The other two did not exist — so the hall was dug, the corridor was
+   built, and the chamber's wall went on standing across its mouth. Every
+   number passed: the footprint contained the whole run, the floor had no step
+   in it, the headroom was a queen and a half. It was a wall you could walk
+   through, and only a picture could say so.
+
+   So the section is a function now, and the holes are cut with it. */
+const TUNNEL_BORE = 0.92;   // of the link's half-width
+const SPRINGER = 0.40;      // of the roof height: where the arch springs from
+/* The mouth flares over the last few units at each end, so a corridor reads as
+   dug into the room rather than drilled through it — and so the doorway is
+   wider than the corridor, which is what makes it findable from inside a
+   round room. */
+const MOUTH_FLARE = 0.30, MOUTH_RUN = 4.0;
+
+function mouthFlareAt(L, s) {
+  const t = clamp(1 - Math.min(s, L.len - s) / MOUTH_RUN, 0, 1);
+  return 1 + MOUTH_FLARE * t * t;
+}
+
+/**
+ * The corridor's cross-section, as a closed loop of [lat, h] in units of the
+ * bore's half-width and of the roof height: a flat floor, two short jambs, and
+ * an arch over them.
+ *
+ * It used to be an ellipse, and an ellipse has no floor. Its lowest point was
+ * the centre line and the surface climbed away from there on both sides, so a
+ * queen a body's width off centre stood a unit and a half UNDER the ground she
+ * was walking on — the height field says the whole bore is flat, and the mesh
+ * disagreed everywhere except along one line. That is the round-15 defect
+ * again (a harness that walks the middle sees nothing), and it is why the
+ * shape is written down once here and consulted by everything.
+ */
+const SECTION = (() => {
+  const nJamb = 2, nArch = 10, nFloor = 6;   // must total ANG_TUNNEL
+  const pts = [];
+  for (let i = 0; i < nJamb; i++) pts.push([1, (i / nJamb) * SPRINGER]);
+  for (let i = 0; i < nArch; i++) {
+    const a = (i / nArch) * Math.PI;
+    pts.push([Math.cos(a), SPRINGER + Math.sin(a) * (1 - SPRINGER)]);
+  }
+  for (let i = 0; i < nJamb; i++) pts.push([-1, SPRINGER * (1 - i / nJamb)]);
+  for (let i = 0; i < nFloor; i++) pts.push([-1 + (2 * i) / nFloor, 0]);
+  return pts;
+})();
+
+/**
+ * Is a point inside the corridor's bore? `h` is height above the nest floor.
+ * `shrink` pulls the section in, for callers that must stay strictly inside
+ * it — i.e. everything that cuts a hole, since a hole wider than the thing
+ * that fills it is a rim of daylight underground.
+ *
+ * Bounded on s at BOTH ends and not loosely: a room's wall is a circle, so the
+ * lateral offset that names the doorway also names a strip of wall on the far
+ * side of the room, and the tube exists only between its own two ends. Cutting
+ * outside that span is what put black holes either side of the first doorway
+ * this file ever punched.
+ */
+function linkAperture(L, shrink = 1) {
+  return (x, z, h) => {
+    const s = (x - L.ax) * L.hx + (z - L.az) * L.hz;
+    if (s < 0 || s > L.len) return false;
+    const flare = mouthFlareAt(L, s) * shrink;
+    const hw = L.hw * TUNNEL_BORE * flare;
+    const lat = -(x - L.ax) * L.hz + (z - L.az) * L.hx;
+    const k = Math.abs(lat) / hw;
+    if (k > 1) return false;
+    const spring = L.roof * SPRINGER * flare;
+    if (h <= spring) return h >= -0.5;
+    const j = (h - spring) / (L.roof * (1 - SPRINGER) * flare);
+    return k * k + j * j <= 1;
+  };
+}
+
+/** A level corridor: the SECTION above, swept along the link. Straight,
+ *  because a meander is what let the round-13 footprint and its own mesh
+ *  disagree by three and a half units — the straight capsule claimed ground
+ *  the bent tube did not cover, and she walked out through the wall (#49). */
 function buildTunnelMesh(ex, L, seed) {
   const M = new MeshBuilder();
-  const segs = Math.max(4, Math.round(L.len / 3));
+  /* A row every unit and a half, not every three. The flare is a curve, and
+     rows three units apart drew it as a straight cone — narrower than the
+     section the doorway is cut with, at exactly the place the doorway is. */
+  const segs = Math.max(8, Math.round(L.len / 1.5));
   const px = -L.hz, pz = L.hx;
   const rows = [];
   for (let i = 0; i <= segs; i++) {
     const u = (i / segs) * L.len;
     const cx = L.ax + L.hx * u, cz = L.az + L.hz * u;
+    const flare = mouthFlareAt(L, u);
+    /* The wobble is OFF over the whole stretch a room's wall can reach into —
+       a wobbly wall stands out to 1.08 of its radius, which is about three
+       units down a corridor that starts at 0.80 of it — and fades in after.
+       A tube that is sometimes narrower than the hole cut for it is a hole in
+       the world at the one place the player is looking: the doorway. The
+       first version faded the wobble over that stretch instead of keeping it
+       off, and the shots showed quad-shaped holes of black round the arch. */
+    const endK = clamp((Math.min(u, L.len - u) - MOUTH_RUN) / MOUTH_RUN, 0, 1);
     const row = [];
     for (let a = 0; a < ANG_TUNNEL; a++) {
-      const th = (2 * Math.PI * a) / ANG_TUNNEL;
-      const wob = wobbleAt(th, u * 0.2, seed);
-      const rr = L.hw * (0.92 + (wob - 0.84) * 0.5);
-      const y = ex.floorY + L.roof * 0.55 + Math.sin(th) * L.roof * 0.55;
-      row.push(M.addVertex(
-        cx + px * Math.cos(th) * rr,
-        Math.max(y, chamberFloorAt(ex, cx, cz)),
-        cz + pz * Math.cos(th) * rr,
-        digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.24).toArray(),
-      ));
+      const [k, hk] = SECTION[a];
+      const wob = wobbleAt((2 * Math.PI * a) / ANG_TUNNEL, u * 0.2, seed);
+      const lump = 1 + (wob - 0.84) * 0.5 * endK;
+      const lat = k * L.hw * TUNNEL_BORE * flare * lump;
+      const vx = cx + px * lat, vz = cz + pz * lat;
+      /* The floor row is the room's own floor, sampled at the vertex: the two
+         have to be the same surface, not two surfaces that agree on average. */
+      const y = hk <= 0 ? chamberFloorAt(ex, vx, vz)
+        : ex.floorY + hk * L.roof * flare * lump;
+      row.push({
+        i: M.addVertex(vx, y, vz, digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.24).toArray()),
+        x: vx, z: vz,
+      });
     }
     rows.push(row);
   }
+  /* The corridor's floor is not drawn where it lies inside a room. The room's
+     floor disc is already there, at the same height from the same function,
+     and two coplanar surfaces are a flicker, not a floor. */
+  const onRoomFloor = (v) => ex.rooms.some((r) => Math.hypot(v.x - r.x, v.z - r.z) < r.r * 0.98);
   for (let i = 0; i < segs; i++) {
     for (let a = 0; a < ANG_TUNNEL; a++) {
       const b = (a + 1) % ANG_TUNNEL;
-      M.addQuad(rows[i][a], rows[i][b], rows[i + 1][b], rows[i + 1][a]);
+      const q = [rows[i][a], rows[i][b], rows[i + 1][b], rows[i + 1][a]];
+      if (SECTION[a][1] <= 0 && SECTION[b][1] <= 0 && q.every(onRoomFloor)) continue;
+      M.addQuad(q[0].i, q[1].i, q[2].i, q[3].i);
     }
   }
   return M.toBufferGeometry();
 }
 
-/** A room: floor disc, straight walls, dome. Openings are left wherever a link
- *  arrives, tested on the quad's own midpoint against the same membership the
- *  height field uses — so the hole in the mesh is the hole in the floor, not
- *  an approximation of it. */
+/**
+ * Take a doorway out of a wall mesh that was baked before the corridor
+ * existed.
+ *
+ * A quad goes only if ALL FOUR of its corners are inside the bore, so the
+ * hole is always strictly smaller than the tube that fills it: what is left
+ * is a doorway with the wall as its frame, never a rim of daylight around a
+ * tunnel mouth. The removal is six writes into the index buffer (the quad is
+ * collapsed onto one of its own corners), not a rebuild — the same trick
+ * openTheMeadow() uses on the lawn, and for the same reason: this shell is
+ * dug once and is not re-generated for anything.
+ */
+function punchWall(wall, aperture, floorY) {
+  if (!wall || !wall.mesh || !wall.mesh.geometry) return 0;
+  const idx = wall.mesh.geometry.getIndex();
+  if (!idx) return 0;
+  const arr = idx.array;
+  let cut = 0;
+  for (const q of wall.quads) {
+    if (q.gone) continue;
+    if (!q.corners.every((c) => aperture(c[0], c[1], c[2] - floorY))) continue;
+    const keep = arr[q.at];
+    for (let k = 0; k < 6; k++) arr[q.at + k] = keep;
+    q.gone = true;
+    cut++;
+  }
+  if (cut) {
+    idx.needsUpdate = true;
+    wall.mesh.geometry.computeVertexNormals();
+  }
+  return cut;
+}
+
+/** A room: floor disc, straight walls, dome. `openAt(x, z, heightAboveFloor)`
+ *  is the arriving corridor's own bore (linkAperture), so the hole in the wall
+ *  is the shape of the thing that fills it and not an approximation of it. */
 function buildRoomMesh(ex, room, seed, openAt) {
   const M = new MeshBuilder();
   const ANG = 26, RINGS = 4, wallRings = 3, domeRings = 4;
@@ -834,28 +1059,176 @@ function buildRoomMesh(ex, room, seed, openAt) {
     for (let a = 0; a < ANG; a++) {
       const th = (2 * Math.PI * a) / ANG;
       const wob = wobbleAt(th, i, seed);
-      const r2 = rr * (i <= wallRings ? 0.94 + (wob - 0.84) * 0.4 : 1);
+      const [r2, y2] = wallFoot(i, rr * (i <= wallRings ? 0.94 + (wob - 0.84) * 0.4 : 1), yy, room.r);
       const vx = room.x + Math.cos(th) * r2, vz = room.z + Math.sin(th) * r2;
       row.push({
-        i: M.addVertex(vx, yy, vz, digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.20).toArray()),
-        x: vx, z: vz, y: yy,
+        i: M.addVertex(vx, y2, vz, digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.20).toArray()),
+        x: vx, z: vz, y: y2,
       });
     }
     rows.push(row);
   }
-  const doorway = (p, q) => p.y - ex.floorY <= room.wall + 0.1
-    && openAt((p.x + q.x) * 0.5, (p.z + q.z) * 0.5);
+  /* Cut with the corridor's own section, and only where the whole quad is
+     inside it — see punchWall() for why the hole has to be the smaller of the
+     two shapes rather than the larger. */
   for (let i = 0; i < rows.length - 1; i++) {
     for (let a = 0; a < ANG; a++) {
       const b = (a + 1) % ANG;
-      const p = rows[i][a], q = rows[i][b];
-      if (doorway(p, q) || doorway(rows[i + 1][a], rows[i + 1][b])) continue;
-      M.addQuad(p.i, q.i, rows[i + 1][b].i, rows[i + 1][a].i);
+      const p = rows[i][a], q = rows[i][b], r = rows[i + 1][a], s = rows[i + 1][b];
+      if ([p, q, r, s].every((v) => openAt(v.x, v.z, v.y - ex.floorY))) continue;
+      M.addQuad(p.i, q.i, s.i, r.i);
     }
   }
   const top = M.addVertex(room.x, ex.floorY + room.roof, room.z, digColour(0.5, 0.24).toArray());
   const last = rows[rows.length - 1];
   for (let a = 0; a < ANG; a++) M.addTri(top, last[(a + 1) % ANG].i, last[a].i);
+  return M.toBufferGeometry();
+}
+
+/* ---- the pan -------------------------------------------------------------
+   A sheet of earth under everything dug, a little below its floor. Nothing
+   walks on it and it should never be seen — that is exactly the point.
+
+   The nest is half a dozen meshes that meet along seams: a floor disc and the
+   wall standing on it, a corridor and the room it joins, a spoil heap and the
+   passage carved through it, a trench and the chamber it arrives at. A height
+   field guarantees they agree about HEIGHT; nothing guarantees their triangles
+   meet edge to edge, and where they miss by a hair the gap shows whatever is
+   behind the world, which underground is the sky.
+
+   Until round 17 the LAWN did this job, by accident: openTheMeadow() pushed
+   its vertices below the nest floor, and that sheet closed every seam from
+   underneath. Nobody knew, because nobody had removed it. Round 17 stopped
+   moving the meadow — it was slicing through the tunnels on its way down — and
+   three separate seams showed sky within one build, which is the measure of
+   how much was resting on that accident.
+
+   So the backstop is explicit now, and owned. It is NOT a licence to leave
+   seams: scripts/verify-descent.mjs rays the ground from above and
+   verify-dig.mjs rays it from inside, and both still have to pass. */
+const PAN_DROP = 2.5;
+const PAN_STEP = 3.0;
+const PAN_MARGIN = 6;
+
+/** Everything dug so far, as a world-space box to sheet over. */
+function excavationBounds(ex) {
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  const put = (x, z, pad) => {
+    x0 = Math.min(x0, x - pad); x1 = Math.max(x1, x + pad);
+    z0 = Math.min(z0, z - pad); z1 = Math.max(z1, z + pad);
+  };
+  for (let u = 0; u <= ex.arc.len; u += 4) {
+    const c = rampCentre(ex, u);
+    put(c.x, c.z, hwAt(ex, u) + CUT_BATTER + PAN_MARGIN);
+  }
+  for (const r of ex.rooms) put(r.x, r.z, r.r + PAN_MARGIN);
+  for (const L of ex.links) {
+    put(L.ax, L.az, L.hw + PAN_MARGIN);
+    put(L.ax + L.hx * L.len, L.az + L.hz * L.len, L.hw + PAN_MARGIN);
+  }
+  return { x0, x1, z0, z1 };
+}
+
+function buildPanMesh(ex) {
+  const b = excavationBounds(ex);
+  const cols = Math.max(2, Math.ceil((b.x1 - b.x0) / PAN_STEP));
+  const rows = Math.max(2, Math.ceil((b.z1 - b.z0) / PAN_STEP));
+  const M = new MeshBuilder();
+  const grid = [];
+  const dug = [];
+  for (let a = 0; a <= cols; a++) {
+    const col = [], dcol = [];
+    for (let c = 0; c <= rows; c++) {
+      const x = b.x0 + (a / cols) * (b.x1 - b.x0);
+      const z = b.z0 + (c / rows) * (b.z1 - b.z0);
+      col.push(M.addVertex(x, ex.floorY - PAN_DROP, z, digColour(0.25, 0.10).toArray()));
+      dcol.push(excavationFloorAt(x, z) !== null);
+    }
+    grid.push(col);
+    dug.push(dcol);
+  }
+  /* A quad is laid wherever any of its corners is over dug ground, so the
+     sheet reaches one cell past the excavation on every side — which is where
+     the seams are. */
+  let laid = 0;
+  for (let a = 0; a < cols; a++) {
+    for (let c = 0; c < rows; c++) {
+      if (!(dug[a][c] || dug[a + 1][c] || dug[a + 1][c + 1] || dug[a][c + 1])) continue;
+      M.addQuad(grid[a][c], grid[a + 1][c], grid[a + 1][c + 1], grid[a][c + 1]);
+      laid++;
+    }
+  }
+  return laid ? M.toBufferGeometry() : null;
+}
+
+/** Lay (or re-lay) the pan under everything dug so far. */
+function rebuildPan() {
+  const ex = getExcavation();
+  if (!ex || !nest) return;
+  if (nest._pan) {
+    nest.group.remove(nest._pan);
+    nest._pan.geometry.dispose();
+    nest._pan = null;
+  }
+  const geo = buildPanMesh(ex);
+  if (!geo) return;
+  const mesh = new THREE.Mesh(geo, nestMaterial());
+  mesh.name = 'nest-pan';
+  nest.group.add(mesh);
+  nest._pan = mesh;
+}
+
+/* How far the heap over a dug room reaches past the room's own wall. It has
+   to cover the hole openTheMeadow() leaves, which is the room plus one lawn
+   cell (GS = 6) on every side, with a margin so the hem is never the edge of
+   the hole. */
+const HEAP_SKIRT = 9;
+
+/**
+ * The spoil from a room, heaped over it — the chamber's mound, for every room
+ * dug after it. Three jobs, the same three the chamber's has: it is where the
+ * earth went (the fouisseuses took it out of the hall, it has to be
+ * somewhere), it covers the dome and the hole in the meadow, and it marks
+ * roofed ground from the surface, which a height field with one answer per
+ * point cannot do on its own.
+ */
+function buildSpoilHeap(ex, room, seed) {
+  const M = new MeshBuilder();
+  const R = room.r + HEAP_SKIRT;
+  const RINGS = 7, ANG = 36;
+  const roofTop = ex.floorY + room.roof + ROOF_COVER * 0.6;
+  const rows = [];
+  for (let ri = 0; ri <= RINGS; ri++) {
+    const t = ri / RINGS;
+    const row = [];
+    for (let a = 0; a < ANG; a++) {
+      const th = (2 * Math.PI * a) / ANG;
+      const px = room.x + Math.cos(th) * t * R, pz = room.z + Math.sin(th) * t * R;
+      const base = lawnY(px, pz);
+      const lump = vnoise(px * 0.13 + seed, pz * 0.13 + seed) - 0.5;
+      const peak = Math.max(base + 1.2, roofTop);
+      let y = base + (peak - base) * Math.pow(1 - t * t, 0.85) + lump * 1.6 * (1 - t);
+      /* Over anything dug — the room, or a corridor running under the heap —
+         never less than a cover over its ceiling. Same rule as the chamber's
+         mound and for the same reason: a heap built from its own guess let
+         the dome show through it as a band. */
+      const dug = excavationFloorAt(px, pz);
+      if (dug !== null) {
+        const hr = excavationHeadroomAt(px, pz);
+        if (Number.isFinite(hr)) y = Math.max(y, dug + hr + ROOF_COVER * 0.5);
+      }
+      // the hem goes a hair INTO the meadow, so it is buried, never floating
+      if (ri === RINGS) y = base - 0.3;
+      row.push(M.addVertex(px, y, pz, mixColor(digColour(0.5 + lump, 0.34), C_CHITIN, 0.14).toArray()));
+    }
+    rows.push(row);
+  }
+  for (let ri = 0; ri < RINGS; ri++) {
+    for (let a = 0; a < ANG; a++) {
+      const b = (a + 1) % ANG;
+      M.addQuad(rows[ri][a], rows[ri][b], rows[ri + 1][b], rows[ri + 1][a]);
+    }
+  }
   return M.toBufferGeometry();
 }
 
@@ -888,15 +1261,35 @@ function openRoom(spec) {
   tunnel.receiveShadow = true;
   nest.group.add(tunnel);
 
-  const inThisLink = (x, z) => {
-    const s = (x - link.ax) * link.hx + (z - link.az) * link.hz;
-    if (s < -link.hw || s > link.len + link.hw) return false;
-    return Math.abs(-(x - link.ax) * link.hz + (z - link.az) * link.hx) <= link.hw;
-  };
-  const mesh = new THREE.Mesh(buildRoomMesh(ex, room, seed, inThisLink), nestMaterial());
+  /* Both ends, cut with the corridor's own section. The far end is cut while
+     the room is being built, because its wall does not exist yet; the near end
+     is cut out of the chamber's wall, which was baked at founding. That
+     asymmetry is the whole of the round-16 defect: only the first case had
+     been written, so the corridor arrived somewhere and left nowhere. */
+  /* A few percent inside the tube's own section: the mesh draws its curves as
+     chords, so the section it actually covers is a hair smaller than the one
+     this function describes. */
+  const bore = linkAperture(link, 0.96);
+  const mesh = new THREE.Mesh(buildRoomMesh(ex, room, seed, bore), nestMaterial());
   mesh.name = `nest-room-${room.id}`;
   mesh.receiveShadow = true;
   nest.group.add(mesh);
+  /* The room this corridor leaves from. `chamber` today, and the day a hall
+     grows its own faces it is whichever room the face was on — which is why
+     the wall record travels with the room and not with the nest. */
+  punchWall(nest._wall, bore, ex.floorY);
+
+  const heap = new THREE.Mesh(buildSpoilHeap(ex, room, seed), nestMaterial());
+  heap.name = `nest-heap-${room.id}`;
+  heap.receiveShadow = true;
+  nest.group.add(heap);
+
+  rebuildPan();
+
+  /* Stretch the underground's darkness out to the new room. Without it the
+     hall is lit as the meadow above it — world/lighting.js keys "indoors" off
+     this one cavity, and it only ever knew about the chamber. */
+  setNestPit(nest.chamber.x, nest.mouth.y, nest.chamber.z, ROOM_R * 1.25, NEST_DEPTH, room.x, room.z);
 
   /* Lit along the corridor AND in the room, never one lamp at the far end:
      with this rig's 1/(1 + 0.017 d^2) falloff a single lamp is at 0.03 of its

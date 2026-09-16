@@ -211,27 +211,134 @@ async function main() {
   check(probe.worstStep < 1.0, `no step to fall down between chamber and hall (worst ${probe.worstStep.toFixed(3)})`);
   check(probe.unroofed === 0, 'there is a queen height of roof over the whole run');
 
+  /* ---- 4b. the doorway is actually open --------------------------------- */
+  /* THE CHECK THIS FILE DID NOT HAVE, and the reason round 16 shipped a wall
+     across the tunnel mouth. Everything above passes on a nest whose corridor
+     is joined to the chamber in the height field and blocked by its mesh: the
+     footprint, the floor step and the headroom are all answered by
+     world/excavation.js, which has no idea what was built. So this asks the
+     GEOMETRY, the same way verify-descent.mjs asks it about the ramp — a ray
+     from the middle of the chamber to the middle of the hall at eye height,
+     and two more a body's width either side, because a doorway you can only
+     get through down the exact centre line is the round-15 defect again. */
+  console.log('\n=== the doorway is open ===');
+  const los = await page.evaluate(([c, h]) => {
+    const { THREE } = window.__world6;
+    const scene = window.__scene;
+    const targets = [];
+    scene.traverse((o) => {
+      if (!o.isMesh) return;
+      let n = o, isNest = false;
+      while (n) { if (n.name === 'founded-nest') isNest = true; n = n.parent; }
+      if (isNest) targets.push(o);
+    });
+    const dx = h.x - c.x, dz = h.z - c.z;
+    const l = Math.hypot(dx, dz) || 1;
+    const ux = dx / l, uz = dz / l;
+    const px = -uz, pz = ux;          // across the corridor
+    const EYE = 3.0;
+    const rc = new THREE.Raycaster();
+    const out = [];
+    for (const off of [-3.3, 0, 3.3]) {
+      const a = new THREE.Vector3(c.x + px * off, c.y + EYE, c.z + pz * off);
+      const b = new THREE.Vector3(h.x + px * off, c.y + EYE, h.z + pz * off);
+      const d = b.clone().sub(a);
+      const len = d.length();
+      rc.set(a, d.normalize());
+      rc.near = 0.01; rc.far = len;
+      const hit = rc.intersectObjects(targets, true);
+      out.push({ off, blocked: hit.length > 0, at: hit.length ? +hit[0].distance.toFixed(1) : null, by: hit.length ? (hit[0].object.name || '?') : null });
+    }
+    return { targets: targets.map((t) => t.name), rays: out };
+  }, [{ x: chamber.x, y: founded.nest.floorY, z: chamber.z }, hall]);
+  console.log('  nest meshes:', JSON.stringify(los.targets));
+  console.log('  rays:', JSON.stringify(los.rays));
+  for (const r of los.rays) {
+    check(!r.blocked, `nothing stands between the chamber and the hall ${r.off ? `${r.off > 0 ? 'left' : 'right'} of the centre line` : 'down the middle'}`
+      + (r.blocked ? ` — hit ${r.by} at ${r.at}` : ''));
+  }
+
+  /* ---- 4c. no hole in the ground ----------------------------------------
+     An invariant, and a cheap one: standing anywhere inside the nest, every
+     ray cast DOWNWARD has to hit something. The floor is a closed surface or
+     it is not. A ray that escapes means a crack — between a floor disc and
+     the wall that stands on it, between a corridor and the room it joins —
+     and a crack underground shows the sky through the ground, which is how
+     this round's first two attempts were caught: by eye, in a screenshot,
+     one at a time. This sees all of them at once. */
+  console.log('\n=== the ground is closed ===');
+  const holes = await page.evaluate(([c, h, fy]) => {
+    const { THREE } = window.__world6;
+    const targets = [];
+    window.__scene.traverse((o) => {
+      if (!o.isMesh) return;
+      let n = o, isNest = false;
+      while (n) { if (n.name === 'founded-nest') isNest = true; n = n.parent; }
+      if (isNest || o.name === 'lawn') targets.push(o);
+    });
+    const from = [
+      { id: 'chamber', x: c.x, z: c.z },
+      { id: 'corridor', x: (c.x + h.x) / 2, z: (c.z + h.z) / 2 },
+      { id: 'hall', x: h.x, z: h.z },
+    ];
+    const rc = new THREE.Raycaster();
+    const out = [];
+    for (const p of from) {
+      let escaped = 0, total = 0;
+      for (let i = 0; i < 24; i++) {
+        for (let j = 1; j <= 6; j++) {
+          const az = (i / 24) * Math.PI * 2;
+          const el = -(j / 6) * (Math.PI / 2) * 0.95;      // below the horizon
+          const d = new THREE.Vector3(Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el));
+          rc.set(new THREE.Vector3(p.x, fy + 3.0, p.z), d.normalize());
+          rc.near = 0.01; rc.far = 400;
+          total++;
+          if (!rc.intersectObjects(targets, true).length) escaped++;
+        }
+      }
+      out.push({ id: p.id, escaped, total });
+    }
+    return out;
+  }, [chamber, hall, founded.nest.floorY]);
+  for (const r of holes) {
+    console.log(`  from the ${r.id}: ${r.escaped} of ${r.total} downward rays escape`);
+    check(r.escaped === 0, `the ground under the ${r.id} is closed (${r.escaped} rays escaped)`);
+  }
+
   /* ---- 5. THE SHOTS ----------------------------------------------------- */
   console.log('\n=== views of the hall ===');
   const hx = (hall.x - chamber.x), hz = (hall.z - chamber.z);
   const hl = Math.hypot(hx, hz) || 1;
+  const ux = hx / hl, uz = hz / hl;
   const floorY = founded.nest.floorY;
 
-  await view([chamber.x, floorY + 6, chamber.z], [hall.x, floorY + 4, hall.z]);
+  /* Every eye below is placed INSIDE the volume it is looking from — the old
+     ones were 10 and 13 units past the middle of a room of radius 8.5, i.e.
+     buried in its wall, and three of the four shots this file takes were of
+     the inside of a solid. A shot nobody can read is not a verification. */
+  await view([chamber.x - ux * 6, floorY + 5, chamber.z - uz * 6], [hall.x, floorY + 4, hall.z]);
   await page.waitForTimeout(300);
   await shot('03-from-the-chamber-into-the-hall');
 
-  await view([hall.x - (hx / hl) * 13, floorY + 7, hall.z - (hz / hl) * 13], [hall.x, floorY + 3, hall.z]);
+  await view([hall.x - ux * 5.5, floorY + 5.5, hall.z - uz * 5.5], [hall.x + ux * 4, floorY + 2.5, hall.z + uz * 4]);
   await page.waitForTimeout(300);
   await shot('04-the-hall');
 
-  await view([hall.x + (hx / hl) * 10, floorY + 6, hall.z + (hz / hl) * 10], [chamber.x, floorY + 4, chamber.z]);
+  await view([hall.x + ux * 3, floorY + 5, hall.z + uz * 3], [chamber.x, floorY + 4, chamber.z]);
   await page.waitForTimeout(300);
   await shot('05-looking-back-from-the-hall');
 
   await view([chamber.x, floorY + 46, chamber.z + 6], [hall.x, floorY, hall.z]);
   await page.waitForTimeout(300);
   await shot('06-the-plan');
+
+  /* The chamber facing its OWN entrance — the open cut the queen walked down.
+     Taken because looking back from the hall shows daylight low over the
+     chamber floor, and this is the view that says whether that is the ramp
+     doing its job or a crack in the world. */
+  await view([hall.x - ux * 2, floorY + 4.5, hall.z - uz * 2], [chamber.x - ux * 9, floorY + 3, chamber.z - uz * 9]);
+  await page.waitForTimeout(300);
+  await shot('07-through-the-chamber-to-the-ramp');
 
   console.log('\n=== console ===');
   console.log(' ', errors.length ? errors.slice(0, 6) : 'none');

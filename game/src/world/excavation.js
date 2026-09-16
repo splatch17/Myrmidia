@@ -49,7 +49,18 @@ import { vnoise, clamp, lerp } from '../core/noise.js';
    every bore below is a multiple of QUEEN_R and says so.
    ========================================================================== */
 
-/* player/avatar.js FOUNDING_QUEEN: collide radius 3.3, body ~24 long. */
+/* THE BORE REFERENCE — and read the second paragraph before changing it.
+
+   It was FOUNDING_QUEEN's collide radius: bodyR 1.5 x scale 2.2. She is 1.9
+   now (she was filling her own corridors), so her real radius is 2.85 and
+   this is deliberately left at 3.3: a floor is only ever cut once, and every
+   width below is a multiple of this, so freezing it is how the whole nest
+   keeps ~15% of clearance it would otherwise have lost the moment the body
+   changed. It is a MINIMUM the world guarantees, not a measurement of anyone.
+
+   Which makes the direction of the check one-way: a body that grows PAST 3.3
+   is a body that no longer fits the nest, and nothing here would say so. If a
+   profile ever goes above it, this number moves with it. */
 export const QUEEN_R = 3.3;
 
 /** Half-width of the descending cut: she passes with a full body either side. */
@@ -130,6 +141,35 @@ function ease(t) {
    small enough not to spend any of the slope budget. */
 const CROSS_RISE = 0.9;
 const FLOOR_GRAIN = 0.14;
+
+/* ---- the apron: how you get INTO the cut --------------------------------
+   The cut used to be a constant-width trench that started, flush but abrupt,
+   on a straight line across its mouth. Everything about it was walkable and
+   yet the only way in was to arrive dead in front of the opening: a step
+   taken at u < 0 is outside the footprint, a step taken past the shoulder is
+   an eight-unit drop the controller correctly refuses, so a queen walking up
+   at any angle slid along an invisible edge looking for a gate 26 units wide
+   in a meadow 900 across.
+
+   The fix is not a bigger gate, it is no gate: the mouth FLARES, and over
+   the same run the spoil banks lie down into the meadow (founding.js's rim
+   taper). What that leaves is a ravine that gets shallower and wider as it
+   comes up to the surface, so the ground she is standing on and the floor
+   she would step onto differ by less than a step over a wide arc — which is
+   the only test player/movement.js has ever applied. No door is written down
+   anywhere; the shape is the door.
+
+   The flare is quadratic rather than linear so the widening is fastest at
+   the very mouth, where it buys the most approach angle, and has died away
+   by the time the walls are tall enough to matter. */
+export const APRON_LEN = 24;
+export const APRON_FLARE = 2.05;
+
+/** Walkable half-width of the cut at distance `u` from the mouth. */
+export function hwAt(ex, u) {
+  const t = clamp(1 - u / APRON_LEN, 0, 1);
+  return ex.hw * (1 + (APRON_FLARE - 1) * t * t);
+}
 
 let EX = null;
 
@@ -254,13 +294,14 @@ export function rampOffset(ex, x, z, uPad = 0) {
   const vx = x - ax, vz = z - az;
   const u = R * wrapPi(s * (Math.atan2(vz, vx) - a0));
   if (u < -uPad - U_EPS || u > len + uPad + U_EPS) return null;
-  return { u: clamp(u, 0, len), lat: Math.hypot(vx, vz) - R };
+  const cu = clamp(u, 0, len);
+  return { u: cu, lat: Math.hypot(vx, vz) - R, hw: hwAt(ex, cu) };
 }
 
 /** (u, lat) of a world point that is actually IN the cut, else null. */
 export function rampParam(ex, x, z) {
   const o = rampOffset(ex, x, z);
-  return o && Math.abs(o.lat) <= ex.hw ? o : null;
+  return o && Math.abs(o.lat) <= o.hw ? o : null;
 }
 
 /** Ceiling of the chamber's dome at a world point, or null outside it. Shared
@@ -280,7 +321,11 @@ export function rampFloorAt(ex, x, z, u, lat) {
   const w = Math.pow(clamp(1 - u / SILL_RUN, 0, 1), 2);
   const tilt = (ex.gx * (x - ex.mouth.x) + ex.gz * (z - ex.mouth.z)) * w;
   const y = lerp(ex.topY, ex.floorY, ease(u / ex.descend)) + tilt;
-  const k = lat / ex.hw;
+  /* Normalised against the width AT THIS u, not the nominal one: the dish is
+     a shape, not a height, and measuring it against a constant would have the
+     flared mouth rising CROSS_RISE * FLARE^2 — three and a half units of lip
+     across the one place the cut is supposed to be walk-in-able. */
+  const k = lat / hwAt(ex, u);
   return y + CROSS_RISE * k * k + FLOOR_GRAIN * (vnoise(x * 0.1 + ex.seed, z * 0.1 + ex.seed) - 0.5) * 2;
 }
 
