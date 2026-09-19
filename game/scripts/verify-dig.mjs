@@ -117,7 +117,8 @@ async function main() {
   /* Put the camera at the foot of the ramp looking at the face, so the ring is
      projected over the wall it belongs to and the shot shows both. */
   const eye = [
-    chamber.x - (fx / fl) * 26, founded.nest.floorY + 9, chamber.z - (fz / fl) * 26,
+    // a fraction of the chamber radius, so the eye stays inside it whatever its size (#67)
+    chamber.x - (fx / fl) * chamber.r * 0.75, founded.nest.floorY + 9, chamber.z - (fz / fl) * chamber.r * 0.75,
   ];
   await view(eye, [face.x, face.y + 4, face.z]);
   await page.waitForTimeout(350);
@@ -320,7 +321,7 @@ async function main() {
   await page.waitForTimeout(300);
   await shot('03-from-the-chamber-into-the-hall');
 
-  await view([hall.x - ux * 5.5, floorY + 5.5, hall.z - uz * 5.5], [hall.x + ux * 4, floorY + 2.5, hall.z + uz * 4]);
+  await view([hall.x - ux * hall.r * 0.7, floorY + 7, hall.z - uz * hall.r * 0.7], [hall.x + ux * hall.r * 0.6, floorY + 4, hall.z + uz * hall.r * 0.6]);
   await page.waitForTimeout(300);
   await shot('04-the-hall');
 
