@@ -41,14 +41,17 @@ const ITEM_SHAPE = {
   graine: { r: [0.95, 0.78, 1.30], color: 0xd9c184, emissive: 0x000000 },
   brindille: { r: [2.90, 0.26, 0.26], color: 0x7a5228, emissive: 0x000000 },
   miellat: { r: [0.90, 0.88, 0.90], color: 0xe8a83c, emissive: 0x3a2405 },
-  // not a harvest kind — the burrow beat's own spoil clods (#68)
-  terre: { r: [1, 1, 1], color: 0x4a3524, emissive: 0x000000 },
+  // not a harvest kind — the burrow beat's own spoil clods (#68). Lighter
+  // than raw dirt and a touch of warm emissive: the clods are large enough to
+  // shadow themselves and a true dirt-dark colour there read as near-black
+  // blobs rather than turned soil (round-2 review, comparing 02/03 captures).
+  terre: { r: [1, 1, 1], color: 0x8a6238, emissive: 0x1c0f05 },
 };
 
 const GROUND_SCALE = 2.0;    // items lying on the ground are drawn at world
                              // scale, not at the queen's local scale
 const PILE_SLOTS = 12;       // how many dropped items are drawn on the pile
-const BURROW_CLODS = 6;      // how many spoil clods ring the burrow beat
+const BURROW_CLODS = 9;      // how many spoil clods ring the burrow beat
 
 let itemGeo = null;
 function sharedGeo() {
@@ -191,10 +194,16 @@ export function createProps({ scene, profile = PLAYER_AVATAR }) {
     const k = Math.max(0, Math.min(1, burrowState.t / BURROW_DURATION));
     const grow = k * k * (3 - 2 * k);   // same smoothstep burrow.js sinks her by
     const baseY = groundY(ant.x, ant.z);
+    // Bigger and further out than the first pass: at the wider 3/4 framing
+    // #68 was reworked to (burrow.js), a ring tight enough to read at a close
+    // crop reads as a few pebbles from further back. Two radii alternating
+    // (inner/outer) reads as a heap rather than a perfect ring of identical
+    // clods at one distance.
     for (let i = 0; i < clods.length; i++) {
       const a = (i / clods.length) * Math.PI * 2 + i * 0.55;   // organic scatter
-      const rXZ = 0.9 + 0.7 * grow, rY = 0.4 + 2.2 * grow;
-      const cx = ant.x + Math.cos(a) * 2.6, cz = ant.z + Math.sin(a) * 2.6;
+      const ringR = i % 2 === 0 ? 3.4 : 4.6;
+      const rXZ = 1.3 + 1.3 * grow, rY = 0.6 + 3.2 * grow;
+      const cx = ant.x + Math.cos(a) * ringR, cz = ant.z + Math.sin(a) * ringR;
       const m = clods[i];
       m.material = itemMaterial('terre');
       placeEllipsoid(m, [cx, baseY + rY * 0.85, cz], [rXZ, 0, 0], [0, rY, 0], [0, 0, rXZ]);
