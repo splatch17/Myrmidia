@@ -16,7 +16,7 @@ artistique vit dans `design/charte-stylisation.md`,
 
 ---
 
-## État au 2026-09-17 (tour 17)
+## État au 2026-09-20 (tour 18)
 
 **Branche de travail :** `feature/threejs-migration`.
 **`main` :** la [PR #23](https://github.com/splatch17/Myrmidia/pull/23) est
@@ -101,8 +101,8 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 |---|---|---|
 | 1 | ~~On ne peut pas entrer dans la galerie (#40)~~ **Fait au tour 15**, et le tour 16 a corrigé ce qui restait pénible (#48, #49) | ✅ |
 | 1b | **Le hall est nu** : aucun front de taille sur ses parois — [#62](https://github.com/splatch17/Myrmidia/issues/62), nombres en attente du brainstorm [#63](https://github.com/splatch17/Myrmidia/issues/63) | P1 |
-| 1c | **Fentes dans le sol du nid** : 2 et 3 rayons sur 144 s'échappent sous la chambre et le couloir, éclats de ciel sur la rampe — [#60](https://github.com/splatch17/Myrmidia/issues/60). Au tour 16 c'était pire : la paroi de la chambre bouchait le passage vers le hall | P1 |
-| 1d | « Grimper au brin d'herbe » s'affiche sous terre — [#64](https://github.com/splatch17/Myrmidia/issues/64) | P2 |
+| 1c | ~~**Fentes dans le sol du nid**~~ **Corrigé au tour 18** ([#60](https://github.com/splatch17/Myrmidia/issues/60), [#67](https://github.com/splatch17/Myrmidia/issues/67)) : 0 rayon sur 144 s'échappe sous la chambre, le couloir et le hall. Le volume **publié** et la coque **construite** sont deux jeux de nombres, la coque est bâtie strictement en dehors du marchable | ✅ |
+| 1d | ~~« Grimper au brin d'herbe » s'affiche sous terre~~ **Fausse piste** ([#64](https://github.com/splatch17/Myrmidia/issues/64)) : les captures de `verify-dig` figent l'interface avant que la reine ait bougé. Prouvé au tour 18 en descendant au clavier. Un vrai jumeau a été trouvé et corrigé : `harvest.target()` proposait une graine de surface depuis le fond du nid | ✅ |
 | 2 | **Les touches 5/6 sont committées sans capture** — [#61](https://github.com/splatch17/Myrmidia/issues/61) | P1 |
 | 2b | ~~La reine surexposée sous la lampe de la bouche~~ **Corrigé au tour 16** : `WARM_MOUTH_LIGHT` ramenée à `[0.46,0.26,0.10]`, le plancher d'ambiance à 0,55 portant désormais l'entrée | ✅ |
 | 3 | La séquence de ponte est scriptée : ~14 s sans contrôle. Acceptable une fois, pas répétable | Design |
@@ -115,7 +115,8 @@ du crépuscule au jour. Elle ressort dans un jour qu'elle n'a pas vu arriver.
 ## Prochaines étapes
 
 La file vit dans GitHub, plus ici : **[tickets `P1-prochain-round`](https://github.com/splatch17/Myrmidia/issues?q=is%3Aopen+label%3AP1-prochain-round)** (3 à 5 par round), puis `P2`, `P3`.
-Round 18 : #60 fentes du sol · #61 touches 5/6 prouvées · #35 fin de l'index spatial · #59 direction de la galerie · #62 fronts de taille du hall.
+Round 19 : #61 touches 5/6 prouvées · #35 fin de l'index spatial · #59 direction de la galerie · #62 fronts de taille du hall.
+Round 18 livré : #67 nid agrandi + bosse (emporte #60 et #65) · #68 animation de creusement (emporte #64).
 Le brainstorm sur l'économie du creusement (#63) appartient au porteur.
 
 ## Où sont les choses
@@ -194,6 +195,7 @@ Rappel qui a déjà coûté un tour : les harnais servent `dist/` — **recompil
 
 | Tour | Livré | Commits |
 |---|---|---|
+| 18 | **Un nid où la reine passe** : chambre de rayon 11 → 18,15, dôme 13 → 20,5, rampe et couloirs de 2 à 3 reines de demi-largeur, bosse de déblais d'une seule pièce au-dessus du dôme ([#67](https://github.com/splatch17/Myrmidia/issues/67), [#60](https://github.com/splatch17/Myrmidia/issues/60), [#65](https://github.com/splatch17/Myrmidia/issues/65)). **Animation de creusement du terrier** avant la ponte, qui garde sa cinématique d'origine ([#68](https://github.com/splatch17/Myrmidia/issues/68), [#64](https://github.com/splatch17/Myrmidia/issues/64)) | `04f1bbb`, `69ebede`, `f49912f` |
 | 17 | **Habillage de MMORPG pour tous les menus** (`player/uiTheme.js`) ; **le passage chambre → hall est dégagé** (la paroi de la chambre le bouchait), pied des parois rentré sous le sol, couloir à sol plat. Dépôt structuré : gabarits de tickets/PR, `CONTRIBUTING.md`, labels de priorité | voir `git log` |
 | 16 | **Descente raccourcie, front de taille + jauge circulaire, le hall, le menu de la reine.** Les parois glissent, la galerie n'est plus plus étroite que la reine | `3175592`, `f3a5015` |
 | 15 | **On entre dans la galerie et on en ressort à pied**, rampe au lieu du puits, galerie éclairée sur sa longueur, palette d'avatar de la DA | `da6d7ce` |
