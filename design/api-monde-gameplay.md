@@ -270,3 +270,65 @@ un défaut, pas une règle (#49).
 Une capture de la jauge circulaire en cours au front de taille, et une du
 **hall ouvert** avec la reine dedans, arrivée à pied. Plus un harnais qui longe
 les parois — pas la ligne centrale — et ressort quand même.
+
+---
+
+## 8. Creuser depuis le hall : le nid pousse — round 19 (#62, #59)
+
+Écrit **avant** la répartition, comme les sept précédentes. Le round 16 a livré
+un front de taille : celui que la reine trouve au pied de la rampe, et qui
+ouvre le hall. Le hall est resté nu. Cette section dit comment il cesse de
+l'être, sans décider à la place du porteur ce que coûte un tunnel (#63) : les
+nombres ci-dessous sont des **valeurs de départ**, pas un arbitrage.
+
+### Ce qui change de forme
+
+Rien, et c'est le but : `rooms` / `links` / `faces` (§7) sont déjà des listes,
+`digFaces()` et `advanceDigFace()` ne changent pas de signature. Ce qui change
+est **quand** le monde ajoute des fronts, et **comment il choisit où ils
+mènent**.
+
+### Ce que `world/**` livre
+
+```
+digFaces()        -> inchangé. Contient désormais, dès que le hall s'ouvre,
+                     2 ou 3 fronts posés sur SES parois.
+advanceDigFace(id, antSeconds) -> inchangé. `opened` nomme la salle ouverte,
+                     laquelle porte à son tour ses propres fronts.
+```
+
+**Une direction est jugée sur tout son parcours, pas sur son point d'arrivée
+(#59).** Un front n'est publié que si le tunnel qu'il ouvrira *et* la salle au
+bout restent sous terre sur **toute leur longueur** : le toit construit doit
+rester sous la pelouse, avec la même marge de couverture que le dôme de la
+chambre, échantillonnée le long du parcours et non à son extrémité. Un site
+qui ne passe pas ce test n'est pas corrigé après coup : il n'est pas proposé.
+C'est la même règle que `canFoundAt()` — refuser avant, plutôt que réparer
+après.
+
+**Valeurs de départ, en fourmis-secondes** (la cadence de test les divise par
+5) : le premier front, celui du hall, reste à 75. Les fronts posés sur les
+parois du hall valent 120. Ceux de la génération suivante, 180. Elles vivent
+dans `world/founding.js`, en une seule constante par génération, pour qu'un
+arbitrage de #63 soit une ligne à changer et pas une chasse.
+
+**Une profondeur par génération.** Le nid descend : chaque salle ouverte depuis
+une autre est posée un cran plus bas, jamais plus haut. C'est ce qui garde le
+test de couverture satisfiable quand la pelouse remonte.
+
+### Ce que `player/**` livre en face
+
+- Les fouisseuses visent le front **ouvert le plus proche** (§7, inchangé), ce
+  qui les répartit d'elles-mêmes quand il y en a plusieurs.
+- Le menu de la reine (`C`) liste les chantiers ouverts : un nom, l'avancement,
+  le nombre de fouisseuses dessus. Lire, pas piloter — l'affectation manuelle
+  attend #63.
+- Le HUD ne dessine la jauge que pour le front **regardé**, sinon trois jauges
+  se recouvrent à l'écran.
+
+### Critère de fin commun
+
+Une capture du hall avec ses fronts de taille visibles sur les parois, une de
+la deuxième salle ouverte avec la reine dedans arrivée à pied, et un harnais
+qui creuse deux générations de suite sans qu'aucun toit ne perce la pelouse
+(0 cellule ouverte, comme `verify-descent` le mesure déjà).

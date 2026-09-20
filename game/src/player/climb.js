@@ -32,6 +32,17 @@ export const GRASS = createGrassField({}).footprints;
 // and decorCollision.js uses the same threshold to decide which stems are
 // solid, so scaling it would silently delete colliders.
 export const CLIMB_MIN_H = 42;
+/* Grass climbing is OFF, on the porter's own call (round 19): "on peut pour
+   l'instant désactiver le fait de pouvoir grimper aux brins d'herbes (on garde
+   l'arbre, bien pour les points de vues)". It was the first verb the prototype
+   ever had and it is the one that offers itself constantly — a blade is always
+   within reach on a lawn — so it crowded out every prompt that matters now
+   (founding, digging, laying) and it is what put "grimper au brin d'herbe" on
+   screen in shot after shot. The code stays whole, gated here rather than
+   deleted: the blades are still climbable geometry and the tree still uses
+   every line of it, so turning this back on is one word. */
+const GRASS_CLIMBABLE = false;
+
 const CLIMB_RADIUS = 4.5;   // how close to a blade's base an ant must be to grab it — reach, so it scales with the body
 const CLIMB_SPEED = 20;     // arc-length units per second, worker reference; the avatar profile overrides it
 const CLIMB_MAX_T = 0.93;   // stop short of the tip, where the blade gets too thin to stand on
@@ -73,11 +84,13 @@ export function nearestClimbable(ant) {
      teleport her out through it. Nothing is climbable in a nest yet (#40). */
   if (insideNest(ant.x, ant.z)) return null;
   let best = null, bestD = reach(ant); // plain distance, so it compares fairly against the tree's surface distance below
-  for (let i = 0; i < GRASS.length; i++) {
-    const g = GRASS[i];
-    if (g.h < CLIMB_MIN_H) continue;
-    const d = Math.hypot(g.x - ant.x, g.z - ant.z);
-    if (d < bestD) { bestD = d; best = { kind: 'grass', i }; }
+  if (GRASS_CLIMBABLE) {
+    for (let i = 0; i < GRASS.length; i++) {
+      const g = GRASS[i];
+      if (g.h < CLIMB_MIN_H) continue;
+      const d = Math.hypot(g.x - ant.x, g.z - ant.z);
+      if (d < bestD) { bestD = d; best = { kind: 'grass', i }; }
+    }
   }
   const treeSurfaceD = Math.hypot(TREE.x - ant.x, TREE.z - ant.z) - TREE.w;
   if (treeSurfaceD < TREE_CLIMB_RADIUS * (ant.scale || 1) && treeSurfaceD < bestD) best = { kind: 'tree' };

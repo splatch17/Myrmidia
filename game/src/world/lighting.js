@@ -33,8 +33,15 @@ import { TUNNEL_BACK, TUNNEL_MOUTH } from './underground.js';
 export const LIGHT_SLOTS = 8;
 
 /* How much of the hemisphere fill survives at the deepest point of the nest
-   (see the injection below). */
-const AMBIENT_FLOOR = 0.55;
+   (see the injection below).
+   #71: was 0.55 — high enough that a founded chamber's own pit darkening
+   (nestPitDark below settles near 0.09 at the chamber's centre) got clamped
+   straight back up to a flat 55%, which is exactly why a populated brood
+   chamber rendered as one evenly-lit brown room instead of a warm pool per
+   clutch against near-black (before-03-brood.png). Local lamps are additive
+   on top of this floor, not clamped by it, so lowering the floor only
+   deepens the black BETWEEN lamps — it does not dim the lamps themselves. */
+const AMBIENT_FLOOR = 0.30;
 
 const ALL_LIGHTS = [];
 
@@ -61,7 +68,14 @@ const lightCol = new Float32Array(LIGHT_SLOTS * 3);
    twenty units under the meadow is lit as if it were standing in the meadow.
    Packed as two vec4 rather than five scalars so the whole thing is two
    uniform writes and no extra program permutation:
-     uPitA = (x, rim y, z, radius)   uPitB = (on, depth, 0, 0)          */
+     uPitA = (x, rim y, z, radius)   uPitB = (on, depth, x2, z2)
+
+   The cavity is a CAPSULE from (x, z) to (x2, z2), not a disc. It was a disc
+   round the chamber, and the first room dug past it was lit as the open
+   meadow it sits under: sunlight and grass shadows striping the walls of a
+   hall thirteen units underground. Two slots of uPitB were already free, so
+   the nest growing costs no new uniform and no new program permutation — and
+   with x2, z2 equal to x, z it is the old disc exactly. */
 const pitA = new THREE.Vector4(0, 0, 0, 1);
 const pitB = new THREE.Vector4(0, 1, 0, 0);
 
@@ -72,17 +86,26 @@ const sharedUniforms = {
   uPitB: { value: pitB },
 };
 
-/** Declare (or, with r = 0, clear) the run-time nest cavity. */
-export function setNestPit(x, topY, z, r, depth) {
+/** Declare (or, with r = 0, clear) the run-time nest cavity: a capsule from
+ *  (x, z) to (x2, z2), defaulting to a disc round (x, z). */
+export function setNestPit(x, topY, z, r, depth, x2 = x, z2 = z) {
   pitA.set(x, topY, z, Math.max(r, 0.001));
-  pitB.set(r > 0 ? 1 : 0, Math.max(depth, 0.001), 0, 0);
+  pitB.set(r > 0 ? 1 : 0, Math.max(depth, 0.001), x2, z2);
+}
+
+/** Horizontal distance from (x, z) to the cavity's spine. */
+function pitSpineDistance(x, z) {
+  const abx = pitB.z - pitA.x, abz = pitB.w - pitA.z;
+  const ll = abx * abx + abz * abz;
+  const t = ll > 1e-6 ? Math.min(1, Math.max(0, ((x - pitA.x) * abx + (z - pitA.z) * abz) / ll)) : 0;
+  return Math.hypot(x - (pitA.x + abx * t), z - (pitA.z + abz * t));
 }
 
 /** CPU twin of pitDark() below — main.js commutes its fog with it. */
 export function pitFactorAt(x, y, z) {
   if (pitB.x < 0.5) return 0;
   const ss = (t) => { const c = Math.min(1, Math.max(0, t)); return c * c * (3 - 2 * c); };
-  const hd = Math.hypot(x - pitA.x, z - pitA.z);
+  const hd = pitSpineDistance(x, z);
   const inside = 1 - ss((hd - pitA.w * 0.9) / (pitA.w * 0.8));
   const depth = Math.min(1, Math.max(0, (pitA.y - y) / pitB.y));
   return inside * ss((depth - 0.04) / 0.46);
@@ -130,10 +153,12 @@ float nestNoise(vec2 p) {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 uniform vec4 uPitA;   // (x, rim y, z, radius) of the run-time-dug nest
-uniform vec4 uPitB;   // (on, depth, -, -)
+uniform vec4 uPitB;   // (on, depth, x2, z2): the capsule's far end
 float nestPitDark(vec3 w) {
   if (uPitB.x < 0.5) return 1.0;
-  float hd = length(w.xz - uPitA.xz);
+  vec2 pa = uPitA.xz, ab = uPitB.zw - uPitA.xz;
+  float st = clamp(dot(w.xz - pa, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+  float hd = length(w.xz - (pa + ab * st));
   float inside = 1.0 - smoothstep(uPitA.w * 0.9, uPitA.w * 1.7, hd);
   float dep = clamp((uPitA.y - w.y) / uPitB.y, 0.0, 1.0);
   return mix(1.0, 0.10, inside * smoothstep(0.04, 0.50, dep));
@@ -198,7 +223,13 @@ export function applyNestShading(material) {
           for (int i = 0; i < ${LIGHT_SLOTS}; i++) {
             vec3 Ld = uLightPos[i] - vNestWorld;
             float d = length(Ld);
-            float att = 1.0 / (1.0 + d * d * 0.017);
+            // #71: 0.017 -> 0.024. With AMBIENT_FLOOR lowered, a slower
+            // falloff was smearing every lamp's pool into its neighbour's —
+            // a brood chamber with four clutches lit as one wash of amber
+            // rather than four separate pools of light in the dark. Tighter
+            // falloff keeps each lamp a pool with black between them, which
+            // is the whole ask (one warm pool per clutch, not a lit room).
+            float att = 1.0 / (1.0 + d * d * 0.024);
             nestSum += uLightCol[i] * max(dot(normal, Ld / max(d, 0.001)), 0.0) * att;
           }
           reflectedLight.directDiffuse += diffuseColor.rgb * nestSum;

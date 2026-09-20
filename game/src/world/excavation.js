@@ -49,11 +49,24 @@ import { vnoise, clamp, lerp } from '../core/noise.js';
    every bore below is a multiple of QUEEN_R and says so.
    ========================================================================== */
 
-/* player/avatar.js FOUNDING_QUEEN: collide radius 3.3, body ~24 long. */
+/* THE BORE REFERENCE — and read the second paragraph before changing it.
+
+   It was FOUNDING_QUEEN's collide radius: bodyR 1.5 x scale 2.2. She is 1.9
+   now (she was filling her own corridors), so her real radius is 2.85 and
+   this is deliberately left at 3.3: a floor is only ever cut once, and every
+   width below is a multiple of this, so freezing it is how the whole nest
+   keeps ~15% of clearance it would otherwise have lost the moment the body
+   changed. It is a MINIMUM the world guarantees, not a measurement of anyone.
+
+   Which makes the direction of the check one-way: a body that grows PAST 3.3
+   is a body that no longer fits the nest, and nothing here would say so. If a
+   profile ever goes above it, this number moves with it. */
 export const QUEEN_R = 3.3;
 
-/** Half-width of the descending cut: she passes with a full body either side. */
-export const RAMP_HW = QUEEN_R * 2.0;          // 13.2 clear
+/** Half-width of the descending cut. Three queens each side of the centre line
+ *  (#67): two was a body of clearance either side on paper and, with the
+ *  camera's boom behind her, a trench whose walls filled the screen. */
+export const RAMP_HW = QUEEN_R * 3.0;          // 19.8 clear, was 13.2
 
 /** Steepest the floor is allowed to get, as tan(angle). 0.50 is 27 degrees.
  *  The shaft this replaces measured 4.4, and the first ramp 0.38 — but 0.38
@@ -78,11 +91,51 @@ export const NEST_DEPTH = 13;
 /** Soil kept over the top of the dome, by mounding if the meadow is too low. */
 export const ROOF_COVER = 4.0;
 
+/** The founding chamber's walkable radius. It was 11 — a room 22 across for a
+ *  queen 21 long, so the camera had nowhere to stand but in the wall (#67).
+ *  1.65x that, and the wall mesh stands further out still (WALL_OUT). */
+export const CHAMBER_R = QUEEN_R * 5.5;        // 18.15, was 11
+
 /** Chamber: straight walls to CHAMBER_WALL, then a dome to CHAMBER_ROOF.
  *  The straight part is what guarantees headroom at the doorway — a pure dome
- *  is only tall enough in its middle, and the doorway is at its edge. */
-export const CHAMBER_WALL = 9.5;
-export const CHAMBER_ROOF = 13;
+ *  is only tall enough in its middle, and the doorway is at its edge.
+ *  The wall is a little taller than the nest is deep, so the lintel of the
+ *  doorway the ramp arrives through sits at the meadow's level and the spoil
+ *  mound, not the depth, pays for the dome (#67). */
+export const CHAMBER_WALL = QUEEN_R * 4.2;     // 13.86, was 9.5
+export const CHAMBER_ROOF = QUEEN_R * 6.2;     // 20.46, was 13
+
+/** A corridor's roof on its centre line. Was CHAMBER_WALL (9.5): a queen's
+ *  camera sits some eleven units over her floor, i.e. in the rock. */
+export const LINK_ROOF = QUEEN_R * 4.5;        // 14.85
+
+/* ---- published volume versus built mesh (#67) ---------------------------
+   Everything above is the volume the world PUBLISHES — footprint and
+   headroom — and it is what the queen and her camera are kept inside. The
+   meshes used to be built on the same numbers with the wobble going both
+   ways, so a wall stood up to 6% inside the footprint and a dome came down to
+   a unit under the published ceiling: a camera placed legally was a camera in
+   the rock, which is the full-screen wall plane of the round-17 captures. So
+   the mesh is now built strictly OUTSIDE what is published, by these: */
+
+/** A room's wall stands at WALL_OUT..WALL_OUT+WALL_WOBBLE of its radius. */
+export const WALL_OUT = 1.08;
+export const WALL_WOBBLE = 0.08;
+/** A corridor's tube is this much wider than its walkable half-width. */
+export const TUNNEL_BORE = 1.10;
+/** Where a corridor's arch springs from, as a fraction of its roof. */
+export const SPRINGER = 0.5;
+/** A corridor's mouth widens by this much where it meets a room. */
+export const MOUTH_FLARE = 0.15;
+export const MOUTH_RUN = 4.0;
+/** The tube's wobble only ever widens it, by at most this fraction. */
+export const TUNNEL_LUMP = 0.10;
+/** Published ceiling is kept this far under the built one: chord sag of the
+ *  dome's rings, plus a camera's near plane. */
+export const CEIL_MARGIN = 1.2;
+/** Dome rings. Used by the mesh and by the cover bound below, which has to
+ *  know how steep the first ring's facet is. */
+export const DOME_RINGS = 6;
 
 /** How much the cut turns on the way down, in radians. A straight trench
  *  reads as a canal; a curve reads as something dug and keeps the plan
@@ -131,6 +184,70 @@ function ease(t) {
 const CROSS_RISE = 0.9;
 const FLOOR_GRAIN = 0.14;
 
+/* ---- the apron: how you get INTO the cut --------------------------------
+   The cut used to be a constant-width trench that started, flush but abrupt,
+   on a straight line across its mouth. Everything about it was walkable and
+   yet the only way in was to arrive dead in front of the opening: a step
+   taken at u < 0 is outside the footprint, a step taken past the shoulder is
+   an eight-unit drop the controller correctly refuses, so a queen walking up
+   at any angle slid along an invisible edge looking for a gate 26 units wide
+   in a meadow 900 across.
+
+   The fix is not a bigger gate, it is no gate: the mouth FLARES, and over
+   the same run the spoil banks lie down into the meadow (founding.js's rim
+   taper). What that leaves is a ravine that gets shallower and wider as it
+   comes up to the surface, so the ground she is standing on and the floor
+   she would step onto differ by less than a step over a wide arc — which is
+   the only test player/movement.js has ever applied. No door is written down
+   anywhere; the shape is the door.
+
+   The flare is quadratic rather than linear so the widening is fastest at
+   the very mouth, where it buys the most approach angle, and has died away
+   by the time the walls are tall enough to matter. */
+export const APRON_LEN = 24;
+export const APRON_FLARE = 2.4;
+
+/** Walkable half-width of the cut at distance `u` from the mouth. */
+export function hwAt(ex, u) {
+  const t = clamp(1 - u / APRON_LEN, 0, 1);
+  return ex.hw * (1 + (APRON_FLARE - 1) * t * t);
+}
+
+/* ---- the meadow, baked (#69) --------------------------------------------
+   This module may not ask terrain.js where the lawn is — that is the import
+   cycle the header is about — and until #69 it did not have to: the cut's
+   floor was measured from ONE height, the lawn at the mouth. That is exactly
+   what made the entrance the worst-looking part of the nest. The mouth flares
+   to 2.4 x RAMP_HW, so the apron is a band some ninety units across whose
+   floor was a parabola about a single point, laid over a meadow that rolls by
+   several units in that distance. Two surfaces within a hair of each other
+   over a thousand square units, neither one under the other: whichever won a
+   given pixel was decided by float noise, and it changed with the camera.
+
+   So founding.js — which IS allowed to sample the lawn — bakes a coarse grid
+   of it into the descriptor at dig time, and the floor below is clamped to it.
+   Coarse on purpose: it is used for a min() and for clamps with half a unit of
+   margin either side, never for a height anyone stands on that is not already
+   the meadow itself. */
+
+/** Bilinear sample of the baked meadow, or +Infinity where nothing was baked
+ *  (which makes every min() against it a no-op, so an excavation built without
+ *  a grid behaves exactly as it did before). */
+export function bakedLawnAt(ex, x, z) {
+  const g = ex && ex.lawnGrid;
+  if (!g) return Infinity;
+  const fx = clamp((x - g.x0) / g.step, 0, g.nx - 1.0001);
+  const fz = clamp((z - g.z0) / g.step, 0, g.nz - 1.0001);
+  const i = Math.floor(fx), j = Math.floor(fz);
+  const tx = fx - i, tz = fz - j;
+  const h = g.h, nz = g.nz;
+  return lerp(
+    lerp(h[i * nz + j], h[(i + 1) * nz + j], tx),
+    lerp(h[i * nz + j + 1], h[(i + 1) * nz + j + 1], tx),
+    tz,
+  );
+}
+
 let EX = null;
 
 /** Install the excavation (founding.js). One at a time — the game founds one
@@ -144,14 +261,15 @@ export function getExcavation() { return EX; }
  * module allowed to sample the lawn.
  *
  * @param mouth  {x, z} where the cut breaks the surface — the founded point
- * @param lawn   { y, gx, gz } lawn height at the mouth and its gradient, so
- *               the threshold can follow the meadow it cuts into
+ * @param lawn   { y, gx, gz, grid } lawn height at the mouth and its gradient,
+ *               so the threshold can follow the meadow it cuts into, plus the
+ *               baked grid of it the floor is clamped to (bakedLawnAt)
  * @param head   [hx, hz] unit heading the cut sets off on
  */
 export function makeExcavation(mouth, lawn, head, seed) {
   const s = 1;                                   // turn sense; fixed, see a0
   const a0 = Math.atan2(-s * head[0], s * head[1]);
-  const chamberR = 11;
+  const chamberR = CHAMBER_R;
   const descend = descendFor(NEST_DEPTH);
   const R = descend / RAMP_TURN;
   const A = { x: mouth.x - R * Math.cos(a0), z: mouth.z - R * Math.sin(a0) };
@@ -166,12 +284,21 @@ export function makeExcavation(mouth, lawn, head, seed) {
      is an alias onto the same object so nest.js, the camera and the harnesses
      keep reading what they always read — the contract (§7) says outright that
      it must not break for an internal refactor. */
-  const chamber = { id: 'chamber', x: end.x, z: end.z, r: chamberR, wall: CHAMBER_WALL, roof: CHAMBER_ROOF };
+  const chamber = {
+    id: 'chamber', x: end.x, z: end.z, r: chamberR,
+    wall: CHAMBER_WALL, roof: CHAMBER_ROOF,
+    /* Every room carries the level it is dug to, and generation 0 is dug to
+       the nest depth. Rooms opened later sit LOWER (contract §8, "une
+       profondeur par génération"), so nothing may read ex.floorY as "the
+       floor of the nest" any more — it is the floor of the chamber and of the
+       cut that arrives at it. */
+    fy: lawn.y - NEST_DEPTH, gen: 0,
+  };
 
   return {
     seed,
     mouth: { x: mouth.x, z: mouth.z },
-    topY: lawn.y, gx: lawn.gx, gz: lawn.gz,
+    topY: lawn.y, gx: lawn.gx, gz: lawn.gz, lawnGrid: lawn.grid || null,
     floorY: lawn.y - NEST_DEPTH,
     arc: { ax: A.x, az: A.z, R, a0, s, len },
     hw: RAMP_HW,
@@ -190,20 +317,183 @@ export function makeExcavation(mouth, lawn, head, seed) {
    and by then three files would have had an opinion about where the floor is.
    Everything below is plain data: no THREE.js, no closure, serialisable. */
 
-/** Add a room and return it. `r` is the plan radius; the roof is domed. */
-export function addRoom(id, x, z, r, wall = CHAMBER_WALL, roof = CHAMBER_ROOF) {
-  const room = { id, x, z, r, wall, roof };
+/** Add a room and return it. `r` is the plan radius; the roof is domed. `fy` is
+ *  the level its floor is dug to, and `gen` how many rooms deep it is. */
+export function addRoom(id, x, z, r, fy, gen = 1, wall = CHAMBER_WALL, roof = CHAMBER_ROOF) {
+  const room = { id, x, z, r, wall, roof, fy, gen };
   EX.rooms.push(room);
   return room;
 }
 
-/** Add a straight level corridor between two points. */
-export function addLink(id, a, b, hw, roof = CHAMBER_WALL) {
+/**
+ * Add a straight corridor between two points. `ends` names the rooms it joins,
+ * so its tube can be trimmed to their walls.
+ *
+ * It is no longer necessarily LEVEL: since rooms are dug one notch deeper per
+ * generation, a corridor has to lose that notch somewhere, and the only place
+ * it may do so is between the two doorways — inside either room its floor must
+ * be that room's own floor, or the height field would dish a trench through a
+ * floor disc the mesh built flat. So the ramp's ends are baked here, from the
+ * same linkMouthS() the tube is trimmed with.
+ */
+export function addLink(id, a, b, hw, roof = LINK_ROOF, ends = []) {
   const dx = b.x - a.x, dz = b.z - a.z;
   const len = Math.hypot(dx, dz) || 1;
-  const link = { id, ax: a.x, az: a.z, hx: dx / len, hz: dz / len, len, hw, roof };
+  const link = { id, ax: a.x, az: a.z, hx: dx / len, hz: dz / len, len, hw, roof, ends: ends.slice() };
   EX.links.push(link);
+  const [s0, s1] = linkMouthS(EX, link);
+  link.rs0 = s0; link.rs1 = s1;
+  link.fy0 = EX.floorY; link.fy1 = EX.floorY;
+  /* Which end is which is taken from the GEOMETRY (linkEnds's own `start`),
+     not from the order of `ends`: those two agreeing is an assumption, and an
+     assumption that swaps the two ends of a ramp puts the drop in the room. */
+  for (const e of linkEnds(EX, link)) {
+    if (e.start) link.fy0 = roomFloorY(EX, e.r); else link.fy1 = roomFloorY(EX, e.r);
+  }
   return link;
+}
+
+/** The level a room's floor is dug to. */
+export function roomFloorY(ex, room) {
+  return room.fy === undefined ? ex.floorY : room.fy;
+}
+
+/** The deepest floor anywhere in the excavation — what a backstop has to sit
+ *  under (founding.js's pan). */
+export function deepestFloorY(ex) {
+  let y = ex.floorY;
+  for (const r of ex.rooms) y = Math.min(y, roomFloorY(ex, r));
+  return y;
+}
+
+/** A corridor's floor level at distance `s` along it: flat inside each room it
+ *  joins, ramping between the two doorways. Linear on purpose — an eased ramp
+ *  peaks at 1.5x the average slope, and the slope budget here is the one
+ *  movement.js spends per step. */
+export function linkFloorY(ex, L, s) {
+  if (L.fy1 === undefined || L.fy1 === L.fy0) return L.fy0 === undefined ? ex.floorY : L.fy0;
+  const t = clamp((s - L.rs0) / Math.max(L.rs1 - L.rs0, 1e-3), 0, 1);
+  return lerp(L.fy0, L.fy1, t);
+}
+
+/* ---- the built shell, as numbers (#67) ----------------------------------
+   The mesh builders in founding.js and every query that has to agree with
+   them — the published ceiling, the soil a mound has to put over a dome, the
+   meadow that has to give way — read these, so "where is the rock" has one
+   answer. */
+
+/** The radius a corridor's tube is trimmed to inside a room: half a unit in
+ *  front of the thinnest point of the wall, so the tube's end is always tucked
+ *  behind the wall's own edge rather than stopping short of it. */
+export function roomTrimR(room) { return room.r * WALL_OUT - 0.5; }
+
+function linkRooms(ex, L) {
+  return (L.ends || []).map((id) => ex.rooms.find((r) => r.id === id)).filter(Boolean);
+}
+
+/** The room a link's end sits in, with its centre in the link's frame. */
+function linkEnds(ex, L) {
+  return linkRooms(ex, L).map((r) => ({
+    r,
+    sc: (r.x - L.ax) * L.hx + (r.z - L.az) * L.hz,
+    lc: -(r.x - L.ax) * L.hz + (r.z - L.az) * L.hx,
+    start: ((r.x - L.ax) * L.hx + (r.z - L.az) * L.hz) < L.len * 0.5,
+  }));
+}
+
+/** Where the tube's centre line meets the wall at each end. */
+export function linkMouthS(ex, L) {
+  let s0 = 0, s1 = L.len;
+  for (const e of linkEnds(ex, L)) {
+    const R = roomTrimR(e.r);
+    if (e.start) s0 = Math.max(s0, e.sc + R); else s1 = Math.min(s1, e.sc - R);
+  }
+  return [s0, s1];
+}
+
+/** Widening of the bore near a room, measured from the room's wall. */
+export function mouthFlareAt(ex, L, s) {
+  const [s0, s1] = linkMouthS(ex, L);
+  const t = clamp(1 - Math.min(s - s0, s1 - s) / MOUTH_RUN, 0, 1);
+  return 1 + MOUTH_FLARE * t * t;
+}
+
+/**
+ * Slide a tube vertex at (s, lat) out of the rooms at the link's ends, onto
+ * their trim circle. A straight tube whose end is a flat cut stuck into a
+ * round room by its centre line and by nothing at its sides — the jambs of
+ * dark wall either side of the round-17 doorway were the tube's own outside,
+ * standing in the chamber. Trimmed to the circle, the tube meets the wall
+ * everywhere at once.
+ */
+export function linkTrimS(ex, L, s, lat) {
+  for (const e of linkEnds(ex, L)) {
+    const R = roomTrimR(e.r);
+    const dl = lat - e.lc;
+    if (Math.abs(dl) >= R) continue;
+    const half = Math.sqrt(R * R - dl * dl);
+    if (e.start) s = Math.max(s, e.sc + half);
+    else s = Math.min(s, e.sc - half);
+  }
+  return s;
+}
+
+/** Radius of the spoil mound's headwall over the arriving cut: just outside
+ *  the furthest the chamber's wobbling wall reaches. Between the wall and this
+ *  the cut runs under a lintel. */
+export function chamberDoorR(ex) {
+  return ex.chamber.r * (WALL_OUT + WALL_WOBBLE) + 0.6;
+}
+
+/** Arch profile of a corridor's section at |lat| / bore, 0..1 of its roof. */
+export function archK(k) {
+  return SPRINGER + (1 - SPRINGER) * Math.sqrt(Math.max(0, 1 - k * k));
+}
+
+/** Published clear height in a room at plan distance d from its centre. */
+function roomCeilAt(room, d) {
+  const Rd = room.r * WALL_OUT;
+  const q = d / Rd;
+  return room.wall + (room.roof - room.wall) * Math.sqrt(Math.max(0, 1 - q * q)) - CEIL_MARGIN;
+}
+
+/** Published clear height in a corridor at lateral offset `lat`. */
+function linkCeilAt(L, lat) {
+  return L.roof * archK(Math.abs(lat) / (L.hw * TUNNEL_BORE)) - CEIL_MARGIN;
+}
+
+/**
+ * The highest point of any built shell over (x, z), or null where nothing is
+ * built. An UPPER bound, which is the direction a cover needs: a mound that
+ * clears this clears the mesh. (The published ceiling is the lower bound, the
+ * direction a camera needs.)
+ */
+export function excavationShellTopAt(x, z) {
+  const ex = EX;
+  if (!ex) return null;
+  let top = null;
+  const c1 = Math.cos(Math.PI / 2 / DOME_RINGS), s1 = Math.sin(Math.PI / 2 / DOME_RINGS);
+  for (const r of ex.rooms) {
+    const d = Math.hypot(x - r.x, z - r.z);
+    const Rd = r.r * WALL_OUT;
+    if (d > r.r * (WALL_OUT + WALL_WOBBLE) + 0.5) continue;
+    const dh = r.roof - r.wall;
+    /* Past the first dome ring the facet runs from the wobbled wall top to
+       that ring, and never higher than the ring itself. */
+    const y = roomFloorY(ex, r) + (d < Rd * c1 ? r.wall + dh * Math.sqrt(1 - (d / Rd) ** 2) : r.wall + dh * s1);
+    top = top === null ? y : Math.max(top, y);
+  }
+  for (const L of ex.links) {
+    const s = (x - L.ax) * L.hx + (z - L.az) * L.hz;
+    if (s < 0 || s > L.len) continue;
+    const grow = mouthFlareAt(ex, L, s) * (1 + TUNNEL_LUMP);
+    const lat = -(x - L.ax) * L.hz + (z - L.az) * L.hx;
+    const bore = L.hw * TUNNEL_BORE * grow;
+    if (Math.abs(lat) > bore + 0.5) continue;
+    const y = linkFloorY(ex, L, s) + L.roof * grow;
+    top = top === null ? y : Math.max(top, y);
+  }
+  return top;
 }
 
 /** Where a point sits in a link's frame, or null if it is not in it. */
@@ -254,13 +544,14 @@ export function rampOffset(ex, x, z, uPad = 0) {
   const vx = x - ax, vz = z - az;
   const u = R * wrapPi(s * (Math.atan2(vz, vx) - a0));
   if (u < -uPad - U_EPS || u > len + uPad + U_EPS) return null;
-  return { u: clamp(u, 0, len), lat: Math.hypot(vx, vz) - R };
+  const cu = clamp(u, 0, len);
+  return { u: cu, lat: Math.hypot(vx, vz) - R, hw: hwAt(ex, cu) };
 }
 
 /** (u, lat) of a world point that is actually IN the cut, else null. */
 export function rampParam(ex, x, z) {
   const o = rampOffset(ex, x, z);
-  return o && Math.abs(o.lat) <= ex.hw ? o : null;
+  return o && Math.abs(o.lat) <= o.hw ? o : null;
 }
 
 /** Ceiling of the chamber's dome at a world point, or null outside it. Shared
@@ -268,9 +559,9 @@ export function rampParam(ex, x, z) {
  *  a mound built from its own guess left the dome showing through as a dark
  *  band across the heap. */
 export function chamberRoofAt(ex, x, z) {
-  const d = Math.hypot(x - ex.chamber.x, z - ex.chamber.z) / ex.chamber.r;
-  if (d >= 1) return null;
-  return ex.floorY + CHAMBER_WALL + (CHAMBER_ROOF - CHAMBER_WALL) * Math.pow(Math.sqrt(1 - d * d), 0.7);
+  const d = Math.hypot(x - ex.chamber.x, z - ex.chamber.z);
+  if (d >= ex.chamber.r) return null;
+  return ex.floorY + roomCeilAt(ex.chamber, d);
 }
 
 /** Floor height in the cut. Split out so the mesh builder can use exactly the
@@ -280,13 +571,40 @@ export function rampFloorAt(ex, x, z, u, lat) {
   const w = Math.pow(clamp(1 - u / SILL_RUN, 0, 1), 2);
   const tilt = (ex.gx * (x - ex.mouth.x) + ex.gz * (z - ex.mouth.z)) * w;
   const y = lerp(ex.topY, ex.floorY, ease(u / ex.descend)) + tilt;
-  const k = lat / ex.hw;
-  return y + CROSS_RISE * k * k + FLOOR_GRAIN * (vnoise(x * 0.1 + ex.seed, z * 0.1 + ex.seed) - 0.5) * 2;
+  /* Normalised against the width AT THIS u, not the nominal one: the dish is
+     a shape, not a height, and measuring it against a constant would have the
+     flared mouth rising CROSS_RISE * FLARE^2 — three and a half units of lip
+     across the one place the cut is supposed to be walk-in-able. */
+  const k = lat / hwAt(ex, u);
+  const dug = y + CROSS_RISE * k * k + FLOOR_GRAIN * (vnoise(x * 0.1 + ex.seed, z * 0.1 + ex.seed) - 0.5) * 2;
+  /* A dug floor is never above the ground it was dug out of (#69). Over most
+     of the cut this changes nothing — the floor is metres down. It bites at
+     the flared mouth, where the profile above says "the meadow's height at the
+     mouth, plus the dish" and the meadow forty units to one side says
+     something else entirely: the apron used to stand up to a unit proud of the
+     field it opens into, which is both an invisible lip to walk over and a
+     ninety-unit plate coplanar with the lawn.
+     min() of two continuous functions is continuous, so this adds no step for
+     movement.js to fall down — it only ever lowers, and only where the cut had
+     claimed to be above the meadow. */
+  return Math.min(dug, bakedLawnAt(ex, x, z));
 }
 
-/** Floor height on the chamber's flat. */
-export function chamberFloorAt(ex, x, z) {
-  return ex.floorY + FLOOR_GRAIN * (vnoise(x * 0.1 + ex.seed, z * 0.1 + ex.seed) - 0.5) * 2;
+/** The fine wobble every dug floor carries, so two of them meeting have the
+ *  same grain rather than two grains that happen to be similar. */
+function floorGrainAt(ex, x, z) {
+  return FLOOR_GRAIN * (vnoise(x * 0.1 + ex.seed, z * 0.1 + ex.seed) - 0.5) * 2;
+}
+
+/** Floor height on a room's flat, at whatever level that room was dug to. */
+export function roomFloorAt(ex, room, x, z) {
+  return roomFloorY(ex, room) + floorGrainAt(ex, x, z);
+}
+
+/** Floor height in a corridor at (x, z) — its ramp, plus the same grain. */
+export function linkFloorAt(ex, L, x, z) {
+  const s = (x - L.ax) * L.hx + (z - L.az) * L.hz;
+  return linkFloorY(ex, L, s) + floorGrainAt(ex, x, z);
 }
 
 /** Inside of the chamber's plan disc. */
@@ -308,13 +626,21 @@ export function excavationFloorAt(x, z) {
   let y = null;
   const rp = rampParam(ex, x, z);
   if (rp) y = rampFloorAt(ex, x, z, rp.u, rp.lat);
-  /* Every room and every link is dug to the same level, so the whole nest
-     under the ramp is one flat floor and min() of it with itself is itself.
-     That is deliberate: a step between two dug pieces is a teleport in play,
-     not a stumble, and the cheapest way to have no step is to have no
-     difference. */
-  if (roomAt(ex, x, z) || ex.links.some((L) => inLink(L, x, z))) {
-    const fy = chamberFloorAt(ex, x, z);
+  /* The deepest contributor wins, and since #62 they are no longer all at the
+     same level: each generation of rooms is dug a notch lower and its corridor
+     ramps down to it. min() of continuous pieces is still continuous, which is
+     the only property that matters — a step between two dug pieces is a
+     teleport in play, not a stumble. What makes the pieces agree is that a
+     corridor's ramp is flat inside both rooms it joins (linkFloorY): the two
+     always answer the same height where they overlap. */
+  for (const r of ex.rooms) {
+    if (Math.hypot(x - r.x, z - r.z) > r.r) continue;
+    const fy = roomFloorAt(ex, r, x, z);
+    y = y === null ? fy : Math.min(y, fy);
+  }
+  for (const L of ex.links) {
+    if (!inLink(L, x, z)) continue;
+    const fy = linkFloorAt(ex, L, x, z);
     y = y === null ? fy : Math.min(y, fy);
   }
   return y;
@@ -338,11 +664,19 @@ export function excavationHeadroomAt(x, z) {
      the apex of the spoil heap. The chamber is roofed; the doorway is an arch
      through its wall, and CHAMBER_WALL is what makes that arch tall enough. */
   const room = roomAt(ex, x, z);
-  if (room) {
-    const d = Math.hypot(x - room.x, z - room.z) / room.r;
-    return room.wall + (room.roof - room.wall) * Math.pow(Math.sqrt(Math.max(0, 1 - d * d)), 0.7);
+  if (room) return roomCeilAt(room, Math.hypot(x - room.x, z - room.z));
+  /* The doorway the cut arrives through has a thickness: the wall, and the
+     headwall of the spoil mound standing just outside it. Under that lintel
+     the cut is roofed, and saying Infinity there let a camera rise into it. */
+  if (Math.hypot(x - ex.chamber.x, z - ex.chamber.z) <= chamberDoorR(ex) && rampParam(ex, x, z)) {
+    return ex.chamber.wall - CEIL_MARGIN;
   }
-  for (const L of ex.links) if (inLink(L, x, z)) return L.roof;
+  let best = null;
+  for (const L of ex.links) {
+    const p = inLink(L, x, z);
+    if (p) best = Math.max(best ?? -Infinity, linkCeilAt(L, p.lat));
+  }
+  if (best !== null) return best;
   // open cut: nothing overhead at all
   return Infinity;
 }
@@ -353,19 +687,30 @@ export function excavationHeadroomAt(x, z) {
    to survive being written to disk (castes-et-micro-macro.md §3.4), and a
    closure does not. */
 
-/** Add a workable face. `nx, nz` points OUT of the wall, into the room. */
-export function addDigFace(id, x, z, nx, nz, needed, opens) {
-  const f = { id, x, z, y: EX.floorY, nx, nz, needed, worked: 0, done: false, opens };
+/** Add a workable face. `nx, nz` points OUT of the wall, into the room; `y` is
+ *  the floor of the room whose wall it is, which is no longer the same for
+ *  every room (contract §8). */
+export function addDigFace(id, x, z, y, nx, nz, needed, opens) {
+  const f = { id, x, z, y, nx, nz, needed, worked: 0, done: false, opens };
   EX.faces.push(f);
   return f;
 }
 
-/** The faces still worth walking to: open, and not yet finished. */
+/**
+ * The faces still worth walking to: open, and not yet finished.
+ *
+ * `opens` stays the KIND ('room'), as it has been since §7. What it opens is
+ * described alongside it rather than inside it — `opensId`, `opensR`, `size`,
+ * `opensGen` — so a HUD listing worksites can name and rank them without
+ * reaching into the world's own descriptor, and so an old caller that only
+ * looked at `opens` still reads what it always read.
+ */
 export function excavationDigFaces() {
   if (!EX) return [];
   return EX.faces.filter((f) => !f.done).map((f) => ({
     id: f.id, x: f.x, y: f.y, z: f.z, nx: f.nx, nz: f.nz,
     needed: f.needed, worked: f.worked, opens: f.opens.kind,
+    opensId: f.opens.id, opensR: f.opens.r, size: f.opens.size, opensGen: f.opens.gen,
   }));
 }
 

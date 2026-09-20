@@ -68,16 +68,29 @@ const MIX_FADE = 6.0;
 
 const MAX_BROOD = 6;      // world/founding.js's own ceiling on populateNest(n)
 
-/* The chamber is 28 units across and the queen is 24.5 long (measured in
-   design/ressources-et-fondation.md §0). There is no wide shot to be had in
-   there: at 50 degrees of vertical fov, framing her whole body would need the
-   eye ~16 units from her, which is outside the rock. So the laying is shot
-   close, from just above her own back height, and what fills the frame is her
-   head, the wall, and the pale clutch. The numbers are the room's, not taste:
-   the cavity is a swept tube (world/founding.js chamberProfile) whose ceiling
-   at 9 units off the axis is only ~6.5 above the floor. */
-const EYE_R = 8.0, EYE_H = 5.2, AIM_H = 1.8;
-const QUEEN_OFF = 5.5;    // how far she stands from the clutch she is laying
+/* The queen is 24.5 long (design/ressources-et-fondation.md §0) and there is
+   no wide shot to be had in a chamber sized for her to turn around in: at 50
+   degrees of vertical fov, framing her whole body would need the eye ~16
+   units away, which used to be outside the rock. So the laying is shot
+   close, from just above her own back height, and what fills the frame is
+   her head, the wall, and the pale clutch.
+
+   NONE OF THE NUMBERS BELOW ARE TYPED IN ANY MORE (#68). This used to read
+   "the chamber is 28 units across" and hard-code EYE_R/EYE_H/QUEEN_OFF
+   against that one figure — which was already wrong the day #51 shrank the
+   founding chamber to an 11-unit radius, and would have gone wrong again the
+   day #67 resizes it once more, silently, because nothing here would have
+   noticed. Instead this file reads world.getFoundedNest().chamber.r — the
+   room's own published radius (contract, world/founding.js) — every time it
+   begins, and scales the shot off THAT. A bigger chamber gets a wider orbit
+   and a queen standing further from her clutch; a smaller one pulls both in;
+   the fixed 11 below is only the honest fallback for the case where the
+   world ever answers without an `r` at all. */
+const EYE_R_FRAC = 0.73;      // eye's orbit radius, as a fraction of the chamber's own radius
+const QUEEN_OFF_FRAC = 0.50;  // how far she stands from the clutch, ditto
+const CHAMBER_R_FALLBACK = 11;// round-16's own chamberR (world/excavation.js) — see above
+const EYE_H_DEFAULT = 5.2, EYE_H_MIN = 3.2, EYE_H_MARGIN = 1.3; // stay this far under the roof over the eye
+const AIM_H = 1.8;
 const SURFACE_BACK = 26, SURFACE_UP = 15;
 
 const lerp3 = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
@@ -110,6 +123,9 @@ export function createLaying() {
   // needs it: cutting before the 'lay' phase must still produce the clutch
   let laidThisRun = false;
   let eyeAz = 0, surfaceEye = null, aimAt = null, layYaw = 0, cutNext = false;
+  // this run's own shot, scaled from the chamber it actually got (see the
+  // comment on *_FRAC above) — recomputed each begin(), read by shot()
+  let eyeR = CHAMBER_R_FALLBACK * EYE_R_FRAC, eyeH = EYE_H_DEFAULT;
 
   /** True while the queen belongs to the sequence and not to the player. */
   function active() { return state.phase !== null; }
@@ -136,14 +152,29 @@ export function createLaying() {
        — the clutch is placed by the world at a bearing this file does not
        choose, so the shot has to be built from it rather than beside it. */
     const c = nest.chamber;
+    const chamberR = c.r || CHAMBER_R_FALLBACK;
     broodAt = broodSpot(nest);
     let bx = c.x - broodAt[0], bz = c.z - broodAt[1];
     const bl = Math.hypot(bx, bz);
     if (bl < 0.5) { bx = 0; bz = 1; } else { bx /= bl; bz /= bl; }
-    const off = Math.min(QUEEN_OFF, bl);   // never past the middle of the room
+    const off = Math.min(chamberR * QUEEN_OFF_FRAC, bl);   // never past the middle of the room
     floorPos = [broodAt[0] + bx * off, nest.floorY, broodAt[1] + bz * off];
     eyeAz = Math.atan2(bx, bz);            // she has her back to the camera's side
     layYaw = Math.atan2(-bx, -bz);         // and faces her own clutch
+
+    /* The eye's own orbit, and how high it can sit without poking through the
+       dome over it — nestFootprint().headroom() is the same one query every
+       other underground ceiling check in player/** goes through (nest.js's
+       own header comment on why there is exactly one answer to "how much
+       room is over me here"), asked at the point the eye is actually going
+       to be. */
+    eyeR = chamberR * EYE_R_FRAC;
+    const eyeX = c.x + Math.sin(eyeAz) * eyeR, eyeZ = c.z + Math.cos(eyeAz) * eyeR;
+    const fp = nestFootprint();
+    const headroom = fp ? fp.headroom(eyeX, eyeZ) : Infinity;
+    eyeH = Number.isFinite(headroom)
+      ? Math.max(EYE_H_MIN, Math.min(EYE_H_DEFAULT, headroom - EYE_H_MARGIN))
+      : EYE_H_DEFAULT;
 
     /* The shaft leans (world/founding.js AXIS_TILT), so the mouth is offset
        from the chamber by a few units: that horizontal drift is a direction
@@ -240,10 +271,10 @@ export function createLaying() {
     }
     const c = nest.chamber;
     return {
-      eye: [c.x + Math.sin(eyeAz) * EYE_R, nest.floorY + EYE_H, c.z + Math.cos(eyeAz) * EYE_R],
-      // between the queen and her clutch, so both are in frame at a distance
-      // the room allows (8 to 11 units — she is 24.5 long, it is a close shot
-      // because there is no other kind in a chamber 28 across)
+      eye: [c.x + Math.sin(eyeAz) * eyeR, nest.floorY + eyeH, c.z + Math.cos(eyeAz) * eyeR],
+      // between the queen and her clutch, so both are in frame — she is 24.5
+      // long, it is a close shot because eyeR/QUEEN_OFF_FRAC (above) keep it
+      // that way whatever size the chamber actually got dug at
       aim: [(ant.x + broodAt[0]) * 0.5, nest.floorY + AIM_H, (ant.z + broodAt[1]) * 0.5],
       cut,
     };

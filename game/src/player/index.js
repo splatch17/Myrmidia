@@ -1,16 +1,16 @@
-import * as THREE from 'three';
 import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
 import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath } from '../world/index.js';
-import { PLAYER_AVATAR, collideRadius, profileById } from './avatar.js';
+import { PLAYER_AVATAR, collideRadius, profileById, legLengths } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
-import { makeAnt, makeLegState, updateLegs } from './legs.js';
+import { makeAnt, makeLegState, updateLegs, antMatrix, localToWorld, solveKnee } from './legs.js';
 import { buildAntMesh } from './antMesh.js';
 import { createInput } from './input.js';
 import { createQueenMenu } from './queenMenu.js';
 import { createCameraRig } from './camera.js';
 import { computeWishDir, stepAnt } from './movement.js';
 import { stepClimb, GRASS } from './climb.js';
+import { pickDigGauge } from './digGauge.js';
 import { deepestPenetration, resolveDecorCollision, mushroomRadii } from './decorCollision.js';
 import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
 import { createInteraction } from './interaction.js';
@@ -99,33 +99,18 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   const queenMenu = createQueenMenu();
   const cameraRig = createCameraRig(camera);
 
-  /* Screen position of the dig gauge (#51). The projection lives here rather
-     than in hud.js because this is the file that already holds a camera, and
-     a HUD that learns what a projection matrix is stops being a HUD.
-     
+  /* Screen position of the dig gauge (#51), and which face gets it when
+     several are open at once (#62 requirement 2 — see digGauge.js, pulled
+     out so the "at most one, nearest the centre" rule has its own unit
+     test, see scripts/verify-dig-gauge-pick.mjs). Kept as a call here
+     rather than in hud.js because this is the file that already holds a
+     camera, and a HUD that learns what a projection matrix is stops being
+     a HUD.
+
      One frame behind: main.js writes camera.position after this runs. On a
-     ring that fills over seventy-five seconds that is invisible, and paying
-     for it with a second update order would not be. */
-  const _dp = new THREE.Vector3();
-  function projectDig(g) {
-    if (!g) return null;
-    _dp.set(g.x, g.y + 6.5, g.z);
-    const d = _dp.distanceTo(camera.position);
-    _dp.project(camera);
-    /* z outside [-1,1] is behind the near plane or past the far one; a point
-       behind the camera projects to a mirrored position on screen, which is a
-       gauge floating over open meadow while the face is at her back. */
-    const visible = _dp.z > -1 && _dp.z < 1
-      && _dp.x > -1.35 && _dp.x < 1.35 && _dp.y > -1.35 && _dp.y < 1.35;
-    const w = window.innerWidth, h = window.innerHeight;
-    return {
-      ...g,
-      sx: (_dp.x * 0.5 + 0.5) * w,
-      sy: (-_dp.y * 0.5 + 0.5) * h,
-      scale: 46 / Math.max(12, d),
-      visible,
-    };
-  }
+     ring that fills over seventy-five seconds that is invisible, and
+     paying for it with a second update order would not be. */
+  const projectDig = (candidates) => pickDigGauge(candidates, camera);
   const hud = createHud();
   const marker = createTargetMarker(scene);
   /* The colony, and the two draw calls that show it. Workers are drawn
@@ -244,7 +229,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     antState.position.set(ant.x, ant.y, ant.z);
     antState.radius = collideRadius(profile); // footprint half-width, for grass contact bend
 
-    props.update(ant, interaction.harvest.state);
+    props.update(ant, interaction.harvest.state, interaction.burrow.state);
 
     /* A clutch becomes eggs the colony owns. laying.js counts clutches; this
        is the first thing that turns one into something that hatches. */
@@ -260,7 +245,10 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     if (casteMsgTimer > 0) { casteMsgTimer -= dt; if (casteMsgTimer <= 0) casteMsg = null; }
     hud.setEvent(casteMsg || interaction.message());
     hud.setHold(interaction.holdProgress(act));
-    queenMenu.render(profile, {
+    /* One reading of the colony per frame, handed to both the panel and the
+       unit frame: two calls that each built their own would be two answers
+       to "how many workers" a frame apart, on screen at the same time. */
+    const colonyView = {
       caste,
       casteUnlocked,
       casteLabel: (id) => profileById(id).label,
@@ -276,7 +264,9 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
       faces: digFaces().map((f) => ({
         ...f, diggers: colony.state.faceWork.get(f.id) || 0,
       })),
-    });
+    };
+    queenMenu.render(profile, colonyView);
+    hud.setUnit(profile, colonyView);
     /* The dig gauge is NOT drawn here. It is projected against the camera, and
        the camera is not final until cameraRig.update() further down — so main
        .js calls syncDigDial() once the camera is where the frame will be
@@ -319,6 +309,23 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__avatar = profile;
     window.__mushroomRadii = mushroomRadii;
     window.__grass = GRASS;  // so the harness can walk to a real climbable stem
+    // #70: bone-length measurement, so a harness can assert invariance
+    // instead of eyeballing it. Mirrors exactly what antMesh.js draws (same
+    // solveKnee() call against the same hip/foot), and also reports what the
+    // pre-fix code would have drawn (a bone from knee to the *raw*,
+    // unsaturated gait target, legState[i].planted) — so one run reports both
+    // the old bug's actual deviation and the fix's, instead of needing two.
+    window.__legBones = () => {
+      const mat = antMatrix(ant);
+      const [L1, L2] = legLengths(profile);
+      const d3 = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+      return profile.legs.map((L, i) => {
+        const hipW = localToWorld(mat, L.hip);
+        const rawFoot = legState[i].planted;
+        const { knee, foot } = solveKnee(hipW, rawFoot, L1, L2, mat.basis.up);
+        return { l1: L1, l2: L2, thigh: d3(hipW, knee), shinOld: d3(knee, rawFoot), shinNew: d3(knee, foot) };
+      });
+    };
     // #29/#33: the harness has to know where a node is in order to walk to
     // it, and what the loop thinks she is holding — it still *drives* with
     // real key events.
@@ -357,6 +364,9 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // be cut. The cut itself is a real keypress.
     window.__beginLaying = () => interaction.laying.begin(ant);
     window.__caste = () => ({ caste, msg: casteMsg, unlocked: casteUnlocked('digger') });
+    // what a clutch costs right now, pace included (verify-burrow.mjs checks
+    // the pile is spent by exactly this much, exactly once, across #68's beat)
+    window.__clutchCost = () => interaction.clutchCost();
     window.__queenMenu = (profileId) => ({
       open: queenMenu.isOpen(),
       // asked of a profile by id, so a harness can prove the panel is refused
@@ -373,6 +383,13 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__laying = () => {
       const st = interaction.laying.state;
       return { phase: st.phase, t: +st.t.toFixed(3), brood: st.brood, mix: foundedMix() };
+    };
+    // #68: the burrow beat between the founding hold and the laying
+    // cutscene — likewise not driven by keys (scripts/verify-burrow.mjs
+    // watches it run rather than pressing anything for its 3-5 s).
+    window.__burrow = () => {
+      const st = interaction.burrow.state;
+      return { active: st.active, t: +st.t.toFixed(3) };
     };
   }
 
@@ -392,7 +409,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
    * would see from there.
    */
   function syncDigDial(dt = 0) {
-    hud.setDig(projectDig(colony.digProgress()), dt);
+    hud.setDig(projectDig(colony.digCandidates()), dt);
   }
 
   return { ant, group, update, syncDigDial, dispose };

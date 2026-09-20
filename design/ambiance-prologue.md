@@ -355,3 +355,123 @@ Rien de ce document n'a été vu dans le moteur — le rig du prologue n'est pas
 4. la luminance médiane du plan 4 de la séquence de fondation (cible 18-28) ;
 5. `bark` v3 sur le tronc à distance de grimpe : les plaques doivent encore se distinguer les unes des autres à ~30 unités ;
 6. `chitin` v2 sur la fourmi en gros plan : la ponctuation doit se voir sans que la fourmi ne devienne granuleuse.
+
+---
+
+## 9. Passe d'ambiance mystique (#71) — arbitrage
+
+Demande du studio : « un jeu qui soit encore plus beau, où on est vraiment
+plongé dans un univers mystique... on peut s'inspirer davantage des mmorpg
+connus. » Quatre défauts identifiés sur les captures `before-*.png`
+(`.claude/worktrees/agent-aded31c070efb742b/game/_mood71-shots/`), tranchés
+ci-dessous et comparés aux captures `after-*.png` (`game/_mood71-shots/`).
+Ce §9 ne rejuge pas §1-§8 : ceux-ci portent le rig déjà intégré et mesuré ;
+#71 corrige quatre défauts précis repérés sur le build *actuel*, plus loin
+dans l'intégration que 247f326.
+
+### 9a. La reine se lisait au même niveau que le sol
+
+Défaut mesuré : `chitinB` (le gastre, sa plus grande silhouette à l'écran,
+`player/antMesh.js`) valait `0x8f5a25` contre un sol `#86673B`/`#5A4529` —
+même famille brun-olive, même bande de luminance (~71-107/255). Un correctif
+qui ne joue que sur la valeur s'évapore dès qu'elle passe à l'ombre ; il
+fallait aussi changer l'axe de teinte.
+
+Choix : `chitinB` basculé vers la rouille (`0xbd4e23`, proche de la
+référence palette `#E07356`) plutôt que de rester sur l'axe brun-doré du
+sol, et remonté au-dessus de la bande de luminance du sol. `chitinA`/
+`mandible` remontés dans la même direction (chitine/miel plus saturés) pour
+que le corps reste une seule créature, pas un gastre rapporté.
+
+Mesure (`report.json`, échantillon reine vs sol sur la pelouse) :
+- avant : reine L=87.4, sol L=50.6 (écart 36.8)
+- après : reine L=124.8, sol L=60.9 (écart 63.9)
+
+Fichier : `game/src/player/avatar.js` (ligne des couleurs de
+`FOUNDING_QUEEN` uniquement — `WORKER`/`DIGGER` non touchées cette passe).
+
+### 9b. Profondeur extérieure
+
+Le monde fait 770x540 unités mais `fogNear`/`fogFar` (95/420, §1e) laissaient
+la brume commencer bien après ce qu'un plan large montre réellement — une
+colline lointaine se lisait à la même valeur que l'herbe aux pieds de la
+joueuse. Réduit à 65/340 : la brume entre dans le cadre au lieu de rester
+hors champ. En même temps, soleil et remplissage rapprochés de la logique
+« clé chaude / remplissage froid » qui fait tourner les formes dans les
+MMO référents : soleil `0xe8b98c → 0xf0a866` (plus saturé, plus doré),
+ciel de l'hémisphère `0x6e7fa8 → 0x5a70b4` (plus froid, plus saturé),
+intensité de l'hémisphère `1.15 → 1.30`. Angle et intensité du soleil non
+touchés — le ratio ombre/lumière du §1e n'est pas rejugé, seul l'écart de
+teinte entre les deux s'élargit.
+
+Fichier : `game/src/world/sun.js` (`RIG_PROLOGUE` uniquement — `RIG_FOUNDED`
+laissé tel quel, hors périmètre de cette demande centrée prologue).
+
+### 9c. Le seuil de l'entrée
+
+Déjà tranché avant cette passe et laissé tel quel : `world/founding.js`
+pose déjà un `WARM_MOUTH_LIGHT` (l'entrée vue depuis la pelouse, le seul
+point chaud d'une carte par ailleurs froide) contre un `COLD_SHAFT_LIGHT`
+au pied de la rampe (la lumière du jour qui descend, froide, "soie") —
+exactement le plan 2 du tableau §2c. C'est la direction retenue : chaud
+dehors qui accroche l'œil depuis la pelouse, froid dedans qui dit "on
+quitte le monde connu". Pas de nouveau chiffre ajouté ici —
+`world/founding.js` n'est pas dans le périmètre de cette passe — mais 9d
+(plancher d'ambiance baissé) le renforce indirectement : l'intérieur ne
+remonte plus à un gris-brun plat, donc le contraste chaud/froid du seuil a
+enfin un fond assez sombre pour se voir.
+
+Point non résolu : l'angle de caméra du harness (`after-02-mouth.png`)
+montre surtout la pelouse et le linteau de l'entrée, pas le puits qui
+porte la lampe froide — donc l'effet existe dans le moteur mais n'est pas
+vérifié visuellement sur cette capture précise. À reconfirmer sur un plan
+qui cadre la descente.
+
+### 9d. La chambre de couvain, cœur mystique
+
+Défaut mesuré : `AMBIENT_FLOOR` (le plancher d'ambiance sous terre,
+`world/lighting.js`) valait 0.55 — assez haut pour que l'assombrissement
+du puits fondé (`nestPitDark`, qui descend vers ~0.09-0.10 au centre de la
+chambre) soit systématiquement replâtré à 55 % de remplissage plat. C'est
+la cause directe de `before-03-brood.png` : une chambre entière à valeur
+moyenne uniforme au lieu de flaques de lumière séparées de noir — le même
+défaut, un cran plus bas dans le rig, que le constat 3 du §0.
+
+Choix : `AMBIENT_FLOOR` baissé à 0.30 (le noir entre les lampes se creuse ;
+les lampes elles-mêmes ne sont pas concernées, elles s'additionnent
+par-dessus ce plancher, pas dedans). Atténuation des lampes locales resserrée
+(`0.017 → 0.024` dans le terme `1/(1+d²·k)`) pour que quatre couvains lus
+ensemble restent quatre flaques distinctes plutôt qu'un seul lavis ambré —
+sinon le chevauchement des halos annule le bénéfice du plancher baissé.
+Résultat visible sur `after-03-brood.png` : parois latérales proches du
+noir, flaque chaude au sol sous les œufs.
+
+Fichier : `game/src/world/lighting.js` (`AMBIENT_FLOOR` et le coefficient
+d'atténuation dans `applyNestShading`).
+
+### 9e. Vérification
+
+- `npx vite build` (game/) : OK, aucune erreur.
+- `node scripts/verify-mood-71.mjs after game/_mood71-shots` : fps
+  124.4 (budget ≥ 55, avant 77.5 — pas de régression, la scène n'a pas
+  gagné de géométrie ni de passe). Aucune erreur console/page.
+- Captures `after-01-lawn.png`, `after-02-mouth.png`, `after-03-brood.png`,
+  `after-04-queen-lawn.png` comparées à leurs équivalents `before-*` à
+  l'œil : 9a et 9d nettement améliorés ; 9b amélioré mais plus modestement
+  (le plan large ne montre encore qu'un début de recul de la colline
+  lointaine — à repousser encore si un futur passage juge que ce n'est pas
+  assez) ; 9c non re-vérifié visuellement (cf. ci-dessus).
+
+### 9f. Hors périmètre, laissé à Atta (rendu réel)
+
+- Bloom sur les lampes locales et le fil des perles lumineuses — les
+  couleurs de lampe existantes (`BROOD_LIGHT`, `GLOW_LIGHT`) dépassent déjà
+  1.0 en radiance mais rien ne les fait "déborder" à l'écran ; un bloom
+  seuil-haut est ce qui transformerait une flaque ambrée en vraie source
+  féerique.
+- Rayons de lumière volumétriques dans le puits d'entrée (le
+  `COLD_SHAFT_LIGHT` décrit une lumière du jour qui descend — un god-ray
+  la rendrait visible comme un objet, pas seulement comme un éclairage).
+- Particules de spores/poussière en suspension dans la chambre de couvain,
+  pour vendre l'air immobile et confiné une fois que l'éclairage en flaques
+  est en place.

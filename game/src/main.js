@@ -138,6 +138,16 @@ window.__world = world;
 window.__contain = containUnderground;
 window.__profileR = profileR;
 window.__groundY = groundY;
+/* Three itself, so a probe can raycast the real scene instead of guessing at
+   a screenshot. A harness that can only photograph can tell you a wedge is
+   black; one that can raycast can tell you WHICH surface it is and which way
+   it faces, which is how #69 was finally named. */
+window.__THREE = THREE;
+importWorldCover();
+async function importWorldCover() {
+  const w = await import('./world/index.js');
+  window.__coverAt = w._coverAt;
+}
 window.__tree = TREE;
 
 /* Round 6 seam for scripts/verify-round6.mjs. The harness founds a nest by

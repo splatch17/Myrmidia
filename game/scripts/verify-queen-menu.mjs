@@ -130,6 +130,69 @@ async function main() {
      clutch, and this run has laid none. */
   check(/verrouill/.test(withNest.text), 'the caste that is not unlocked yet reads as locked');
 
+  /* ---- 4. keys 5 and 6 really switch the next clutch's caste (#61) ------
+     PROGRESS.md defect #2: this was committed without a capture, because a
+     throwaway harness never sent a keystroke — window.__caste()/the panel
+     text agreed with each other and with nothing that had actually happened.
+     This sends the same real page.keyboard events verify-harvest.mjs proved
+     itself with, and reads back BOTH the HUD text and window.__caste(), so a
+     capture that merely shows the panel frozen on its default cannot pass. */
+  console.log('\n=== 5/6 switch the next clutch\'s caste (#61) ===');
+
+  /* The digger is locked until a first clutch is laid (CASTE_UNLOCK.digger in
+     player/index.js): pressing 6 while it is locked is a no-op by design, and
+     would prove nothing about the key. window.__beginLaying() plays the real
+     scripted sequence (same shortcut this file already used above to get a
+     nest without walking to one), and — as verify-gallery-walk.mjs already
+     established — a short E tap cuts it early and still lays the clutch, so
+     this does not have to sit through the full ~14s cutscene for a fact that
+     is not what #61 is about. */
+  const beganLaying = await page.evaluate(() => window.__beginLaying());
+  check(beganLaying === true, 'the laying sequence started (there is a founded chamber to run it in)');
+  await page.waitForTimeout(1200);
+  const running = await page.evaluate(() => window.__laying());
+  check(!!running.phase, `the scripted descent is running (phase "${running.phase}")`);
+  await page.keyboard.press('KeyE');
+  await page.waitForTimeout(600);
+  const laid = await page.evaluate(() => window.__laying());
+  check(laid.phase === null, 'E cut the cutscene short');
+  check(laid.brood >= 1, `cutting it still laid the clutch, unlocking the digger (brood ${laid.brood})`);
+
+  const unlocked = await page.evaluate(() => window.__caste().unlocked);
+  check(unlocked === true, 'window.__caste() now reports the digger as unlocked');
+
+  if (!(await panel()).shown) { await page.keyboard.press('KeyC'); await page.waitForTimeout(250); }
+
+  /* Moved off the default on purpose before either capture: a screenshot of
+     "worker" taken without ever having pressed a key would be exactly the
+     old, unproven capture again. Digit6 first, so the "worker" shot below is
+     proof that 5 switches AWAY from digger, not a picture of a value nobody
+     touched. */
+  await page.keyboard.press('Digit6');
+  await page.waitForTimeout(250);
+  const midSwitch = await page.evaluate(() => window.__caste());
+  check(midSwitch.caste === 'digger', `Digit6 switched the caste (state says "${midSwitch.caste}")`);
+
+  await page.keyboard.press('Digit5');
+  await page.waitForTimeout(250);
+  const asWorker = { state: await page.evaluate(() => window.__caste()), panel: await panel() };
+  console.log('  after Digit5:', JSON.stringify(asWorker.state), '|', asWorker.panel.text);
+  check(asWorker.state.caste === 'worker', `Digit5 switched the caste back (state says "${asWorker.state.caste}")`);
+  /* ● is the filled bullet (&#9679;) the panel marks the PICKED caste
+     with — textContent gives the real glyph, not the source's HTML entity. */
+  check(new RegExp('●\\s*5\\s*ouvrière').test(asWorker.panel.text),
+    'the panel itself marks ouvrières as the next clutch, not just the internal state');
+  await shot('02-caste-worker');
+
+  await page.keyboard.press('Digit6');
+  await page.waitForTimeout(250);
+  const asDigger = { state: await page.evaluate(() => window.__caste()), panel: await panel() };
+  console.log('  after Digit6:', JSON.stringify(asDigger.state), '|', asDigger.panel.text);
+  check(asDigger.state.caste === 'digger', `Digit6 switched the caste (state says "${asDigger.state.caste}")`);
+  check(new RegExp('●\\s*6\\s*fouisseuse').test(asDigger.panel.text),
+    'the panel itself marks fouisseuses as the next clutch, not just the internal state');
+  await shot('03-caste-digger');
+
   console.log('\n=== console ===');
   console.log(' ', errors.length ? errors.slice(0, 6) : 'none');
   check(errors.length === 0, `no console errors (${errors.length})`);

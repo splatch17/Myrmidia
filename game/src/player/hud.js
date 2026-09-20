@@ -1,43 +1,39 @@
 /* ==========================================================================
-   Minimal text HUD — two lines, created from JS rather than added to
-   game/index.html so the whole player feature stays inside player/**.
+   The HUD — created from JS rather than added to game/index.html so the whole
+   player feature stays inside player/**.
 
-   Deliberately unstyled beyond legibility: #32 asks for the site reading to
-   be "un simple retour texte pour l'instant, pas de HUD travaillé, la DA
-   passera après", and #29/#33 kept that instruction. So this is the plumbing
-   (what is said, when, and where it is anchored), not the look. Slots, named
-   after the old prototype's DOM ids so a later DA pass can move them into
-   index.html untouched:
-     #objective  — the standing goal of the prologue (interaction.js)
+   Round 17 gave it a look (player/uiTheme.js: the MMO register the porter
+   asked for). What it SAYS did not change, and neither did where to find it:
+   every slot keeps the id the old prototype gave it, and the harnesses read
+   them by id and match their words.
+     #unitframe  — who is being played: portrait, name, the pile (NEW, r17)
      #stock      — what she carries and what is on the pile (harvest.js)
+     #objective  — the standing goal of the prologue (interaction.js)
      #siteinfo   — what the ground under the queen is worth (siteQuality.js)
      #sitedetail — the factors behind that verdict
      #prompt     — the current contextual interaction (E: climb / harvest /
-                   drop / found), including the progress of a held action
-     #event      — a short-lived line for what just happened (took a seed,
-                   founded the colony)
-     #hold       — a bar that fills while a held action runs, under #prompt
+                   drop / found), on a plate with its key
+     #hold       — a cast bar that fills while a held action runs
+     #event      — a short-lived line for what just happened, as zone text
      #controls   — the key bindings, open at first launch, toggled with H
+     #digdial    — the circular gauge on the dig face (#51)
 
-   The controls panel is not decoration. The player's report on the previous
+   The controls panel is not decoration. The player's report on an earlier
    build was that they could not tell what the game wanted from them: nothing
    on screen had ever said that E exists, that it must be *held* for some
-   actions, or that the mouse turns the camera. A prototype that has to be
-   explained out of band is a prototype nobody can playtest.
-
-   It opens by itself the first time and closes on the first successful
-   harvest — a panel the player must dismiss to start playing is a toll, and
-   one that is still up after they have clearly understood is noise.
+   actions, or that the mouse turns the camera. It opens by itself the first
+   time and closes on the first successful harvest — a panel the player must
+   dismiss to start playing is a toll, and one still up after they have
+   clearly understood is noise.
    ========================================================================== */
 
-const BASE = 'position:fixed;color:#e6d3ab;font:13px/1.5 monospace;pointer-events:none;'
-  + 'text-shadow:0 1px 3px rgba(0,0,0,0.9);z-index:5;';
+import { ensureUiTheme, keycap, portraitSvg } from './uiTheme.js';
 
-function el(id, style) {
+function el(id, cls, parent = document.body) {
   const d = document.createElement('div');
   d.id = id;
-  d.style.cssText = BASE + style;
-  document.body.appendChild(d);
+  if (cls) d.className = cls;
+  parent.appendChild(d);
   return d;
 }
 
@@ -46,7 +42,7 @@ function el(id, style) {
 function nullHud() {
   return {
     setSite() {}, setPrompt() {}, setObjective() {}, setStock() {}, setEvent() {},
-    setHold() {}, setDig() {}, setEventNow() {},
+    setHold() {}, setDig() {}, setEventNow() {}, setUnit() {},
     toggleControls() {}, closeControls() {}, dispose() {},
   };
 }
@@ -55,54 +51,75 @@ function nullHud() {
    words for the keys, not the engine's codes: input.js accepts WASD and ZQSD
    and the arrows for the same movement, and listing three alternatives on
    three lines would be worse than naming the one a French keyboard has under
-   its fingers. */
+   its fingers. Alternatives are split on ' / ' into separate key-caps. */
 const CONTROLS = [
   ['ZQSD / WASD', 'se déplacer'],
   ['Maj', 'courir'],
-  ['Souris (glisser)', 'tourner la caméra'],
+  ['Souris', 'tourner la caméra (glisser)'],
   ['Molette', 'reculer / rapprocher la vue'],
-  ['E', 'action — appui court, ou maintenu quand la barre apparaît'],
+  ['E', 'action — appui court, ou maintenu'],
   ['5 / 6', 'prochaine ponte : ouvrières / fouisseuses'],
-  ['C', 'gestion de la reine — ponte, effectifs, chantiers'],
-  ['P', 'graphismes — et la cadence de test (raccourcit les attentes)'],
+  ['C', 'gestion de la reine'],
+  ['P', 'graphismes et cadence de test'],
   ['H', 'afficher / masquer cette aide'],
 ];
 
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '');
+
 export function createHud() {
   if (typeof document === 'undefined') return nullHud();
+  ensureUiTheme();
 
-  /* One left-hand column rather than the old prototype's centred #prompt:
-     with an objective line long enough to explain itself, a centred prompt
-     lands on top of it (seen on the first capture of the harvest loop, not
-     reasoned about). Stacked lines cannot overlap whatever they say.
+  /* ---- unit frame (top left) ------------------------------------------- */
+  const unit = el('unitframe', 'mm');
+  const portrait = document.createElement('div');
+  portrait.className = 'mm-portrait';
+  const body = document.createElement('div');
+  body.className = 'mm-frame mm-unit-body';
+  body.innerHTML = '<div class="mm-unit-name"></div>'
+    + '<div class="mm-bar"><i></i><span></span></div>'
+    + '<div class="mm-chips"></div>';
+  unit.append(portrait, body);
+  const uName = body.querySelector('.mm-unit-name');
+  const uBar = body.querySelector('.mm-bar');
+  const uBarFill = uBar.querySelector('i');
+  const uBarText = uBar.querySelector('span');
+  const uChips = body.querySelector('.mm-chips');
+  unit.style.display = 'none';
+  const stock = el('stock', 'mm');
 
-     The offsets are hand-packed rather than a flex column because the hold bar
-     is 5px where every other slot is a 19px line, and it has to sit tight
-     under the prompt it belongs to. First attempt put it at 98 and it landed
-     on the objective line — again caught on a capture. */
-  const event = el('event', 'left:12px;bottom:142px;color:#cfe0a8;');
-  const prompt = el('prompt', 'left:12px;bottom:122px;font-size:14px;color:#ffe6b0;');
-  const objective = el('objective', 'left:12px;bottom:88px;color:#f0dfb8;');
-  const stock = el('stock', 'left:12px;bottom:70px;opacity:0.85;');
-  const site = el('siteinfo', 'left:12px;bottom:52px;');
-  const detail = el('sitedetail', 'left:12px;bottom:34px;opacity:0.62;font-size:12px;');
+  /* ---- objective tracker (top right) ----------------------------------- */
+  const tracker = el('tracker', 'mm');
+  tracker.innerHTML = '<div class="mm-track-h">Objectif</div>';
+  const objective = el('objective', '', tracker);
+  const siteHead = document.createElement('div');
+  siteHead.className = 'mm-track-h mm-track-sub';
+  siteHead.textContent = 'Le site';
+  tracker.appendChild(siteHead);
+  const site = el('siteinfo', '', tracker);
+  const detail = el('sitedetail', '', tracker);
 
-  /* The hold bar sits directly under the prompt that names the action, so the
-     sentence and the progress are read as one thing. Two nested divs rather
-     than a canvas: a width in percent is the whole animation. */
-  const holdOuter = el('hold', 'left:12px;bottom:112px;width:190px;height:5px;'
-    + 'background:rgba(0,0,0,0.45);border-radius:3px;overflow:hidden;');
-  const holdFill = document.createElement('div');
-  holdFill.style.cssText = 'height:100%;width:0%;background:#ffc46a;border-radius:3px;';
-  holdOuter.appendChild(holdFill);
+  /* ---- the action: a plate with its key, and a cast bar under it --------
+     The key-cap is a SIBLING of #prompt, not inside it, so #prompt's text is
+     exactly the sentence interaction.js wrote — which is what the harnesses
+     match against. */
+  const promptWrap = el('promptwrap', 'mm mm-frame mm-off');
+  promptWrap.innerHTML = keycap('E');
+  const prompt = el('prompt', '', promptWrap);
+
+  const holdOuter = el('hold', 'mm mm-frame');
+  holdOuter.innerHTML = '<div class="mm-cast-track"><div class="mm-cast-fill"></div></div>';
+  const holdFill = holdOuter.querySelector('.mm-cast-fill');
   holdOuter.style.display = 'none';
 
-  const controls = el('controls', 'right:12px;top:12px;padding:10px 14px;'
-    + 'background:rgba(12,10,8,0.62);border-radius:5px;line-height:1.8;');
-  controls.innerHTML = '<div style="opacity:0.75;margin-bottom:4px">Commandes</div>'
+  const event = el('event', 'mm');
+
+  /* ---- key bindings ----------------------------------------------------- */
+  const controls = el('controls', 'mm mm-frame');
+  controls.innerHTML = '<div class="mm-title" style="margin-bottom:3px">Commandes</div>'
     + CONTROLS.map(([k, what]) =>
-        `<div><span style="color:#ffe6b0">${k}</span>`
-        + `<span style="opacity:0.72"> — ${what}</span></div>`).join('');
+        `<div class="mm-row"><span class="mm-keys">${k.split(' / ').map(keycap).join('<i class="mm-or">/</i>')}</span>`
+        + `<span class="mm-what">${what}</span></div>`).join('');
   let controlsOpen = true;
 
   /* ---- the dig gauge (#51) ----------------------------------------------
@@ -115,27 +132,38 @@ export function createHud() {
      over the thing being worked.
 
      SVG rather than canvas: one element, no per-frame raster, and the ring is
-     a single stroke-dasharray write per frame. It is positioned by a screen
-     point the caller projects, so this file never learns what a camera is. */
-  const DIAL = 108;                     // viewBox units; CSS scales it
-  const R_RING = 42;
+     a single stroke-dashoffset write per frame. It is positioned by a screen
+     point the caller projects, so this file never learns what a camera is.
+     Round 17 gilded it — a bezel, a gradient fill, the title face for the
+     number — without touching a single id the harness reads. */
+  const DIAL = 108;
+  const R_RING = 40;
   const CIRC = 2 * Math.PI * R_RING;
-  const dial = el('digdial', 'left:0;top:0;width:108px;height:108px;'
-    + 'pointer-events:none;transform-origin:50% 50%;');
+  const dial = el('digdial', 'mm');
+  dial.style.cssText = 'left:0;top:0;width:108px;height:108px;transform-origin:50% 50%;';
   dial.innerHTML = `<svg viewBox="0 0 ${DIAL} ${DIAL}" width="100%" height="100%">
-    <circle cx="54" cy="54" r="${R_RING}" fill="rgba(10,7,4,0.45)" stroke="rgba(0,0,0,0.55)" stroke-width="7"/>
+    <defs>
+      <linearGradient id="dialbezel" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#f3cf7a"/><stop offset="0.5" stop-color="#8a6429"/><stop offset="1" stop-color="#4a3314"/>
+      </linearGradient>
+      <linearGradient id="dialgrad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#ffe29a"/><stop offset="1" stop-color="#e88a2a"/>
+      </linearGradient>
+    </defs>
+    <circle cx="54" cy="54" r="49" fill="none" stroke="url(#dialbezel)" stroke-width="3"/>
+    <circle cx="54" cy="54" r="${R_RING + 5}" fill="rgba(14,9,4,0.78)" stroke="#000" stroke-width="1.5"/>
     <circle id="dialtrack" cx="54" cy="54" r="${R_RING}" fill="none"
-            stroke="rgba(255,214,150,0.16)" stroke-width="7"/>
+            stroke="rgba(255,214,150,0.14)" stroke-width="7"/>
     <circle id="dialfill" cx="54" cy="54" r="${R_RING}" fill="none"
-            stroke="#ffc46a" stroke-width="7" stroke-linecap="round"
+            stroke="url(#dialgrad)" stroke-width="7" stroke-linecap="round"
             transform="rotate(-90 54 54)"
             stroke-dasharray="${CIRC}" stroke-dashoffset="${CIRC}"/>
     <circle id="dialpulse" cx="54" cy="54" r="${R_RING}" fill="none"
             stroke="#ffe6b0" stroke-width="4" opacity="0"/>
-    <text id="dialpct" x="54" y="52" text-anchor="middle" dominant-baseline="middle"
-          font-family="monospace" font-size="21" fill="#ffe6b0">0%</text>
-    <text id="dialcrew" x="54" y="70" text-anchor="middle" dominant-baseline="middle"
-          font-family="monospace" font-size="11" fill="#e6d3ab" opacity="0.8"></text>
+    <text id="dialpct" x="54" y="51" text-anchor="middle" dominant-baseline="middle"
+          style="font:700 20px var(--mm-title)" fill="#f3cf7a">0%</text>
+    <text id="dialcrew" x="54" y="69" text-anchor="middle" dominant-baseline="middle"
+          style="font:600 9.5px var(--mm-body)" fill="#e6d3ab" opacity="0.85"></text>
   </svg>`;
   dial.style.display = 'none';
   const dialFill = dial.querySelector('#dialfill');
@@ -146,6 +174,7 @@ export function createHud() {
 
   let lastSite = null, lastDetail = null, lastPrompt = null;
   let lastObjective = null, lastStock = null, lastEvent = null;
+  let lastUnitId = null, lastUnitKey = null;
 
   // every setter writes only on change: these run every frame, and
   // reassigning textContent unconditionally dirties layout for nothing
@@ -161,18 +190,63 @@ export function createHud() {
     setSite(headline, factors, ok) {
       if (headline !== lastSite) {
         site.textContent = headline;
-        site.style.color = ok ? '#e6d3ab' : '#d98b6a';
+        site.style.color = ok ? '#ecdcb8' : '#e58a6a';
         lastSite = headline;
       }
       if (factors !== lastDetail) { detail.textContent = factors; lastDetail = factors; }
     },
-    setPrompt(text) { lastPrompt = setText(prompt, text, lastPrompt); },
+    setPrompt(text) {
+      if (text === lastPrompt) return;
+      lastPrompt = setText(prompt, text, lastPrompt);
+      promptWrap.classList.toggle('mm-off', !text);
+    },
+
+    /**
+     * The unit frame: who is being played, and — for a caste that manages a
+     * colony — the one number that says when she can lay next (the pile
+     * against the price of a clutch) and the headcount.
+     *
+     * Keyed on the PROFILE, never on "the player": design/castes-et-micro-
+     * macro.md 3 says the HUD depends on who is controlled, and a forager
+     * taken over by #36 gets her own face and no colony bar, with no change
+     * here. `s` is the same colony reading the queen's panel is handed.
+     */
+    setUnit(profile, s) {
+      if (!profile) {
+        if (unit.style.display !== 'none') unit.style.display = 'none';
+        return;
+      }
+      if (unit.style.display !== 'flex') unit.style.display = 'flex';
+      if (profile.id !== lastUnitId) {
+        portrait.innerHTML = portraitSvg(profile);
+        portrait.classList.toggle('mm-elite', !!profile.manages);
+        uName.textContent = cap(profile.label);
+        lastUnitId = profile.id;
+        lastUnitKey = null;
+      }
+      const colonyShown = !!(s && profile.manages);
+      const k = colonyShown
+        ? `${s.reserve}|${s.cost}|${s.counts.worker}|${s.counts.digger}|${s.counts.eggs}`
+        : 'none';
+      if (k === lastUnitKey) return;
+      lastUnitKey = k;
+      uBar.style.display = colonyShown ? 'block' : 'none';
+      uChips.style.display = colonyShown ? 'flex' : 'none';
+      if (!colonyShown) return;
+      const p = s.cost > 0 ? Math.min(1, s.reserve / s.cost) : 0;
+      uBarFill.style.width = `${(p * 100).toFixed(1)}%`;
+      uBarText.textContent = `Réserve ${s.reserve} / ${s.cost}`;
+      uChips.innerHTML = `<span><b>${s.counts.worker}</b> ouvrières</span>`
+        + `<span><b>${s.counts.digger}</b> fouisseuses</span>`
+        + `<span><b>${s.counts.eggs}</b> œufs</span>`;
+    },
+
     /**
      * Draw the dig gauge. `g` is null when there is nothing being dug, else
      * { progress, diggers, sx, sy, scale, visible } — the caller does the
      * projection, so this file stays a DOM file and knows no geometry.
      *
-     * It shows at zero as soon as there is a face, greyed and empty: the
+     * It shows at zero as soon as there is a face, dimmed and empty: the
      * player has to be able to learn where the work happens BEFORE laying
      * anything, or the first clutch of fouisseuses is a guess.
      */
@@ -185,7 +259,7 @@ export function createHud() {
 
       const p = Math.max(0, Math.min(1, g.progress));
       dialFill.style.strokeDashoffset = `${CIRC * (1 - p)}`;
-      dialFill.style.stroke = g.diggers > 0 ? '#ffc46a' : 'rgba(255,196,106,0.45)';
+      dialFill.style.opacity = g.diggers > 0 ? '1' : '0.5';
 
       const pct = Math.round(p * 100);
       if (pct !== lastPct) { dialPct.textContent = `${pct}%`; lastPct = pct; }
@@ -244,7 +318,7 @@ export function createHud() {
       controls.style.display = 'none';
     },
     dispose() {
-      for (const n of [objective, stock, site, detail, prompt, event, holdOuter, controls, dial]) {
+      for (const n of [unit, stock, tracker, promptWrap, holdOuter, event, controls, dial]) {
         if (n.parentNode) n.parentNode.removeChild(n);
       }
     },

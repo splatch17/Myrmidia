@@ -1,6 +1,7 @@
 import { paceCost } from '../core/pace.js';
 import { groundY } from '../world/index.js';
 import { nodeInReach, takeFromNode, countLabel, KIND_LABEL, resourceNodes } from './resources.js';
+import { insideNest } from './nest.js';
 
 /* ==========================================================================
    The harvest loop (#29): find something, spend time taking it, carry it
@@ -62,6 +63,12 @@ export function createHarvest() {
    * harvested nothing at all.
    */
   function target(ant, bodyR) {
+    /* Same reason climb.js's nearestClimbable() refuses underground (#64):
+       resource nodes are rooted in the lawn and resolved in 2D, and the same
+       harness that proved #64's fix found a live case of this twin — a seed
+       node's (x, z) sitting directly above a stretch of the dug-out gallery
+       offered "récolter graine" a nest depth under it. */
+    if (insideNest(ant.x, ant.z)) return null;
     if (state.activeId !== null) {
       const nodes = resourceNodes();
       for (let i = 0; i < nodes.length; i++) {

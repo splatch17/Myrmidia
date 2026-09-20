@@ -109,11 +109,32 @@ export const FOUNDING_QUEEN = {
      the day the player hops into a forager the panel has to go away on its
      own. Absent on WORKER and DIGGER, which is the whole test. */
   manages: true,
-  scale: 2.2,
+  /* 2.2 -> 1.9. Not a change of mind about how big a queen is, a change of
+     mind about how big she should be ON SCREEN once the game moved indoors:
+     at 2.2 she filled a corridor she was meant to walk down, and the camera
+     spent the whole descent pressed into her gaster. Every bore in
+     world/excavation.js is still cut for the 2.2 body (QUEEN_R there says so
+     outright and is deliberately NOT following her down), so the nest keeps
+     ~15% more clearance than it was drawn with rather than getting tighter as
+     she shrinks. She is still nearly twice a worker, which is what the
+     silhouette has to say. */
+  scale: 1.9,
   legs: QUEEN_LEGS,
   body: QUEEN_BODY,
   breathes: true,
-  colors: { chitinA: 0xdda254, chitinB: 0x8f5a25, limb: 0x94612a, mandible: 0xe8c078, eye: 0x100c06 },
+  // #71: she used to sit at the same value AND hue as the soil (chitinB
+  // ~0x8f5a25 vs the ground's own #86673B/#5A4529 — same brown-olive family,
+  // same luma band). chitinB carries the gaster, her single largest silhouette
+  // against the dirt (antMesh.js), so that overlap was the standing defect.
+  // Pushed off the soil's axis two ways at once: hue rotated toward rouille
+  // (#E07356 — more red, far less green than the soil's olive brown) rather
+  // than staying on the same brown-gold axis, and value raised clear of the
+  // soil's own range (#5A4529..#86673B, luma ~71-107) so a hue-only fix does
+  // not evaporate the moment she stands in shadow. chitinA (thorax/head) and
+  // mandible pushed brighter and more saturated the same direction (chitine/
+  // miel, not the soil's muddier gold) so the whole body reads as one
+  // creature, not a patched gaster.
+  colors: { chitinA: 0xedae46, chitinB: 0xbd4e23, limb: 0xa85a28, mandible: 0xf2c67a, eye: 0x100c06 },
   // She is more than twice a worker's size and still slower in absolute
   // terms: ~0.4 body-lengths a second against the worker's ~1.15, and a turn
   // rate less than half as sharp, so she pivots like something that weighs
@@ -121,16 +142,46 @@ export const FOUNDING_QUEEN = {
   maxSpeed: 12.5,
   sprint: 1.5,
   turnRate: 4.2,
-  legLen: [2.7, 2.9],
-  stride: 7.0,
+  /* #70: QUEEN_LEGS' hip/rest layout is world/queen.js's own — a *wider*
+     stance than the worker's, on purpose (she reads as heavy), but its
+     numbers came from the seated queen's silhouette and were never checked
+     against a walking IK's reach. Percentages below, not raw units, ON
+     PURPOSE: `scale` cancels out of every one of them, so they stay true
+     the next time she is resized (she already went 2.2 -> 1.9 once) instead
+     of quietly going stale like a raw-unit comment would — see
+     CONTRIBUTING.md on constants left behind by a scale change, which is
+     exactly how this defect was born in the first place.
+
+     Measured offline (a standalone gait simulation, cross-checked against
+     scripts/verify-legs-70.mjs's in-browser numbers) walking a straight
+     line at her own max/sprint speed: even standing still, her rear rest
+     foot alone already sits at ~81% of her (worker-inherited, unchanged)
+     leg's reach, and a planted foot has to stay put while the whole body
+     walks on past it for half a gait cycle — for the rear legs that trip
+     pushed the required reach to ~150-160% of what the leg could actually
+     cover, well past what any leg length short of absurd could fix without
+     also slowing her cadence into "vibrating" territory (fully closing the
+     gap needs a stride short enough to roughly double her step rate). So
+     this is a partial, honest correction, not a full one: legLen is 13%
+     longer — the same rest-reach margin the worker already enjoys,
+     restoring what should have been kept in step when QUEEN_LEGS was
+     widened — and stride is trimmed 29% (cadence goes up ~40%, still
+     nowhere near a dash). Together they bring the worst case down to
+     ~115-120% of reach without erasing "heavy lumber". The render-side
+     clamp (legs.js solveKnee) is what actually guarantees the bone-length
+     invariant regardless of any of these numbers — this pair only changes
+     how often it has to do real work. */
+  legLen: [3.05, 3.3],
+  stride: 5.0,
   climbSpeed: 12,    // scaled by `scale` at use, i.e. ~26 u/s: fast in world
                      // units, slow relative to her own body
   bodyR: 1.5,
-  // #18's framing kept, not its literal: a body 2.2x as long needs a longer
-  // boom to occupy the same share of the screen. 58 is a touch tighter than
-  // 36*2.2 on purpose — the prologue is played outdoors, where too long a
-  // boom flattens the meadow into a map.
-  cam: { dist: 58, min: 16, max: 140 },
+  // #18's framing kept, not its literal: a body 1.9x as long needs a longer
+  // boom to occupy the same share of the screen. 50 is a touch tighter than
+  // 36*1.9 on purpose — the prologue is played outdoors, where too long a
+  // boom flattens the meadow into a map. Followed the body down from 58 so
+  // she keeps the same share of the frame, which is what was actually framed.
+  cam: { dist: 50, min: 14, max: 120 },
 };
 
 /* The digger (#38). A row in this table and not a file of its own — that is
