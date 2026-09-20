@@ -9,10 +9,11 @@ import {
   makeExcavation, setExcavation, clearExcavation, getExcavation,
   excavationFloorAt, excavationHeadroomAt, excavationFootprint, excavationDescentPath,
   excavationShellTopAt, chamberDoorR,
-  rampCentre, rampParam, rampOffset, rampFloorAt, chamberFloorAt,
+  rampCentre, rampParam, rampOffset, rampFloorAt,
+  roomFloorY, roomFloorAt, linkFloorY, linkFloorAt, deepestFloorY,
   addRoom, addLink, addDigFace, excavationDigFaces, advanceDigFace,
   linkMouthS, linkTrimS, mouthFlareAt, roomTrimR,
-  RAMP_DESCEND, RAMP_TURN, CHAMBER_R, CHAMBER_ROOF, LINK_ROOF, NEST_DEPTH, ROOF_COVER,
+  RAMP_DESCEND, RAMP_TURN, RAMP_SLOPE, CHAMBER_R, CHAMBER_WALL, CHAMBER_ROOF, LINK_ROOF, NEST_DEPTH, ROOF_COVER,
   WALL_OUT, WALL_WOBBLE, TUNNEL_BORE, SPRINGER, MOUTH_FLARE, MOUTH_RUN, TUNNEL_LUMP, DOME_RINGS,
   QUEEN_R, hwAt, APRON_LEN,
 } from './excavation.js';
@@ -420,7 +421,10 @@ const ROOM_ANG = 56;
  */
 function addRoomShell(M, ex, room, seed, ANG, skip) {
   const FLOOR_RINGS = 5, wallRings = 4, domeRings = DOME_RINGS;
-  const floorY = ex.floorY;
+  /* The room's OWN level, not the nest's: since #62 each generation is dug a
+     notch deeper, and a shell built at ex.floorY would stand with its floor in
+     the air over the floor the height field answers. */
+  const floorY = roomFloorY(ex, room);
   const Rd = room.r * WALL_OUT;
   const dh = room.roof - room.wall;
   const skirtR = room.r * (WALL_OUT + WALL_WOBBLE) + 1.6;
@@ -440,7 +444,7 @@ function addRoomShell(M, ex, room, seed, ANG, skip) {
       const rp = skirt && room === ex.chamber ? rampOffset(ex, px, pz) : null;
       const y = rp && Math.abs(rp.lat) - rp.hw < CUT_BATTER
         ? rampFloorAt(ex, px, pz, rp.u, clamp(rp.lat, -rp.hw, rp.hw)) - 0.1
-        : chamberFloorAt(ex, px, pz) - (skirt ? 0.4 : 0);
+        : roomFloorAt(ex, room, px, pz) - (skirt ? 0.4 : 0);
       row.push(M.addVertex(px, y, pz,
         digColour(clamp((wobbleAt(th, ri, seed) - 0.84) / 0.34 + 0.45, 0, 1), 0.26).toArray()));
     }
@@ -539,7 +543,7 @@ function heapY(ex, room, x, z) {
   const seed = first ? ex.seed : (ex.seed + 613) % 9973;
   const base = lawnY(x, z);
   const lump = vnoise(x * 0.13 + seed, z * 0.13 + seed) - 0.5;
-  const peak = Math.max(base + (first ? 1.6 : 1.2), ex.floorY + room.roof + ROOF_COVER * (first ? 1 : 0.6));
+  const peak = Math.max(base + (first ? 1.6 : 1.2), roomFloorY(ex, room) + room.roof + ROOF_COVER * (first ? 1 : 0.6));
   /* The lump is added, not multiplied: multiplied, a low patch of noise took a
      quarter off the heap and let the dome show through it. */
   let y = base + (peak - base) * Math.pow(Math.max(0, 1 - t * t), 0.85) + lump * (first ? 2.2 : 1.6) * (1 - t);
@@ -859,10 +863,12 @@ export function foundNest(x, z) {
     axis: { origin: shell.origin, dir: shell.dir, length: shell.uMax },
     brood: 0,
     sealed: false,
-    /* The chamber's own wall, kept addressable so digging can open it later
-       (punchWall). Not a copy of the geometry — the quad list is six index
-       slots and a midpoint each, and the mesh is the mesh. */
-    _wall: { mesh: shellMesh, quads: shell.wallQuads },
+    /* Every room's wall, by room id, kept addressable so digging can open it
+       later (punchWall). Not a copy of the geometry — a quad is six index slots
+       and four corners, and the mesh is the mesh. Keyed by room because since
+       #62 the wall a corridor leaves through is whichever one the face was on.
+       The chamber's wall lives in the shell mesh, with the cut and the floor. */
+    _walls: { chamber: { mesh: shellMesh, quads: shell.wallQuads } },
     _furnishing: furnishing,
     _coldLight: coldLight,
     _warmLight: warmLight,
@@ -945,14 +951,76 @@ export function descentPath() {
 const LINK_HW = QUEEN_R * 3.0;          // 9.9, was 6.6
 /** Still small on purpose (the porter's standing note: the goal is not a big
  *  nest), but a room and not a bulge at the end of a corridor that is now
- *  twenty units wide. 1.55x the round-16 hall. */
-const HALL_R = QUEEN_R * 4.0;           // 13.2, was 8.5
-/** How far the hall stands off the chamber, wall to wall. */
+ *  twenty units wide, and — since #62 — a HUB: it has to carry its entrance
+ *  and two more doorways with wall left between them. 4.0 could not: a mouth
+ *  of this bore takes 2 x asin(12.5 / (r x WALL_OUT)) of its wall, which at
+ *  13.2 is 123 degrees, so three of them left no room a player could read as a
+ *  room. The arithmetic is in facesToPlan() and this number answers it. */
+const HALL_R = QUEEN_R * 4.8;           // 15.84, was 13.2
+/** How far a room stands off its parent, wall to wall. */
 const HALL_GAP = QUEEN_R * 4.2;         // 13.9, was 14
-/** Ant-seconds for the first hall. One fouisseuse is a real wait, three feel
- *  like a crew — the sizing DIG_SECONDS had, kept so the design promise "two
- *  dig twice as fast" stays legible at the gauge. */
-const FIRST_FACE_SECONDS = 75;
+
+/** Half-width of a BRANCH corridor — the ones dug from the hall on. Narrower
+ *  than the first (9.9) and that is the room's wall talking, not taste: three
+ *  mouths of the first bore do not fit on any room this nest is allowed to
+ *  have. Still 2.2 queens each side, i.e. her body and the camera behind it,
+ *  which is what #67 measured the minimum against. */
+const BRANCH_HW = QUEEN_R * 2.2;        // 7.26
+
+/** How much deeper each generation of rooms sits (contract §8, "une profondeur
+ *  par génération"). Small on purpose: the corridor has to lose it between the
+ *  two doorways, which is some twelve units of run, and what must stay small is
+ *  the height change per STEP (movement.js writes ant.y = groundY(x, z) with no
+ *  notion of falling). At 4.6 over 12 the ramp is 0.38, under the descent's own
+ *  RAMP_SLOPE. */
+const GEN_DROP = QUEEN_R * 1.4;         // 4.62
+
+/** Ant-seconds per generation, one constant each, so an arbitration of #63 is a
+ *  line to change and not a hunt (contract §8). The first is the sizing
+ *  DIG_SECONDS had — one fouisseuse is a real wait, three feel like a crew —
+ *  and the two others are the contract's starting values, not an arbitration. */
+const FIRST_FACE_SECONDS = 75;          // on the founding chamber's wall
+const HALL_FACE_SECONDS = 120;          // on the hall's
+const DEEP_FACE_SECONDS = 180;          // one generation deeper
+const FACE_SECONDS = [FIRST_FACE_SECONDS, HALL_FACE_SECONDS, DEEP_FACE_SECONDS];
+
+/** The last generation of rooms whose walls carry faces. Rooms deeper than this
+ *  are leaves: the nest stops growing rather than growing without bound, and
+ *  what bounds it is a number, not the player running out of patience. */
+const LAST_DIG_GEN = FACE_SECONDS.length - 1;
+
+/**
+ * Rooms come in sizes (the porter, mid-#62), measured against the hall, and the
+ * size is a factor on BOTH the plan radius and the price. So a face answers two
+ * questions at once — how far the work goes and how big what it opens is — and
+ * a player weighing two worksites is weighing a real trade rather than reading
+ * two numbers that mean the same thing.
+ *
+ * `size` is a technical label, like soilAt()'s `kind`: the word a player reads
+ * is player/**'s decision, not the world's.
+ */
+const ROOM_SIZES = [
+  { size: 'small', k: 0.75 },
+  { size: 'medium', k: 1.0 },
+  { size: 'large', k: 1.4 },
+];
+/** Which size each face slot on a wall asks for, before the ground gets a say:
+ *  a middle-sized one first, then the extremes, so a room's two exits are
+ *  visibly different jobs. A slot that cannot fit its size falls back to the
+ *  smaller ones at the same bearing (facesToPlan) — that is a choice made
+ *  BEFORE publishing, not a repair after. */
+const SLOT_SIZES = ['medium', 'large', 'small'];
+const sizeByName = (name) => ROOM_SIZES.find((s) => s.size === name) || ROOM_SIZES[1];
+
+/** Half-width of the corridor that opens a room of generation `gen`. */
+function linkHwFor(gen) { return gen <= 1 ? LINK_HW : BRANCH_HW; }
+
+/** What a face on the wall of a room of generation `gen` costs, for a room of
+ *  size factor `k`: the generation ramp times the size (contract §8 + the
+ *  porter's ramp). Rounded, because a gauge reads it. */
+function faceCost(gen, k) {
+  return Math.round(FACE_SECONDS[Math.min(gen, FACE_SECONDS.length - 1)] * k);
+}
 
 const ANG_TUNNEL = 20;   // = SECTION's point count, below
 
@@ -979,35 +1047,309 @@ function arrivalHeading(ex) {
   return [dx / l, dz / l];
 }
 
-/** The first face: on the chamber wall, dead ahead of the arriving queen. */
+/* ---- judging a DIRECTION, not a point (#59) ------------------------------
+
+   canFoundAt() only ever looked at the chamber's own point: slope, water, rock,
+   bounds, at the centre and nowhere else. The round-16 measurement against the
+   real groundY() found 622 of 2504 legal point-and-direction pairs whose
+   gallery roof came out ABOVE the terrain somewhere along its length, 27 of them
+   from the mouth onward, the worst by 21.3 units. A flat, dry site can aim
+   straight into a bank nobody looked at.
+
+   So a face is published only if the corridor it opens AND the room at the end
+   of it stay buried over their WHOLE run, and the run is sampled — centre line
+   and both FLANKS, because a test that follows the centre line never touches a
+   wall (PROGRESS.md trap 7). A direction that fails is not corrected
+   afterwards: it is not offered. Same rule as canFoundAt(), same reason.
+
+   WHAT "BURIED" MEANS HERE, measured rather than asserted. Nothing in this nest
+   is under virgin meadow: the chamber's own dome stands some seven units ABOVE
+   it and is covered by its spoil, which is both what an ant does and the only
+   surface mark roofed ground gets. So the test cannot be "under the lawn" — it
+   is "needs no more spoil than the chamber itself needed", which is what the
+   contract's "la même marge de couverture que le dôme de la chambre" says, and
+   it is a budget the world has already been seen to pay. A bearing that falls
+   away downhill blows through it long before anything surfaces. */
+
+/** Soil the founding chamber's own dome needed piled over it — the reference
+ *  every later room is held to. */
+function coverBudget(ex) {
+  const c = ex.chamber;
+  return Math.max(0, roomFloorY(ex, c) + c.roof + ROOF_COVER - lawnY(c.x, c.z));
+}
+/**
+ * How much more spoil than the chamber's own dome needed a candidate may ask
+ * for. Half the depth of the nest: a heap that much taller than the chamber's
+ * still reads as the same landmark, and past it the ground has fallen away by
+ * more than the nest is deep — the corridor is running out of the hill it was
+ * dug into, which is exactly the #59 defect.
+ *
+ * MEASURED, not chosen. On the harness's site the chamber's own bill is 10.9
+ * units of spoil and the 25 candidate bearings come out between 14.9 and 17.7:
+ * the interesting cases are a few units apart, not a factor apart, so the
+ * threshold has to be set in units and looked at. At 6.5 the bearings that
+ * merely run downhill are offered and the ones that dive off the shoulder of
+ * the knoll are refused, along with every bearing that would put a roof under
+ * the open cut. The #59 measurement's own worst case — a roof 21.3 units over
+ * the terrain — is refused by a wide margin.
+ *
+ * It cannot be zero, and that is worth saying because it looks like it should
+ * be: NOTHING in this nest is under virgin meadow — the chamber's own dome
+ * stands seven units above it and is covered by its spoil — so "no spoil at
+ * all" would refuse every direction on every site, including the one round 18
+ * shipped.
+ */
+const COVER_ALLOWANCE = NEST_DEPTH * 0.5;
+const COVER_STEP = 3.0;
+
+/** Is (x, z) under the OPEN cut — where there is no soil overhead at all, only
+ *  the trench and the batter of its faces? A roof there is a roof with a hole
+ *  in it. Inside the spoil mound the cut is roofed (the lintel), so that part
+ *  does not count. */
+function underOpenCut(ex, x, z) {
+  if (Math.hypot(x - ex.chamber.x, z - ex.chamber.z) <= moundRadius(ex)) return false;
+  const o = rampOffset(ex, x, z, CUT_BANK);
+  return !!o && Math.abs(o.lat) < o.hw + CUT_BATTER + 4;
+}
+
+/** Bounds and water, for one sample of a plan. */
+function samplePlaceable(x, z) {
+  const B = LAWN_BOUNDS;
+  // the gallery of the pre-existing nest runs under here, as canFoundAt() says
+  if (Math.abs(x) < 34 && z < 34) return false;
+  return x >= B.x0 + 2 && x <= B.x1 - 2 && z >= B.z0 + 1 && z <= B.z1 - 2
+    && waterDepthAt(x, z) <= 0 && distanceToWater(x, z) >= MIN_WATER * 0.6;
+}
+
+/** A candidate: where the room would go, how deep, and the corridor to it. */
+function makePlan(ex, from, hx, hz, gen, sizeName) {
+  const spec = sizeByName(sizeName);
+  const r = HALL_R * spec.k;
+  const reach = from.r + HALL_GAP + r;
+  const hw = linkHwFor(gen);
+  /* The drop is clamped by the run available between the two doorways. A fixed
+     notch on a short corridor is a cliff, and a cliff is a teleport in play. */
+  const run = Math.max(6, reach - roomTrimR(from) - (r * WALL_OUT - 0.5));
+  const drop = Math.min(GEN_DROP, run * RAMP_SLOPE * 0.85);
+  return {
+    from, hx, hz, gen, size: spec.size, k: spec.k,
+    x: from.x + hx * reach, z: from.z + hz * reach,
+    r, hw, roof: LINK_ROOF, wall: CHAMBER_WALL, domeRoof: CHAMBER_ROOF,
+    fy: roomFloorY(ex, from) - drop,
+    reach,
+  };
+}
+
+/** Does the plan's whole run — corridor and room — stay buried, in bounds and
+ *  out of the water? */
+function planStaysBuried(ex, plan) {
+  const budget = coverBudget(ex) + COVER_ALLOWANCE;
+  const from = plan.from;
+  const bad = (x, z, top) => !samplePlaceable(x, z) || underOpenCut(ex, x, z)
+    || top + ROOF_COVER - lawnY(x, z) > budget;
+
+  const sA = roomTrimR(from), sB = plan.reach - (plan.r * WALL_OUT - 0.5);
+  const px = -plan.hz, pz = plan.hx;
+  for (let s = sA; s <= sB + COVER_STEP; s += COVER_STEP) {
+    const at = Math.min(s, sB);
+    const fy = lerp(roomFloorY(ex, from), plan.fy, clamp((at - sA) / Math.max(sB - sA, 1e-3), 0, 1));
+    /* The tube's own flare, not its widest section everywhere: mouthFlareAt()
+       only opens the bore out within MOUTH_RUN of each doorway, and charging the
+       mouth's crest along the whole corridor overstates its roof by 2.4 units —
+       enough to refuse directions whose built roof is perfectly well buried. */
+    const flare = 1 + MOUTH_FLARE * Math.pow(clamp(1 - Math.min(at - sA, sB - at) / MOUTH_RUN, 0, 1), 2);
+    const bore = plan.hw * TUNNEL_BORE * flare * (1 + TUNNEL_LUMP);
+    const crest = plan.roof * flare * (1 + TUNNEL_LUMP);
+    const cx = from.x + plan.hx * at, cz = from.z + plan.hz * at;
+    for (const k of [-1, 0, 1]) {
+      if (bad(cx + px * k * bore, cz + pz * k * bore, fy + crest)) return false;
+    }
+  }
+
+  /* The room, over its whole plan: the dome's own profile at three radii, so
+     the rim is judged as well as the apex. */
+  for (const q of [0, 0.6, 1]) {
+    const rad = plan.r * WALL_OUT * q;
+    const top = plan.fy + plan.wall + (plan.domeRoof - plan.wall) * Math.sqrt(Math.max(0, 1 - q * q));
+    const n = q === 0 ? 1 : 12;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      if (bad(plan.x + Math.cos(a) * rad, plan.z + Math.sin(a) * rad, top)) return false;
+    }
+  }
+  /* And the hem of the heap that will cover it has to be on the map. */
+  const heapR = plan.r * (WALL_OUT + WALL_WOBBLE) + HEAP_SKIRT;
+  const B = LAWN_BOUNDS;
+  return plan.x - heapR >= B.x0 && plan.x + heapR <= B.x1
+    && plan.z - heapR >= B.z0 + 1 && plan.z + heapR <= B.z1;
+}
+
+/** Is the plan clear of everything already dug? Two rooms that intersect are
+ *  one badly shaped room, and a corridor through a room is a hole in its wall
+ *  nobody cut. */
+function planIsClear(ex, plan) {
+  const from = plan.from;
+  for (const r of ex.rooms) {
+    if (r === from) continue;
+    if (Math.hypot(plan.x - r.x, plan.z - r.z) < (plan.r + r.r) * (WALL_OUT + WALL_WOBBLE) + 4) return false;
+  }
+  const sA = roomTrimR(from), sB = plan.reach - (plan.r * WALL_OUT - 0.5);
+  const bore = plan.hw * TUNNEL_BORE * (1 + MOUTH_FLARE);
+  for (let s = sA; s <= sB; s += COVER_STEP) {
+    const x = from.x + plan.hx * s, z = from.z + plan.hz * s;
+    for (const r of ex.rooms) {
+      if (r === from) continue;
+      if (Math.hypot(x - r.x, z - r.z) < r.r * (WALL_OUT + WALL_WOBBLE) + bore + 3) return false;
+    }
+    for (const L of ex.links) {
+      /* The corridors that meet at this room are excluded: they share its
+         floor by design, and what keeps two of them apart is the jamb of wall
+         between their doorways (facesToPlan), not a distance. */
+      if ((L.ends || []).includes(from.id)) continue;
+      const t = clamp(((x - L.ax) * L.hx + (z - L.az) * L.hz) / L.len, 0, 1);
+      const qx = L.ax + L.hx * L.len * t, qz = L.az + L.hz * L.len * t;
+      if (Math.hypot(x - qx, z - qz) < L.hw * TUNNEL_BORE + bore + 3) return false;
+    }
+  }
+  return true;
+}
+
+/** Half the angle a corridor's mouth takes out of a room's wall. */
+function doorHalfAngle(room, hw) {
+  const Rd = room.r * WALL_OUT;
+  return Math.asin(Math.min(0.985, (hw * TUNNEL_BORE * (1 + MOUTH_FLARE)) / Rd));
+}
+/** Wall that must be left standing between two doorways, in radians of the
+ *  room's own circle. Below this a room stops reading as a room and becomes a
+ *  crossroads — which is not the shape a hub wants, and not what a wall the
+ *  player has to recognise a FACE on can afford either. */
+const JAMB = 0.42;
+
+/**
+ * Which faces a room's wall can carry, and where. Two or three (contract §8),
+ * and which of the two is arithmetic rather than taste: a mouth of this bore
+ * takes 2 x asin(bore / Rd) out of the wall, the corridor the room was opened
+ * by already has one, and what is left has to hold the new ones plus a jamb
+ * each. Then every candidate bearing is judged over its whole run
+ * (planStaysBuried) and rotated off its ideal until it passes — or dropped.
+ */
+function facesToPlan(ex, room, base) {
+  const gen = room.gen || 0;
+  const hw = linkHwFor(gen + 1);
+  const mine = doorHalfAngle(room, hw);
+  /* How far off `base` a doorway may sit before it eats into the one the room
+     was opened by, which lies at base + PI. */
+  const limit = Math.PI - (doorHalfAngle(room, room.gen <= 1 ? LINK_HW : BRANCH_HW) + mine + JAMB);
+  const need = 2 * mine + JAMB;
+  if (limit <= 0) return [];
+  const want = clamp(1 + Math.floor((2 * limit) / need), 1, 3);
+  const ideal = want === 1 ? [0] : [];
+  for (let i = 0; want > 1 && i < want; i++) ideal.push(-limit + (i * 2 * limit) / (want - 1));
+
+  const a0 = Math.atan2(base[1], base[0]);
+  const taken = [];
+  const out = [];
+  for (let i = 0; i < ideal.length; i++) {
+    let placed = null;
+    for (const nudge of [0, 0.18, -0.18, 0.36, -0.36, 0.54, -0.54]) {
+      const dev = ideal[i] + nudge;
+      if (Math.abs(dev) > limit) continue;
+      if (taken.some((t) => Math.abs(t - dev) < need)) continue;
+      const th = a0 + dev;
+      const hx = Math.cos(th), hz = Math.sin(th);
+      /* The intended size first, then smaller ones at the same bearing: a
+         direction that cannot hold a large room may still hold a small one,
+         and choosing between candidates is not the same thing as repairing a
+         bad one after the fact. */
+      for (const name of [SLOT_SIZES[i % SLOT_SIZES.length], 'medium', 'small']) {
+        const plan = makePlan(ex, room, hx, hz, gen + 1, name);
+        if (out.some((p) => Math.hypot(p.x - plan.x, p.z - plan.z) < (p.r + plan.r) * (WALL_OUT + WALL_WOBBLE) + 4)) continue;
+        if (!planIsClear(ex, plan) || !planStaysBuried(ex, plan)) continue;
+        placed = { plan, dev };
+        break;
+      }
+      if (placed) break;
+    }
+    if (!placed) continue;
+    taken.push(placed.dev);
+    out.push(placed.plan);
+  }
+  return out;
+}
+
+/** Publish a room's faces on its wall. Called the moment the room opens, which
+ *  is what makes the nest grow rather than end. */
+function publishRoomFaces(ex, room, base) {
+  if ((room.gen || 0) > LAST_DIG_GEN) return [];
+  const out = [];
+  let slot = 0;
+  for (const plan of facesToPlan(ex, room, base)) {
+    const id = `${room.id}-${'abc'[slot] || slot}`;
+    out.push(addDigFace(`face-${id}`,
+      room.x + plan.hx * room.r * 0.97, room.z + plan.hz * room.r * 0.97,
+      roomFloorY(ex, room), -plan.hx, -plan.hz,
+      faceCost(room.gen || 0, plan.k), {
+        kind: 'room',
+        id,
+        x: plan.x, z: plan.z, r: plan.r, size: plan.size,
+        gen: plan.gen, fy: plan.fy, hw: plan.hw,
+        from: { id: room.id, x: room.x, z: room.z, r: room.r },
+      }));
+    slot++;
+  }
+  return out;
+}
+
+/**
+ * The first face: on the chamber wall, dead ahead of the arriving queen — and
+ * only where the hall behind it stays buried (#59), and where that hall can
+ * carry work of its own.
+ *
+ * THE LOOKAHEAD, and why the hall of all rooms needs one. Every other room in
+ * the nest is dug from a wall somebody chose out of two or three offers, so a
+ * dead end is a choice the player made. The hall is not: it is the only room
+ * the first face can open, and if it lands somewhere its own walls cannot be
+ * dug — thirty units off the south edge of the map, back to the chamber — then
+ * the nest is finished after one dig and nothing on screen says why. Measured on
+ * the harness's own site: dead ahead is perfectly well buried and carries
+ * exactly one face; twenty degrees over, it carries two.
+ *
+ * So the bearing is chosen with one generation of foresight, and the preference
+ * is stated in that order: a hall with two faces, else one, else any hall that
+ * is buried. Never no hall — canFoundAt() has already said this place is legal,
+ * and a nest that cannot be dug would make the two verdicts disagree.
+ */
 function placeFirstFace(ex) {
   const [ax, az] = arrivalHeading(ex);
   const c = ex.chamber;
-  /* Dead ahead if the hall and its heap fit on the meadow there, otherwise
-     the smallest turn (never past 40 degrees, so the face stays in front of
-     her) that makes them fit. Since #67 the hall stands 45 units out, and dead
-     ahead ran its heap off the south edge of the map on the harness's own
-     site. */
-  const B = LAWN_BOUNDS;
-  const reach = c.r + HALL_GAP + HALL_R;
-  const heapR = HALL_R * (WALL_OUT + WALL_WOBBLE) + HEAP_SKIRT;
-  const fits = (x, z) => x - heapR >= B.x0 && x + heapR <= B.x1 && z - heapR >= B.z0 + 1 && z + heapR <= B.z1
-    && waterDepthAt(x, z) <= 0 && distanceToWater(x, z) >= MIN_WATER * 0.6;
-  let hx = ax, hz = az;
-  for (const a of [0, 0.25, -0.25, 0.5, -0.5, 0.7, -0.7]) {
-    const rx = ax * Math.cos(a) - az * Math.sin(a), rz = ax * Math.sin(a) + az * Math.cos(a);
-    if (fits(c.x + rx * reach, c.z + rz * reach)) { hx = rx; hz = rz; break; }
-  }
-  return addDigFace('face-hall',
-    c.x + hx * c.r * 0.97, c.z + hz * c.r * 0.97,
-    -hx, -hz, FIRST_FACE_SECONDS, {
+  const a0 = Math.atan2(az, ax);
+  /* Smallest turn first: the face has to be in front of her when she arrives
+     (#48), so the deviation is a preference and the ground is the requirement. */
+  const devs = [0];
+  for (let k = 1; k <= 12; k++) devs.push(k * 0.26, -k * 0.26);
+  const publish = (hx, hz, plan) => addDigFace('face-hall',
+    c.x + hx * c.r * 0.97, c.z + hz * c.r * 0.97, roomFloorY(ex, c),
+    -hx, -hz, faceCost(0, plan.k), {
       kind: 'room',
       id: 'hall',
-      x: c.x + hx * (c.r + HALL_GAP + HALL_R),
-      z: c.z + hz * (c.r + HALL_GAP + HALL_R),
-      r: HALL_R,
-      from: { x: c.x, z: c.z },
+      x: plan.x, z: plan.z, r: plan.r, size: plan.size,
+      gen: 1, fy: plan.fy, hw: plan.hw,
+      from: { id: c.id, x: c.x, z: c.z, r: c.r },
     });
+
+  for (const wantGrowth of [2, 1, 0]) {
+    for (const d of devs) {
+      const hx = Math.cos(a0 + d), hz = Math.sin(a0 + d);
+      const plan = makePlan(ex, c, hx, hz, 1, 'medium');
+      if (!planStaysBuried(ex, plan)) continue;
+      if (wantGrowth > 0) {
+        const hall = { id: 'hall', x: plan.x, z: plan.z, r: plan.r, gen: 1, fy: plan.fy };
+        if (facesToPlan(ex, hall, [hx, hz]).length < wantGrowth) continue;
+      }
+      return publish(hx, hz, plan);
+    }
+  }
+  return null;
 }
 
 /* ---- meshes ------------------------------------------------------------- */
@@ -1066,10 +1408,15 @@ const SECTION = (() => {
  * outside that span is what put black holes either side of the first doorway
  * this file ever punched.
  */
+/* `y` is ABSOLUTE, and it has to be: the corridor's floor ramps between the
+   two rooms' levels now, so "height above the floor" is only meaningful next
+   to a particular s, and a caller that subtracted a floor of its own choosing
+   would cut the doorway at the wrong height at the deep end. */
 function linkAperture(ex, L, shrink = 1) {
-  return (x, z, h) => {
+  return (x, z, y) => {
     const s = (x - L.ax) * L.hx + (z - L.az) * L.hz;
     if (s < 0 || s > L.len) return false;
+    const h = y - linkFloorY(ex, L, s);
     const flare = mouthFlareAt(ex, L, s) * shrink;
     const hw = L.hw * TUNNEL_BORE * flare;
     const lat = -(x - L.ax) * L.hz + (z - L.az) * L.hx;
@@ -1125,10 +1472,11 @@ function buildTunnelMesh(ex, L, seed) {
       const lat = k * L.hw * TUNNEL_BORE * flare * lump;
       const s = linkTrimS(ex, L, u, lat);
       const vx = L.ax + L.hx * s + px * lat, vz = L.az + L.hz * s + pz * lat;
-      /* The floor row is the room's own floor, sampled at the vertex: the two
-         have to be the same surface, not two surfaces that agree on average. */
-      const y = hk <= 0 ? chamberFloorAt(ex, vx, vz)
-        : ex.floorY + hk * L.roof * flare * lump;
+      /* The floor row is the corridor's own floor function, sampled at the
+         vertex: the two have to be the same surface, not two surfaces that
+         agree on average. */
+      const y = hk <= 0 ? linkFloorAt(ex, L, vx, vz)
+        : linkFloorY(ex, L, s) + hk * L.roof * flare * lump;
       row.push(M.addVertex(vx, y, vz, digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.24).toArray()));
     }
     rows.push(row);
@@ -1154,7 +1502,7 @@ function buildTunnelMesh(ex, L, seed) {
  * openTheMeadow() uses on the lawn, and for the same reason: this shell is
  * dug once and is not re-generated for anything.
  */
-function punchWall(wall, aperture, floorY) {
+function punchWall(wall, aperture) {
   if (!wall || !wall.mesh || !wall.mesh.geometry) return 0;
   const idx = wall.mesh.geometry.getIndex();
   if (!idx) return 0;
@@ -1162,7 +1510,7 @@ function punchWall(wall, aperture, floorY) {
   let cut = 0;
   for (const q of wall.quads) {
     if (q.gone) continue;
-    if (!q.corners.every((c) => aperture(c[0], c[1], c[2] - floorY))) continue;
+    if (!q.corners.every((c) => aperture(c[0], c[1], c[2]))) continue;
     const keep = arr[q.at];
     for (let k = 0; k < 6; k++) arr[q.at + k] = keep;
     q.gone = true;
@@ -1175,14 +1523,22 @@ function punchWall(wall, aperture, floorY) {
   return cut;
 }
 
-/** A room: floor, straight walls, dome. `openAt(x, z, heightAboveFloor)` is
- *  the arriving corridor's own bore (linkAperture), so the hole in the wall is
- *  the shape of the thing that fills it and not an approximation of it. */
+/**
+ * A room: floor, straight walls, dome. `openAt(x, z, y)` is the arriving
+ * corridor's own bore (linkAperture), so the hole in the wall is the shape of
+ * the thing that fills it and not an approximation of it.
+ *
+ * Returns the wall quads as well as the geometry: a room's wall is not finished
+ * when it is built any more. Its own faces are dug later, and each one takes
+ * another doorway out of it (punchWall) — which is only possible if somebody
+ * kept the quad list. Round 16 threw it away here, and that is why only the
+ * chamber could ever grow a corridor.
+ */
 function buildRoomMesh(ex, room, seed, openAt) {
   const M = new MeshBuilder();
-  addRoomShell(M, ex, room, seed, ROOM_ANG,
-    (i, wallRings, q) => q.every((v) => openAt(v.x, v.z, v.y - ex.floorY)));
-  return M.toBufferGeometry();
+  const quads = addRoomShell(M, ex, room, seed, ROOM_ANG,
+    (i, wallRings, q) => q.every((v) => openAt(v.x, v.z, v.y)));
+  return { geometry: M.toBufferGeometry(), quads };
 }
 
 /* ---- the pan -------------------------------------------------------------
@@ -1239,12 +1595,15 @@ function buildPanMesh(ex) {
   const M = new MeshBuilder();
   const grid = [];
   const dug = [];
+  // under the DEEPEST floor, not the chamber's: the deeper generations would
+  // otherwise be dug straight through their own backstop.
+  const panY = deepestFloorY(ex) - PAN_DROP;
   for (let a = 0; a <= cols; a++) {
     const col = [], dcol = [];
     for (let c = 0; c <= rows; c++) {
       const x = b.x0 + (a / cols) * (b.x1 - b.x0);
       const z = b.z0 + (c / rows) * (b.z1 - b.z0);
-      col.push(M.addVertex(x, ex.floorY - PAN_DROP, z, digColour(0.25, 0.10).toArray()));
+      col.push(M.addVertex(x, panY, z, digColour(0.25, 0.10).toArray()));
       dcol.push(excavationFloorAt(x, z) !== null || excavationShellTopAt(x, z) !== null);
     }
     grid.push(col);
@@ -1338,7 +1697,7 @@ function buildBerm(ex, L, seed) {
       const x = L.ax + L.hx * u + px * lat, z = L.az + L.hz * u + pz * lat;
       const base = lawnY(x, z);
       const lump = vnoise(x * 0.13 + seed + 7, z * 0.13 + seed + 7) - 0.5;
-      const crest = ex.floorY + L.roof * (1 + TUNNEL_LUMP) + ROOF_COVER * 0.55;
+      const crest = linkFloorY(ex, L, u) + L.roof * (1 + TUNNEL_LUMP) + ROOF_COVER * 0.55;
       const t = Math.abs(k);
       let y = base + Math.max(0, crest - base) * Math.pow(1 - t * t, 0.85) + lump * 1.2 * (1 - t);
       const shell = excavationShellTopAt(x, z);
@@ -1401,15 +1760,20 @@ function openRoom(spec) {
   const dx = spec.x - spec.from.x, dz = spec.z - spec.from.z;
   const l = Math.hypot(dx, dz) || 1;
   const hx = dx / l, hz = dz / l;
+  /* The room the face was on — `chamber` for the first one, and since #62 any
+     room that has grown faces of its own. Everything below that used to say
+     "chamber" says "parent" now, and that is the whole of what let the nest
+     stop at two rooms. */
+  const parent = ex.rooms.find((r) => r.id === spec.from.id) || ex.chamber;
 
-  const room = addRoom(spec.id, spec.x, spec.z, spec.r);
+  const room = addRoom(spec.id, spec.x, spec.z, spec.r, spec.fy, spec.gen || 1);
   /* Both ends well inside the rooms they join. The tube is trimmed back to
      their walls anyway (linkTrimS); what the ends decide is how far the
      walkable strip reaches, and it must reach into the rooms' floors. */
   const link = addLink(`link-${spec.id}`,
-    { x: spec.from.x + hx * (nest.chamber.r * 0.5), z: spec.from.z + hz * (nest.chamber.r * 0.5) },
+    { x: parent.x + hx * (parent.r * 0.5), z: parent.z + hz * (parent.r * 0.5) },
     { x: spec.x - hx * (spec.r * 0.5), z: spec.z - hz * (spec.r * 0.5) },
-    LINK_HW, LINK_ROOF, ['chamber', spec.id]);
+    spec.hw || LINK_HW, LINK_ROOF, [parent.id, spec.id]);
 
   const tunnel = new THREE.Mesh(buildTunnelMesh(ex, link, seed), nestMaterial());
   tunnel.name = `nest-${link.id}`;
@@ -1425,30 +1789,56 @@ function openRoom(spec) {
      chords, so the section it actually covers is a hair smaller than the one
      this function describes. */
   const bore = linkAperture(ex, link, 0.96);
-  const mesh = new THREE.Mesh(buildRoomMesh(ex, room, seed, bore), nestMaterial());
+  const built = buildRoomMesh(ex, room, seed, bore);
+  const mesh = new THREE.Mesh(built.geometry, nestMaterial());
   mesh.name = `nest-room-${room.id}`;
   mesh.receiveShadow = true;
   nest.group.add(mesh);
-  /* The room this corridor leaves from. `chamber` today, and the day a hall
-     grows its own faces it is whichever room the face was on — which is why
-     the wall record travels with the room and not with the nest. */
-  punchWall(nest._wall, bore, ex.floorY);
+  /* The wall record travels with the ROOM, not with the nest: the corridor has
+     to be cut out of whichever wall the face was on, and since #62 that is not
+     always the chamber's. The new room keeps its own, because its walls are
+     where the next generation of faces will be. */
+  nest._walls[room.id] = { mesh, quads: built.quads };
+  punchWall(nest._walls[parent.id], bore);
 
   rebuildSpoil();
   rebuildPan();
 
   /* Stretch the underground's darkness out to the new room. Without it the
      hall is lit as the meadow above it — world/lighting.js keys "indoors" off
-     this one cavity, and it only ever knew about the chamber. */
-  setNestPit(nest.chamber.x, nest.mouth.y, nest.chamber.z, CHAMBER_R * 1.25, NEST_DEPTH, room.x, room.z);
+     this one cavity, and it only ever knew about the chamber. It is one spine,
+     so the far end follows the room FURTHEST from the chamber: that segment
+     covers everything dug between the two. */
+  const far = Math.hypot(room.x - nest.chamber.x, room.z - nest.chamber.z);
+  if (!nest._pitFar || far > nest._pitFar.d) nest._pitFar = { x: room.x, z: room.z, d: far };
+  setNestPit(nest.chamber.x, nest.mouth.y, nest.chamber.z, CHAMBER_R * 1.25, NEST_DEPTH,
+    nest._pitFar.x, nest._pitFar.z);
 
   /* Lit along the corridor AND in the room, never one lamp at the far end:
      with this rig's 1/(1 + 0.017 d^2) falloff a single lamp is at 0.03 of its
      value forty units away, which is what made the round-13 gallery a bright
      disc in forty units of black. */
-  addLocalLight([link.ax + link.hx * link.len * 0.45, ex.floorY + 6.5, link.az + link.hz * link.len * 0.45], HALL_LAMP_LINK);
-  addLocalLight([room.x, ex.floorY + 7.5, room.z], HALL_LAMP_MID);
-  addLocalLight([room.x + hx * room.r * 0.55, ex.floorY + 5.0, room.z + hz * room.r * 0.55], HALL_LAMP_FAR);
+  /* Heights are over the ROOM's own floor, which is a notch lower per
+     generation: hung off ex.floorY they would end up in the ceiling of the
+     deepest rooms and light nothing but rock. */
+  const fy = roomFloorY(ex, room);
+  /* Two lamps down the corridor rather than one in the middle. With this rig's
+     1/(1 + 0.017 d^2) falloff a single lamp is at a fifth of its value at the
+     doorway, and the first shot of a branch tunnel was a black slot in a lit
+     wall — the gallery's own measurement (GALLERY_LAMPS) all over again. */
+  for (const t of [0.18, 0.55]) {
+    addLocalLight([link.ax + link.hx * link.len * t, linkFloorY(ex, link, link.len * t) + 6.5,
+      link.az + link.hz * link.len * t], HALL_LAMP_LINK);
+  }
+  addLocalLight([room.x, fy + 7.5, room.z], HALL_LAMP_MID);
+  addLocalLight([room.x + hx * room.r * 0.55, fy + 5.0, room.z + hz * room.r * 0.55], HALL_LAMP_FAR);
+
+  /* And the room comes with its own work to do: 2 or 3 faces on ITS walls,
+     each opening a room one generation deeper (contract §8). This is what
+     makes the hall a hub instead of the end of the game — and it is decided
+     here, by the world, because where a tunnel may go is a question about the
+     ground and player/** cannot see the ground. */
+  publishRoomFaces(ex, room, [hx, hz]);
 
   openTheMeadow();
   resettleResources((x, z) => excavationFloorAt(x, z) !== null || underSpoil(x, z));
@@ -1462,7 +1852,13 @@ export function digFaces() { return excavationDigFaces(); }
  *  where the queen is standing without re-deriving the plan. */
 export function dugRooms() {
   const ex = getExcavation();
-  return ex ? ex.rooms.map((r) => ({ id: r.id, x: r.x, z: r.z, r: r.r })) : [];
+  return ex ? ex.rooms.map((r) => ({
+    id: r.id, x: r.x, z: r.z, r: r.r,
+    // its own floor and how deep in the nest it is: since #62 neither is the
+    // same for every room, and a caller that assumed so would place a camera,
+    // a lamp or an ant a generation's drop off the ground.
+    floorY: roomFloorY(ex, r), gen: r.gen || 0,
+  })) : [];
 }
 
 /**
@@ -1477,7 +1873,12 @@ export function payDigFace(id, antSeconds) {
   if (!r) return null;
   if (r.opened && r.opened.kind === 'room') {
     const room = openRoom(r.opened);
-    return { ...r, opened: room ? { kind: 'room', id: room.id, x: room.x, z: room.z, r: room.r } : null };
+    return {
+      ...r,
+      opened: room
+        ? { kind: 'room', id: room.id, x: room.x, z: room.z, r: room.r, size: r.opened.size, gen: room.gen }
+        : null,
+    };
   }
   return { ...r, opened: null };
 }

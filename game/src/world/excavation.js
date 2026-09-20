@@ -248,7 +248,16 @@ export function makeExcavation(mouth, lawn, head, seed) {
      is an alias onto the same object so nest.js, the camera and the harnesses
      keep reading what they always read — the contract (§7) says outright that
      it must not break for an internal refactor. */
-  const chamber = { id: 'chamber', x: end.x, z: end.z, r: chamberR, wall: CHAMBER_WALL, roof: CHAMBER_ROOF };
+  const chamber = {
+    id: 'chamber', x: end.x, z: end.z, r: chamberR,
+    wall: CHAMBER_WALL, roof: CHAMBER_ROOF,
+    /* Every room carries the level it is dug to, and generation 0 is dug to
+       the nest depth. Rooms opened later sit LOWER (contract §8, "une
+       profondeur par génération"), so nothing may read ex.floorY as "the
+       floor of the nest" any more — it is the floor of the chamber and of the
+       cut that arrives at it. */
+    fy: lawn.y - NEST_DEPTH, gen: 0,
+  };
 
   return {
     seed,
@@ -272,21 +281,63 @@ export function makeExcavation(mouth, lawn, head, seed) {
    and by then three files would have had an opinion about where the floor is.
    Everything below is plain data: no THREE.js, no closure, serialisable. */
 
-/** Add a room and return it. `r` is the plan radius; the roof is domed. */
-export function addRoom(id, x, z, r, wall = CHAMBER_WALL, roof = CHAMBER_ROOF) {
-  const room = { id, x, z, r, wall, roof };
+/** Add a room and return it. `r` is the plan radius; the roof is domed. `fy` is
+ *  the level its floor is dug to, and `gen` how many rooms deep it is. */
+export function addRoom(id, x, z, r, fy, gen = 1, wall = CHAMBER_WALL, roof = CHAMBER_ROOF) {
+  const room = { id, x, z, r, wall, roof, fy, gen };
   EX.rooms.push(room);
   return room;
 }
 
-/** Add a straight level corridor between two points. `ends` names the rooms
- *  it joins, so its tube can be trimmed to their walls. */
+/**
+ * Add a straight corridor between two points. `ends` names the rooms it joins,
+ * so its tube can be trimmed to their walls.
+ *
+ * It is no longer necessarily LEVEL: since rooms are dug one notch deeper per
+ * generation, a corridor has to lose that notch somewhere, and the only place
+ * it may do so is between the two doorways — inside either room its floor must
+ * be that room's own floor, or the height field would dish a trench through a
+ * floor disc the mesh built flat. So the ramp's ends are baked here, from the
+ * same linkMouthS() the tube is trimmed with.
+ */
 export function addLink(id, a, b, hw, roof = LINK_ROOF, ends = []) {
   const dx = b.x - a.x, dz = b.z - a.z;
   const len = Math.hypot(dx, dz) || 1;
   const link = { id, ax: a.x, az: a.z, hx: dx / len, hz: dz / len, len, hw, roof, ends: ends.slice() };
   EX.links.push(link);
+  const [s0, s1] = linkMouthS(EX, link);
+  link.rs0 = s0; link.rs1 = s1;
+  link.fy0 = EX.floorY; link.fy1 = EX.floorY;
+  /* Which end is which is taken from the GEOMETRY (linkEnds's own `start`),
+     not from the order of `ends`: those two agreeing is an assumption, and an
+     assumption that swaps the two ends of a ramp puts the drop in the room. */
+  for (const e of linkEnds(EX, link)) {
+    if (e.start) link.fy0 = roomFloorY(EX, e.r); else link.fy1 = roomFloorY(EX, e.r);
+  }
   return link;
+}
+
+/** The level a room's floor is dug to. */
+export function roomFloorY(ex, room) {
+  return room.fy === undefined ? ex.floorY : room.fy;
+}
+
+/** The deepest floor anywhere in the excavation — what a backstop has to sit
+ *  under (founding.js's pan). */
+export function deepestFloorY(ex) {
+  let y = ex.floorY;
+  for (const r of ex.rooms) y = Math.min(y, roomFloorY(ex, r));
+  return y;
+}
+
+/** A corridor's floor level at distance `s` along it: flat inside each room it
+ *  joins, ramping between the two doorways. Linear on purpose — an eased ramp
+ *  peaks at 1.5x the average slope, and the slope budget here is the one
+ *  movement.js spends per step. */
+export function linkFloorY(ex, L, s) {
+  if (L.fy1 === undefined || L.fy1 === L.fy0) return L.fy0 === undefined ? ex.floorY : L.fy0;
+  const t = clamp((s - L.rs0) / Math.max(L.rs1 - L.rs0, 1e-3), 0, 1);
+  return lerp(L.fy0, L.fy1, t);
 }
 
 /* ---- the built shell, as numbers (#67) ----------------------------------
@@ -393,8 +444,8 @@ export function excavationShellTopAt(x, z) {
     const dh = r.roof - r.wall;
     /* Past the first dome ring the facet runs from the wobbled wall top to
        that ring, and never higher than the ring itself. */
-    const y = d < Rd * c1 ? r.wall + dh * Math.sqrt(1 - (d / Rd) ** 2) : r.wall + dh * s1;
-    top = top === null ? ex.floorY + y : Math.max(top, ex.floorY + y);
+    const y = roomFloorY(ex, r) + (d < Rd * c1 ? r.wall + dh * Math.sqrt(1 - (d / Rd) ** 2) : r.wall + dh * s1);
+    top = top === null ? y : Math.max(top, y);
   }
   for (const L of ex.links) {
     const s = (x - L.ax) * L.hx + (z - L.az) * L.hz;
@@ -403,7 +454,7 @@ export function excavationShellTopAt(x, z) {
     const lat = -(x - L.ax) * L.hz + (z - L.az) * L.hx;
     const bore = L.hw * TUNNEL_BORE * grow;
     if (Math.abs(lat) > bore + 0.5) continue;
-    const y = ex.floorY + L.roof * grow;
+    const y = linkFloorY(ex, L, s) + L.roof * grow;
     top = top === null ? y : Math.max(top, y);
   }
   return top;
@@ -492,9 +543,21 @@ export function rampFloorAt(ex, x, z, u, lat) {
   return y + CROSS_RISE * k * k + FLOOR_GRAIN * (vnoise(x * 0.1 + ex.seed, z * 0.1 + ex.seed) - 0.5) * 2;
 }
 
-/** Floor height on the chamber's flat. */
-export function chamberFloorAt(ex, x, z) {
-  return ex.floorY + FLOOR_GRAIN * (vnoise(x * 0.1 + ex.seed, z * 0.1 + ex.seed) - 0.5) * 2;
+/** The fine wobble every dug floor carries, so two of them meeting have the
+ *  same grain rather than two grains that happen to be similar. */
+function floorGrainAt(ex, x, z) {
+  return FLOOR_GRAIN * (vnoise(x * 0.1 + ex.seed, z * 0.1 + ex.seed) - 0.5) * 2;
+}
+
+/** Floor height on a room's flat, at whatever level that room was dug to. */
+export function roomFloorAt(ex, room, x, z) {
+  return roomFloorY(ex, room) + floorGrainAt(ex, x, z);
+}
+
+/** Floor height in a corridor at (x, z) — its ramp, plus the same grain. */
+export function linkFloorAt(ex, L, x, z) {
+  const s = (x - L.ax) * L.hx + (z - L.az) * L.hz;
+  return linkFloorY(ex, L, s) + floorGrainAt(ex, x, z);
 }
 
 /** Inside of the chamber's plan disc. */
@@ -516,13 +579,21 @@ export function excavationFloorAt(x, z) {
   let y = null;
   const rp = rampParam(ex, x, z);
   if (rp) y = rampFloorAt(ex, x, z, rp.u, rp.lat);
-  /* Every room and every link is dug to the same level, so the whole nest
-     under the ramp is one flat floor and min() of it with itself is itself.
-     That is deliberate: a step between two dug pieces is a teleport in play,
-     not a stumble, and the cheapest way to have no step is to have no
-     difference. */
-  if (roomAt(ex, x, z) || ex.links.some((L) => inLink(L, x, z))) {
-    const fy = chamberFloorAt(ex, x, z);
+  /* The deepest contributor wins, and since #62 they are no longer all at the
+     same level: each generation of rooms is dug a notch lower and its corridor
+     ramps down to it. min() of continuous pieces is still continuous, which is
+     the only property that matters — a step between two dug pieces is a
+     teleport in play, not a stumble. What makes the pieces agree is that a
+     corridor's ramp is flat inside both rooms it joins (linkFloorY): the two
+     always answer the same height where they overlap. */
+  for (const r of ex.rooms) {
+    if (Math.hypot(x - r.x, z - r.z) > r.r) continue;
+    const fy = roomFloorAt(ex, r, x, z);
+    y = y === null ? fy : Math.min(y, fy);
+  }
+  for (const L of ex.links) {
+    if (!inLink(L, x, z)) continue;
+    const fy = linkFloorAt(ex, L, x, z);
     y = y === null ? fy : Math.min(y, fy);
   }
   return y;
@@ -569,19 +640,30 @@ export function excavationHeadroomAt(x, z) {
    to survive being written to disk (castes-et-micro-macro.md §3.4), and a
    closure does not. */
 
-/** Add a workable face. `nx, nz` points OUT of the wall, into the room. */
-export function addDigFace(id, x, z, nx, nz, needed, opens) {
-  const f = { id, x, z, y: EX.floorY, nx, nz, needed, worked: 0, done: false, opens };
+/** Add a workable face. `nx, nz` points OUT of the wall, into the room; `y` is
+ *  the floor of the room whose wall it is, which is no longer the same for
+ *  every room (contract §8). */
+export function addDigFace(id, x, z, y, nx, nz, needed, opens) {
+  const f = { id, x, z, y, nx, nz, needed, worked: 0, done: false, opens };
   EX.faces.push(f);
   return f;
 }
 
-/** The faces still worth walking to: open, and not yet finished. */
+/**
+ * The faces still worth walking to: open, and not yet finished.
+ *
+ * `opens` stays the KIND ('room'), as it has been since §7. What it opens is
+ * described alongside it rather than inside it — `opensId`, `opensR`, `size`,
+ * `opensGen` — so a HUD listing worksites can name and rank them without
+ * reaching into the world's own descriptor, and so an old caller that only
+ * looked at `opens` still reads what it always read.
+ */
 export function excavationDigFaces() {
   if (!EX) return [];
   return EX.faces.filter((f) => !f.done).map((f) => ({
     id: f.id, x: f.x, y: f.y, z: f.z, nx: f.nx, nz: f.nz,
     needed: f.needed, worked: f.worked, opens: f.opens.kind,
+    opensId: f.opens.id, opensR: f.opens.r, size: f.opens.size, opensGen: f.opens.gen,
   }));
 }
 
