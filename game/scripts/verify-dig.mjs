@@ -172,7 +172,9 @@ async function main() {
   check(opened.r && opened.r.done, 'the face reports done');
   check(!!opened.r.opened && opened.r.opened.id === 'hall', 'and it opened the hall');
   check(opened.rooms.length === 2, 'the excavation now has two rooms');
-  check(opened.faces.length === 0, 'the finished face is no longer offered as work');
+  /* The face that was worked is gone from the list; what is in it now is the
+     work the hall itself carries (#62), which section 5 checks. */
+  check(!opened.faces.some((f) => f.id === face.id), 'the finished face is no longer offered as work');
 
   /* Idempotent: a gauge overshoots, and a second payment must not dig a
      second hall on top of the first. */
@@ -304,6 +306,248 @@ async function main() {
   for (const r of holes) {
     console.log(`  from the ${r.id}: ${r.escaped} of ${r.total} downward rays escape`);
     check(r.escaped === 0, `the ground under the ${r.id} is closed (${r.escaped} rays escaped)`);
+  }
+
+  /* ---- 5. THE HALL CARRIES ITS OWN WORK (#62) ---------------------------
+     The acceptance criterion of #62: from the hall, at least two faces on its
+     walls. The costs are checked against the CONTRACT's own numbers, written
+     here rather than read from the world — a harness that asks the code what it
+     should cost proves only that it agrees with itself. §8: 75 for the first
+     face, 120 for the hall's, 180 for the generation after, times the size
+     factor the porter asked for (0.75 / 1.0 / 1.4). */
+  console.log('\n=== the hall has faces of its own ===');
+  const SIZE_K = { small: 0.75, medium: 1.0, large: 1.4 };
+  const HALL_FACE_SECONDS = 120, DEEP_FACE_SECONDS = 180;
+  const hallFaces = opened.faces;
+  console.log('  faces on the hall:', JSON.stringify(hallFaces.map((f) => ({
+    id: f.id, size: f.size, needed: f.needed, opens: f.opensId, r: f.opensR && +f.opensR.toFixed(1),
+  }))));
+  check(hallFaces.length >= 2, `the hall publishes at least two faces (${hallFaces.length})`);
+  check(hallFaces.length <= 3, `and at most three (${hallFaces.length})`);
+  for (const f of hallFaces) {
+    check(!!SIZE_K[f.size], `face ${f.id} publishes the size of what it opens (${f.size})`);
+    const want = Math.round(HALL_FACE_SECONDS * (SIZE_K[f.size] || 0));
+    check(f.needed === want, `face ${f.id} costs ${want} ant-seconds (contract 120 x ${SIZE_K[f.size]}), reads ${f.needed}`);
+    /* On the hall's WALL, not floating in it: within a unit of its radius, and
+       with its normal pointing back into the room. */
+    const d = Math.hypot(f.x - hall.x, f.z - hall.z);
+    check(Math.abs(d - hall.r * 0.97) < 1.5, `face ${f.id} sits on the hall's wall (${d.toFixed(1)} from its centre, wall at ${(hall.r * 0.97).toFixed(1)})`);
+    const inward = ((hall.x - f.x) * f.nx + (hall.z - f.z) * f.nz) / (d || 1);
+    check(inward > 0.9, `face ${f.id}'s normal points into the hall (${inward.toFixed(2)})`);
+  }
+  /* Two faces on the same wall have to be in two places. */
+  for (let i = 0; i < hallFaces.length; i++) {
+    for (let j = i + 1; j < hallFaces.length; j++) {
+      const sep = Math.hypot(hallFaces[i].x - hallFaces[j].x, hallFaces[i].z - hallFaces[j].z);
+      check(sep > 8, `faces ${hallFaces[i].id} and ${hallFaces[j].id} are ${sep.toFixed(1)} apart on the wall`);
+    }
+  }
+
+  /* Looking across the hall from its entrance, so its far wall — the one the
+     new faces are on — fills the frame. The eye is a fraction of the radius
+     from the middle, i.e. inside the room whatever size it is. The hall's floor
+     is a generation lower than the chamber's now, so the height is taken from
+     the HALL's own floor: floorY would have put the camera in its ceiling. */
+  const hallY = (opened.rooms.find((r) => r.id === 'hall') || {}).floorY ?? founded.nest.floorY;
+  const dux = (hall.x - chamber.x) / (Math.hypot(hall.x - chamber.x, hall.z - chamber.z) || 1);
+  const duz = (hall.z - chamber.z) / (Math.hypot(hall.x - chamber.x, hall.z - chamber.z) || 1);
+  await view([hall.x - dux * hall.r * 0.62, hallY + 7, hall.z - duz * hall.r * 0.62],
+    [hall.x + dux * hall.r * 0.9, hallY + 4, hall.z + duz * hall.r * 0.9]);
+  await page.waitForTimeout(300);
+  await shot('08-the-hall-with-its-faces');
+
+  /* ---- 6. a second generation ------------------------------------------- */
+  console.log('\n=== a second generation opens ===');
+  const target = hallFaces[0];
+  const gen2 = await page.evaluate((id) => {
+    const f = window.__faces().find((x) => x.id === id);
+    const r = window.__payDig(id, f ? f.needed - f.worked : 1);
+    return { r, rooms: window.__rooms2(), faces: window.__faces() };
+  }, target.id);
+  console.log('  payDigFace ->', JSON.stringify(gen2.r));
+  console.log('  rooms      ->', JSON.stringify(gen2.rooms));
+  check(!!(gen2.r && gen2.r.done && gen2.r.opened), 'the hall face reports done and opened something');
+  check(gen2.rooms.length === 3, `the excavation now has three rooms (${gen2.rooms.length})`);
+  const room2 = gen2.rooms.find((r) => r.id === (gen2.r.opened && gen2.r.opened.id));
+  check(!!room2, 'the room it named is in the room list');
+  if (room2) {
+    check(room2.gen === 2, `it is one generation deeper than the hall (gen ${room2.gen})`);
+    check(room2.floorY < founded.nest.floorY - 1,
+      `and it is dug LOWER than the chamber (${room2.floorY.toFixed(1)} vs ${founded.nest.floorY.toFixed(1)})`);
+    check(Math.abs(room2.r - hall.r * SIZE_K[target.size]) < 0.6,
+      `its radius follows the size it published (${room2.r.toFixed(1)} = hall ${hall.r.toFixed(1)} x ${SIZE_K[target.size]})`);
+  }
+  const deepFaces = gen2.faces.filter((f) => f.id !== target.id && !hallFaces.some((h) => h.id === f.id));
+  console.log('  faces on the new room:', JSON.stringify(deepFaces.map((f) => ({ id: f.id, size: f.size, needed: f.needed }))));
+  check(deepFaces.length >= 1, `the new room carries work of its own (${deepFaces.length} faces)`);
+  for (const f of deepFaces) {
+    const want = Math.round(DEEP_FACE_SECONDS * (SIZE_K[f.size] || 0));
+    check(f.needed === want, `face ${f.id} costs ${want} (contract 180 x ${SIZE_K[f.size]}), reads ${f.needed}`);
+  }
+
+  /* ---- 7. chamber -> hall -> room 2, on foot ----------------------------
+     Continuity of the footprint over the WHOLE nest, and off the centre line:
+     a body's width either side, because a test that follows the middle never
+     touches a wall (PROGRESS.md trap 7). */
+  console.log('\n=== the second room is reachable ===');
+  const reach = await page.evaluate(([pts]) => {
+    const W = window.__world6;
+    const fp = W.nestFootprint();
+    const out = { outside: 0, worstStep: 0, unroofed: 0, worstAt: null, legs: [] };
+    for (let leg = 0; leg < pts.length - 1; leg++) {
+      const a = pts[leg], b = pts[leg + 1];
+      const dx = b.x - a.x, dz = b.z - a.z;
+      const len = Math.hypot(dx, dz) || 1;
+      const px = -dz / len, pz = dx / len;
+      for (const off of [-3.3, 0, 3.3]) {
+        let prevY = null;
+        const n = Math.ceil(len / 0.5);
+        for (let i = 0; i <= n; i++) {
+          const t = i / n;
+          const x = a.x + dx * t + px * off, z = a.z + dz * t + pz * off;
+          if (!fp.contains(x, z)) out.outside++;
+          const y = W.groundY(x, z);
+          if (prevY !== null && Math.abs(y - prevY) > out.worstStep) {
+            out.worstStep = Math.abs(y - prevY);
+            out.worstAt = { x: +x.toFixed(1), z: +z.toFixed(1), off };
+          }
+          prevY = y;
+          const hr = fp.headroom(x, z);
+          if (!Number.isFinite(hr) || hr < 9) out.unroofed++;
+        }
+      }
+      out.legs.push({ from: a.id, to: b.id, len: +len.toFixed(1) });
+    }
+    return out;
+  }, [[{ id: 'chamber', x: chamber.x, z: chamber.z }, { id: 'hall', x: hall.x, z: hall.z },
+    { id: 'room2', x: room2 ? room2.x : hall.x, z: room2 ? room2.z : hall.z }]]);
+  console.log('  legs:', JSON.stringify(reach.legs));
+  console.log(`  ${reach.outside} samples outside the footprint, worst step ${reach.worstStep.toFixed(3)} at ${JSON.stringify(reach.worstAt)}, ${reach.unroofed} with < 9 headroom`);
+  check(reach.outside === 0, `chamber -> hall -> room 2 is continuous ground, walls included (${reach.outside} gaps)`);
+  check(reach.worstStep < 1.0, `no step to fall down anywhere on it (worst ${reach.worstStep.toFixed(3)})`);
+  check(reach.unroofed === 0, `a queen height of roof over all of it (${reach.unroofed} short)`);
+
+  /* The doorway of the NEW corridor, asked of the geometry the same way section
+     4b asks it of the first one. This is the check round 16 did not have, and
+     the second doorway is cut out of a wall that did not exist at founding —
+     a different code path from the first, so it needs its own ray. */
+  /* The two ends are at DIFFERENT heights, and that is the point of the
+     generation drop: the corridor ramps down to the deeper room, so a ray cast
+     at one constant height is a ray through the floor at one end. Cast at eye
+     height over each end's own floor, which is the line a walker's eye
+     actually traces. Getting this wrong cost one run and looked exactly like a
+     wall across the doorway. */
+  const los2 = await page.evaluate(([a, b]) => {
+    const { THREE } = window.__world6;
+    const targets = [];
+    window.__scene.traverse((o) => {
+      if (!o.isMesh) return;
+      let n = o, isNest = false;
+      while (n) { if (n.name === 'founded-nest') isNest = true; n = n.parent; }
+      if (isNest) targets.push(o);
+    });
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const l = Math.hypot(dx, dz) || 1;
+    const px = -dz / l, pz = dx / l;
+    const rc = new THREE.Raycaster();
+    const out = [];
+    for (const off of [-3.3, 0, 3.3]) {
+      const p0 = new THREE.Vector3(a.x + px * off, a.y + 3.0, a.z + pz * off);
+      const p1 = new THREE.Vector3(b.x + px * off, b.y + 3.0, b.z + pz * off);
+      const d = p1.clone().sub(p0);
+      const len = d.length();
+      rc.set(p0, d.normalize());
+      rc.near = 0.01; rc.far = len;
+      const hit = rc.intersectObjects(targets, true);
+      out.push({ off, blocked: hit.length > 0, by: hit.length ? (hit[0].object.name || '?') : null, at: hit.length ? +hit[0].distance.toFixed(1) : null });
+    }
+    return out;
+  }, [{ x: hall.x, y: hallY, z: hall.z }, { x: room2.x, y: room2.floorY, z: room2.z }]);
+  console.log('  hall -> room 2 rays:', JSON.stringify(los2));
+  for (const r of los2) {
+    check(!r.blocked, `nothing stands between the hall and room 2 at offset ${r.off}`
+      + (r.blocked ? ` — hit ${r.by} at ${r.at}` : ''));
+  }
+
+  /* ---- 8. THE GROUND IS CLOSED, OVER THE WHOLE NEST ---------------------
+     The check verify-descent.mjs makes, run here after two generations: a grid
+     of straight-down rays over everything dug. A cell that hits nothing is a
+     hole, and underground a hole shows the sky THROUGH the ground. */
+  console.log('\n=== no open cell over the whole nest ===');
+  const openCells = await page.evaluate(() => {
+    const { THREE } = window.__world6;
+    const W = window.__world6;
+    const targets = [];
+    window.__scene.traverse((o) => {
+      if (!o.isMesh) return;
+      let n = o, isNest = false;
+      while (n) { if (n.name === 'founded-nest') isNest = true; n = n.parent; }
+      if (isNest || o.name === 'lawn') targets.push(o);
+    });
+    const p = W.descentPath();
+    const rooms = W.dugRooms();
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const q of [...p, ...rooms]) {
+      const pad = 24 + (q.r || 0);
+      x0 = Math.min(x0, q.x - pad); x1 = Math.max(x1, q.x + pad);
+      z0 = Math.min(z0, q.z - pad); z1 = Math.max(z1, q.z + pad);
+    }
+    /* Clipped to the MEADOW's own extent, and it has to be: the lawn ends at
+       z = 0 and the nest is dug within 30 units of it, so a box padded around
+       the rooms reaches off the edge of the world — where a downward ray
+       legitimately hits nothing. Unclipped, this reported 602 "holes", every one
+       of them a cell of empty space beyond the lawn. */
+    const lawn = targets.find((o) => o.name === 'lawn');
+    if (lawn) {
+      if (!lawn.geometry.boundingBox) lawn.geometry.computeBoundingBox();
+      const b = lawn.geometry.boundingBox;
+      x0 = Math.max(x0, b.min.x + 2); x1 = Math.min(x1, b.max.x - 2);
+      z0 = Math.max(z0, b.min.z + 2); z1 = Math.min(z1, b.max.z - 2);
+    }
+    const rc = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0);
+    const found = [];
+    let cells = 0;
+    for (let x = x0; x <= x1; x += 1.8) {
+      for (let z = z0; z <= z1; z += 1.8) {
+        cells++;
+        rc.set(new THREE.Vector3(x, 400, z), down);
+        rc.near = 0.01; rc.far = 900;
+        if (rc.intersectObjects(targets, true).length) continue;
+        const fp = W.nestFootprint();
+        found.push({ x: +x.toFixed(1), z: +z.toFixed(1), inNest: fp ? fp.contains(x, z) : false });
+      }
+    }
+    return { cells, count: found.length, sample: found.slice(0, 12), box: [x0, x1, z0, z1].map((v) => +v.toFixed(0)) };
+  });
+  console.log(`  box ${JSON.stringify(openCells.box)}: ${openCells.count} of ${openCells.cells} cells see through to the sky`);
+  if (openCells.count) console.log('  ', JSON.stringify(openCells.sample));
+  check(openCells.count === 0, `no open cell over the whole two-generation nest (${openCells.count})`);
+
+  if (room2) {
+    const bx = (room2.x - hall.x) / (Math.hypot(room2.x - hall.x, room2.z - hall.z) || 1);
+    const bz = (room2.z - hall.z) / (Math.hypot(room2.x - hall.x, room2.z - hall.z) || 1);
+    await view([room2.x + bx * room2.r * 0.6, room2.floorY + 6, room2.z + bz * room2.r * 0.6],
+      [hall.x, hallY + 4, hall.z]);
+    await page.waitForTimeout(300);
+    await shot('09-from-room-2-back-up-the-tunnel');
+
+    await view([room2.x - bx * room2.r * 0.55, room2.floorY + 7, room2.z - bz * room2.r * 0.55],
+      [room2.x + bx * room2.r * 0.9, room2.floorY + 4, room2.z + bz * room2.r * 0.9]);
+    await page.waitForTimeout(300);
+    await shot('10-the-second-room');
+
+    /* From the hall into the new corridor: the doorway this round cut out of a
+       wall that was itself built by a dig, and the ramp down to the deeper
+       room. The one view where a mis-cut would be obvious. */
+    await view([hall.x - bx * hall.r * 0.5, hallY + 6, hall.z - bz * hall.r * 0.5],
+      [room2.x, room2.floorY + 5, room2.z]);
+    await page.waitForTimeout(300);
+    await shot('12-from-the-hall-into-the-new-tunnel');
+
+    await view([hall.x, founded.nest.mouth.y + 78, hall.z + 10], [hall.x, founded.nest.floorY, hall.z]);
+    await page.waitForTimeout(300);
+    await shot('11-two-generations-from-above');
   }
 
   /* ---- 5. THE SHOTS ----------------------------------------------------- */
