@@ -122,7 +122,19 @@ export const FOUNDING_QUEEN = {
   legs: QUEEN_LEGS,
   body: QUEEN_BODY,
   breathes: true,
-  colors: { chitinA: 0xdda254, chitinB: 0x8f5a25, limb: 0x94612a, mandible: 0xe8c078, eye: 0x100c06 },
+  // #71: she used to sit at the same value AND hue as the soil (chitinB
+  // ~0x8f5a25 vs the ground's own #86673B/#5A4529 — same brown-olive family,
+  // same luma band). chitinB carries the gaster, her single largest silhouette
+  // against the dirt (antMesh.js), so that overlap was the standing defect.
+  // Pushed off the soil's axis two ways at once: hue rotated toward rouille
+  // (#E07356 — more red, far less green than the soil's olive brown) rather
+  // than staying on the same brown-gold axis, and value raised clear of the
+  // soil's own range (#5A4529..#86673B, luma ~71-107) so a hue-only fix does
+  // not evaporate the moment she stands in shadow. chitinA (thorax/head) and
+  // mandible pushed brighter and more saturated the same direction (chitine/
+  // miel, not the soil's muddier gold) so the whole body reads as one
+  // creature, not a patched gaster.
+  colors: { chitinA: 0xedae46, chitinB: 0xbd4e23, limb: 0xa85a28, mandible: 0xf2c67a, eye: 0x100c06 },
   // She is more than twice a worker's size and still slower in absolute
   // terms: ~0.4 body-lengths a second against the worker's ~1.15, and a turn
   // rate less than half as sharp, so she pivots like something that weighs

@@ -33,8 +33,15 @@ import { TUNNEL_BACK, TUNNEL_MOUTH } from './underground.js';
 export const LIGHT_SLOTS = 8;
 
 /* How much of the hemisphere fill survives at the deepest point of the nest
-   (see the injection below). */
-const AMBIENT_FLOOR = 0.55;
+   (see the injection below).
+   #71: was 0.55 — high enough that a founded chamber's own pit darkening
+   (nestPitDark below settles near 0.09 at the chamber's centre) got clamped
+   straight back up to a flat 55%, which is exactly why a populated brood
+   chamber rendered as one evenly-lit brown room instead of a warm pool per
+   clutch against near-black (before-03-brood.png). Local lamps are additive
+   on top of this floor, not clamped by it, so lowering the floor only
+   deepens the black BETWEEN lamps — it does not dim the lamps themselves. */
+const AMBIENT_FLOOR = 0.30;
 
 const ALL_LIGHTS = [];
 
@@ -216,7 +223,13 @@ export function applyNestShading(material) {
           for (int i = 0; i < ${LIGHT_SLOTS}; i++) {
             vec3 Ld = uLightPos[i] - vNestWorld;
             float d = length(Ld);
-            float att = 1.0 / (1.0 + d * d * 0.017);
+            // #71: 0.017 -> 0.024. With AMBIENT_FLOOR lowered, a slower
+            // falloff was smearing every lamp's pool into its neighbour's —
+            // a brood chamber with four clutches lit as one wash of amber
+            // rather than four separate pools of light in the dark. Tighter
+            // falloff keeps each lamp a pool with black between them, which
+            // is the whole ask (one warm pool per clutch, not a lit room).
+            float att = 1.0 / (1.0 + d * d * 0.024);
             nestSum += uLightCol[i] * max(dot(normal, Ld / max(d, 0.001)), 0.0) * att;
           }
           reflectedLight.directDiffuse += diffuseColor.rgb * nestSum;

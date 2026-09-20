@@ -62,20 +62,36 @@ import { nrm3 } from '../core/vecmath.js';
    underexposure, and the spec's numbers had been read as the second. Sun,
    exposure and fill all raised together so the hue and the lit/shadow ratio
    hold while the picture leaves the mud. */
+/* Fourth pass (#71, "plus riche, plus mystique, plus MMO"). Measured against
+   before-01-lawn.png: the lawn had no depth cue at all — a hill sitting well
+   past fogNear/fogFar's old 95/420 read at the same value and saturation as
+   the grass at the player's feet, on a 770x540-unit map where that gap
+   should be doing real work. And the sun/fill were close enough in hue
+   (0xe8b98c warm tan against a fairly desaturated 0x6e7fa8 fill) that shapes
+   read mostly by shadow shape, not by the warm-lit/cool-shadow colour split
+   that is what makes a WoW/Dofus-style outdoor scene turn.
+   fogNear pulled in (95 -> 65) so haze starts inside the frame instead of
+   past most of what a wide shot actually shows; fogFar pulled in with it
+   (420 -> 340) so the falloff has somewhere to land in the same span rather
+   than stretching over ground nobody sees close-up. Sun pushed more
+   saturated gold, fill pushed more saturated cool blue-violet, at the same
+   intensities/angle (untouched: the shadow-ratio work three passes ago is
+   not being re-litigated) — the lit/shadow luminance ratio holds, only the
+   hue gap between them widens. */
 export const RIG_PROLOGUE = {
   sunDir: nrm3([-300, 120, 195]),   // elevation 18.5 deg, azimuth from -x/+z
-  sunColor: 0xe8b98c,
+  sunColor: 0xf0a866,
   sunIntensity: 6.1,                // spec 1.9 — see the note on grazing light.
                                     // 6.1 = sin(51 deg)/sin(18.5 deg) * 2.5:
                                     // the prologue sun grazes, so it needs
                                     // that ratio to land the same lambert
                                     // term on flat ground as the day rig.
-  hemiSky: 0x6e7fa8,
-  hemiGround: 0x4a4530,
-  hemiIntensity: 1.15,              // spec 0.62 — see the shadow note below
-  fog: 0x7d7488,                    // spec 0x8b8399
-  fogNear: 95,                      // spec 40
-  fogFar: 420,                      // spec 300
+  hemiSky: 0x5a70b4,
+  hemiGround: 0x423c28,
+  hemiIntensity: 1.30,              // spec 0.62 — see the shadow note below
+  fog: 0x6f6c8c,                    // spec 0x8b8399
+  fogNear: 65,                      // spec 40
+  fogFar: 340,                      // spec 300
   sky: 0x9a93a8,                    // PLACEHOLDER for sky_gradient-prologue
   exposure: 1.30,                   // spec 1.02
 };
