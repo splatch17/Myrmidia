@@ -18,7 +18,7 @@ import { RESOURCE_NODES, harvestNode, nodesNear, buildResources } from './resour
 import {
   initFounding, canFoundAt, foundNest, nestOrigin, getFoundedNest,
   populateNest, sealNest, updateFounding, digFaces, payDigFace, dugRooms,
-  nestFootprint, descentPath,
+  nestFootprint, descentPath, _coverAt,
 } from './founding.js';
 import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
 
@@ -83,7 +83,7 @@ export {
   shadeAt,
   RESOURCE_NODES, harvestNode, nodesNear,
   canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
-  digFaces, payDigFace, dugRooms, nestFootprint, descentPath,
+  digFaces, payDigFace, dugRooms, nestFootprint, descentPath, _coverAt,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
 

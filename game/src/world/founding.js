@@ -792,7 +792,7 @@ function buildMound(ex, seed) {
       const th = (2 * Math.PI * (a % MANG)) / MANG;
       const px = C.x + Math.cos(th) * rad, pz = C.z + Math.sin(th) * rad;
       const lump = vnoise(px * 0.13 + seed, pz * 0.13 + seed) - 0.5;
-      let y = heapY(ex, C, px, pz);
+      let y = pileTopAt(px, pz) ?? heapY(ex, C, px, pz);
 
       const rp = rampOffset(ex, px, pz, 4);
       const over = rp ? Math.abs(rp.lat) - rp.hw : Infinity;
@@ -814,7 +814,7 @@ function buildMound(ex, seed) {
     mound.push(row);
   }
   const hubLump = vnoise(C.x * 0.13 + seed, C.z * 0.13 + seed) - 0.5;
-  const hub = M.addVertex(C.x, heapY(ex, C, C.x, C.z), C.z,
+  const hub = M.addVertex(C.x, pileTopAt(C.x, C.z) ?? heapY(ex, C, C.x, C.z), C.z,
     mixColor(digColour(0.5 + hubLump, 0.34), C_CHITIN, 0.14).toArray());
   for (let a = 0; a < MANG; a++) M.addTri(hub, mound[0][a + 1].i, mound[0][a].i);
   for (let ri = 0; ri < mound.length - 1; ri++) {
@@ -907,10 +907,42 @@ function spoilTopAt(x, z, skip = null) {
   return y;
 }
 
+/**
+ * The top of the PILES alone — every room's heap and every corridor's berm,
+ * maxed — with the open cut left out.
+ *
+ * This is what every pile's own mesh is actually built from (#69), and the
+ * reason is the round-19 capture the porter complained about. Each pile used
+ * to be drawn at its OWN height, so two piles that overlap were two domes
+ * crossing, and along the crossing curve neither is on top: they trade pixels
+ * the whole length of it, which is the black wedges and the torn slabs at the
+ * mouth. Dropping the buried quads only ever helped where one pile was
+ * entirely under another, and the crossing band is by definition where it is
+ * not.
+ *
+ * Built from this instead, the overlapping parts of two piles are the same
+ * surface rather than two — no crossing, nothing to trade. What is left is
+ * two skins at the same place, and THAT is settled by depth offset in
+ * rebuildSpoil(), which is a decision about who draws, not a shape.
+ *
+ * The cut is excluded on purpose: cutSurfaceY() is the trench, and the mound
+ * carves its own doorway through it afterwards. Maxing against it here would
+ * heap the spoil back over the entrance.
+ */
+function pileTopAt(x, z) {
+  const ex = getExcavation();
+  if (!ex) return null;
+  let y = null;
+  const put = (v) => { if (v !== null && v !== undefined && (y === null || v > y)) y = v; };
+  for (const r of ex.rooms) put(heapY(ex, r, x, z));
+  for (const L of ex.links) put(bermY(ex, L, x, z));
+  return y;
+}
+
 /** How far under another spoil surface a quad has to be before it is dropped
- *  rather than drawn (buriedQuad). Two heaps that intersect are two domes with
- *  a crossing curve, and along that curve neither is on top; drawn, they trade
- *  pixels the length of it. */
+ *  rather than drawn (buriedQuad). Kept for the quads that are genuinely
+ *  under something else — a pile wholly inside a bigger one still has a
+ *  hidden underside, and drawing it is free seams. */
 const SPOIL_OVERLAP = 0.4;
 
 /** Is this quad entirely under some OTHER pile of spoil? Then it is not
@@ -1914,7 +1946,7 @@ function buildSpoilHeap(ex, room, seed) {
   const RINGS = 10, ANG = 48;
   const rows = [];
   const hubLump = vnoise(room.x * 0.13 + seed, room.z * 0.13 + seed) - 0.5;
-  const hub = M.addVertex(room.x, heapY(ex, room, room.x, room.z), room.z,
+  const hub = M.addVertex(room.x, pileTopAt(room.x, room.z) ?? heapY(ex, room, room.x, room.z), room.z,
     mixColor(digColour(0.5 + hubLump, 0.34), C_CHITIN, 0.14).toArray());
   for (let ri = 1; ri <= RINGS; ri++) {     // ri = 0 is the hub, not a ring
     const t = ri / RINGS;
@@ -1923,7 +1955,7 @@ function buildSpoilHeap(ex, room, seed) {
       const th = (2 * Math.PI * a) / ANG;
       const px = room.x + Math.cos(th) * t * R, pz = room.z + Math.sin(th) * t * R;
       const lump = vnoise(px * 0.13 + seed, pz * 0.13 + seed) - 0.5;
-      const py = heapY(ex, room, px, pz);
+      const py = pileTopAt(px, pz) ?? heapY(ex, room, px, pz);
       row.push({ i: M.addVertex(px, py, pz, mixColor(digColour(0.5 + lump, 0.34), C_CHITIN, 0.14).toArray()), p: [px, py, pz] });
     }
     rows.push(row);
@@ -2011,7 +2043,7 @@ function buildBerm(ex, L, seed) {
       const lat = k * W;
       const x = L.ax + L.hx * u + px * lat, z = L.az + L.hz * u + pz * lat;
       const lump = vnoise(x * 0.13 + seed + 7, z * 0.13 + seed + 7) - 0.5;
-      const y = bermY(ex, L, x, z);
+      const y = pileTopAt(x, z) ?? bermY(ex, L, x, z);
       row.push({ i: M.addVertex(x, y, z, mixColor(digColour(0.5 + lump, 0.34), C_CHITIN, 0.14).toArray()), p: [x, y, z] });
     }
     rows.push(row);
@@ -2035,8 +2067,23 @@ function rebuildSpoil() {
     m.geometry.dispose();
   }
   nest._spoil = [];
+  /* WHO DRAWS WHERE TWO PILES SIT ON THE SAME SURFACE (#69). Since every pile
+     is built from pileTopAt(), their overlaps are not two shapes crossing any
+     more — they are the same shape twice, and the depth buffer has no reason
+     to prefer either. Left to chance it picks per pixel and per frame, which
+     is the shimmering patchwork the porter saw at the mouth.
+     So the order is stated: the mound is added first and pushed nearest, each
+     later pile a step further back. A tie is then always won by the same
+     surface, and since they carry the same material and the same colouring,
+     the seam is invisible rather than merely stable. */
+  let depthRank = 0;
   const add = (geo, name) => {
-    const mesh = new THREE.Mesh(geo, nestMaterial());
+    const mat = nestMaterial();
+    mat.polygonOffset = true;
+    mat.polygonOffsetFactor = depthRank;
+    mat.polygonOffsetUnits = depthRank * 2;
+    depthRank += 1;
+    const mesh = new THREE.Mesh(geo, mat);
     mesh.name = name;
     mesh.receiveShadow = true;
     nest.group.add(mesh);
@@ -2236,6 +2283,17 @@ export function updateFounding(dt) {
 
 /** Test seam only: forget the founded nest so a harness can dig again. Not
  *  gameplay — nothing in player/** should ever call this. */
+/** Debug seam (#69): what covers what, sampled from outside. Not gameplay —
+ *  a probe that can ask "is the shell covered here" instead of photographing a
+ *  black wedge and guessing. */
+export function _coverAt(x, z) {
+  return {
+    shell: excavationShellTopAt(x, z),
+    pile: pileTopAt(x, z),
+    lawn: lawnY(x, z),
+  };
+}
+
 export function _resetFounding() {
   if (nest && nest.group.parent) nest.group.parent.remove(nest.group);
   nest = null;
