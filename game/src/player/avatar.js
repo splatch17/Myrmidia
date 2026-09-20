@@ -130,8 +130,37 @@ export const FOUNDING_QUEEN = {
   maxSpeed: 12.5,
   sprint: 1.5,
   turnRate: 4.2,
-  legLen: [2.7, 2.9],
-  stride: 7.0,
+  /* #70: QUEEN_LEGS' hip/rest layout is world/queen.js's own — a *wider*
+     stance than the worker's, on purpose (she reads as heavy), but its
+     numbers came from the seated queen's silhouette and were never checked
+     against a walking IK's reach. Percentages below, not raw units, ON
+     PURPOSE: `scale` cancels out of every one of them, so they stay true
+     the next time she is resized (she already went 2.2 -> 1.9 once) instead
+     of quietly going stale like a raw-unit comment would — see
+     CONTRIBUTING.md on constants left behind by a scale change, which is
+     exactly how this defect was born in the first place.
+
+     Measured offline (a standalone gait simulation, cross-checked against
+     scripts/verify-legs-70.mjs's in-browser numbers) walking a straight
+     line at her own max/sprint speed: even standing still, her rear rest
+     foot alone already sits at ~81% of her (worker-inherited, unchanged)
+     leg's reach, and a planted foot has to stay put while the whole body
+     walks on past it for half a gait cycle — for the rear legs that trip
+     pushed the required reach to ~150-160% of what the leg could actually
+     cover, well past what any leg length short of absurd could fix without
+     also slowing her cadence into "vibrating" territory (fully closing the
+     gap needs a stride short enough to roughly double her step rate). So
+     this is a partial, honest correction, not a full one: legLen is 13%
+     longer — the same rest-reach margin the worker already enjoys,
+     restoring what should have been kept in step when QUEEN_LEGS was
+     widened — and stride is trimmed 29% (cadence goes up ~40%, still
+     nowhere near a dash). Together they bring the worst case down to
+     ~115-120% of reach without erasing "heavy lumber". The render-side
+     clamp (legs.js solveKnee) is what actually guarantees the bone-length
+     invariant regardless of any of these numbers — this pair only changes
+     how often it has to do real work. */
+  legLen: [3.05, 3.3],
+  stride: 5.0,
   climbSpeed: 12,    // scaled by `scale` at use, i.e. ~26 u/s: fast in world
                      // units, slow relative to her own body
   bodyR: 1.5,
