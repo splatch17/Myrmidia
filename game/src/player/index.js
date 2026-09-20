@@ -1,9 +1,9 @@
 import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
 import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath } from '../world/index.js';
-import { PLAYER_AVATAR, collideRadius, profileById } from './avatar.js';
+import { PLAYER_AVATAR, collideRadius, profileById, legLengths } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
-import { makeAnt, makeLegState, updateLegs } from './legs.js';
+import { makeAnt, makeLegState, updateLegs, antMatrix, localToWorld, solveKnee } from './legs.js';
 import { buildAntMesh } from './antMesh.js';
 import { createInput } from './input.js';
 import { createQueenMenu } from './queenMenu.js';
@@ -309,6 +309,23 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__avatar = profile;
     window.__mushroomRadii = mushroomRadii;
     window.__grass = GRASS;  // so the harness can walk to a real climbable stem
+    // #70: bone-length measurement, so a harness can assert invariance
+    // instead of eyeballing it. Mirrors exactly what antMesh.js draws (same
+    // solveKnee() call against the same hip/foot), and also reports what the
+    // pre-fix code would have drawn (a bone from knee to the *raw*,
+    // unsaturated gait target, legState[i].planted) — so one run reports both
+    // the old bug's actual deviation and the fix's, instead of needing two.
+    window.__legBones = () => {
+      const mat = antMatrix(ant);
+      const [L1, L2] = legLengths(profile);
+      const d3 = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+      return profile.legs.map((L, i) => {
+        const hipW = localToWorld(mat, L.hip);
+        const rawFoot = legState[i].planted;
+        const { knee, foot } = solveKnee(hipW, rawFoot, L1, L2, mat.basis.up);
+        return { l1: L1, l2: L2, thigh: d3(hipW, knee), shinOld: d3(knee, rawFoot), shinNew: d3(knee, foot) };
+      });
+    };
     // #29/#33: the harness has to know where a node is in order to walk to
     // it, and what the loop thinks she is holding — it still *drives* with
     // real key events.

@@ -110,7 +110,22 @@ export function localToWorld(mat, v) {
 }
 
 /* Two-bone IK: place the knee so hip->knee->foot has the given bone lengths,
-   with the joint pushed toward poleDir (up and outward for an ant). */
+   with the joint pushed toward poleDir (up and outward for an ant).
+
+   #70: the *target* foot (the gait's planted/swing point, `foot` below) is
+   free to land anywhere the step planner in updateLegs() puts it — a fast
+   swing-ahead, a hip that just spun through a turn, or a slope's height
+   field can all put it further from the hip than l1+l2. The old code
+   clamped `dist` only to solve the knee angle, then still drew the shin
+   from that knee to the *original, unclamped* foot — so whenever the
+   target was out of reach the shin bone visibly stretched past l2 to
+   reach it (this is the "legs get longer" bug, not an IK-angle bug).
+   The fix: return the actual reachable foot position (hip + dn*dist,
+   the same clamped distance used to solve the knee) instead of the raw
+   target, so hip-knee and knee-foot are exactly l1 and l2 by construction
+   — always, not just when the target happens to be reachable. When the
+   target *is* reachable this is algebraically identical to `foot`
+   (dist === rawDist), so normal-range gait is unaffected. */
 export function solveKnee(hip, foot, l1, l2, poleDir) {
   const d = sub3(foot, hip);
   const rawDist = Math.hypot(d[0], d[1], d[2]) || 1;
@@ -120,7 +135,9 @@ export function solveKnee(hip, foot, l1, l2, poleDir) {
   const h = Math.sqrt(Math.max(l1 * l1 - aLen * aLen, 0));
   const dot = poleDir[0] * dn[0] + poleDir[1] * dn[1] + poleDir[2] * dn[2];
   const perp = nrm3(sub3(poleDir, scl3(dn, dot)));
-  return add3(add3(hip, scl3(dn, aLen)), scl3(perp, h));
+  const knee = add3(add3(hip, scl3(dn, aLen)), scl3(perp, h));
+  const reachedFoot = add3(hip, scl3(dn, dist));
+  return { knee, foot: reachedFoot };
 }
 
 export function updateLegs(a, legState, dt) {
