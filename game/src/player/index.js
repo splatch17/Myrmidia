@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
 import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath } from '../world/index.js';
@@ -11,6 +10,7 @@ import { createQueenMenu } from './queenMenu.js';
 import { createCameraRig } from './camera.js';
 import { computeWishDir, stepAnt } from './movement.js';
 import { stepClimb, GRASS } from './climb.js';
+import { pickDigGauge } from './digGauge.js';
 import { deepestPenetration, resolveDecorCollision, mushroomRadii } from './decorCollision.js';
 import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
 import { createInteraction } from './interaction.js';
@@ -99,33 +99,18 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   const queenMenu = createQueenMenu();
   const cameraRig = createCameraRig(camera);
 
-  /* Screen position of the dig gauge (#51). The projection lives here rather
-     than in hud.js because this is the file that already holds a camera, and
-     a HUD that learns what a projection matrix is stops being a HUD.
-     
+  /* Screen position of the dig gauge (#51), and which face gets it when
+     several are open at once (#62 requirement 2 — see digGauge.js, pulled
+     out so the "at most one, nearest the centre" rule has its own unit
+     test, see scripts/verify-dig-gauge-pick.mjs). Kept as a call here
+     rather than in hud.js because this is the file that already holds a
+     camera, and a HUD that learns what a projection matrix is stops being
+     a HUD.
+
      One frame behind: main.js writes camera.position after this runs. On a
-     ring that fills over seventy-five seconds that is invisible, and paying
-     for it with a second update order would not be. */
-  const _dp = new THREE.Vector3();
-  function projectDig(g) {
-    if (!g) return null;
-    _dp.set(g.x, g.y + 6.5, g.z);
-    const d = _dp.distanceTo(camera.position);
-    _dp.project(camera);
-    /* z outside [-1,1] is behind the near plane or past the far one; a point
-       behind the camera projects to a mirrored position on screen, which is a
-       gauge floating over open meadow while the face is at her back. */
-    const visible = _dp.z > -1 && _dp.z < 1
-      && _dp.x > -1.35 && _dp.x < 1.35 && _dp.y > -1.35 && _dp.y < 1.35;
-    const w = window.innerWidth, h = window.innerHeight;
-    return {
-      ...g,
-      sx: (_dp.x * 0.5 + 0.5) * w,
-      sy: (-_dp.y * 0.5 + 0.5) * h,
-      scale: 46 / Math.max(12, d),
-      visible,
-    };
-  }
+     ring that fills over seventy-five seconds that is invisible, and
+     paying for it with a second update order would not be. */
+  const projectDig = (candidates) => pickDigGauge(candidates, camera);
   const hud = createHud();
   const marker = createTargetMarker(scene);
   /* The colony, and the two draw calls that show it. Workers are drawn
@@ -407,7 +392,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
    * would see from there.
    */
   function syncDigDial(dt = 0) {
-    hud.setDig(projectDig(colony.digProgress()), dt);
+    hud.setDig(projectDig(colony.digCandidates()), dt);
   }
 
   return { ant, group, update, syncDigDial, dispose };

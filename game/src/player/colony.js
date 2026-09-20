@@ -266,30 +266,20 @@ export function createColony() {
   const paceDigMultiplier = () => DIG_SECONDS / Math.max(1e-6, paceTime(DIG_SECONDS));
 
   /**
-   * What the circular gauge should draw, or null when there is nothing to
-   * show. Carries the face's world position, because the gauge is drawn AT the
-   * face (#51) rather than in a corner of the screen — that is the whole point
-   * of the change: the player has to know where to look.
+   * Every open, unfinished face the gauge COULD draw — one entry per face,
+   * carrying its own world position, progress and crew. Not "the" face to
+   * show: with the hall's walls opening several at once (#62), narrowing
+   * this down to the one the player is actually looking at needs a camera,
+   * and colony.js has never had one (the world/gameplay split in the
+   * contract keeps it that way on purpose). player/index.js's projectDig()
+   * is the one that picks at most one of these to hand to the HUD.
    */
-  function digProgress() {
-    const faces = digFaces();
-    if (!faces.length) return null;
-    /* The one being worked, else the nearest unfinished one — so the gauge
-       appears as soon as there is earth to dig, greyed at zero, and the player
-       learns where the work happens before laying anything. */
-    let best = null;
-    for (const f of faces) {
-      const crew = state.faceWork.get(f.id) || 0;
-      const score = crew * 1000 + f.worked;
-      if (!best || score > best.score) best = { f, crew, score };
-    }
-    if (!best) return null;
-    const { f, crew } = best;
-    return {
+  function digCandidates() {
+    return digFaces().map((f) => ({
       id: f.id, x: f.x, y: f.y, z: f.z,
       progress: f.needed > 0 ? f.worked / f.needed : 0,
-      diggers: crew,
-    };
+      diggers: state.faceWork.get(f.id) || 0,
+    }));
   }
 
   /** One line for the HUD, or null while there is nothing to say. */
@@ -319,7 +309,7 @@ export function createColony() {
   }
 
   return {
-    state, addEggs, update, statusText, digProgress, serialise,
+    state, addEggs, update, statusText, digCandidates, serialise,
     collideRadius: () => collideRadius(WORKER),
   };
 }
