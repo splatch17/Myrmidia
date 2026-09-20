@@ -213,6 +213,41 @@ export function hwAt(ex, u) {
   return ex.hw * (1 + (APRON_FLARE - 1) * t * t);
 }
 
+/* ---- the meadow, baked (#69) --------------------------------------------
+   This module may not ask terrain.js where the lawn is — that is the import
+   cycle the header is about — and until #69 it did not have to: the cut's
+   floor was measured from ONE height, the lawn at the mouth. That is exactly
+   what made the entrance the worst-looking part of the nest. The mouth flares
+   to 2.4 x RAMP_HW, so the apron is a band some ninety units across whose
+   floor was a parabola about a single point, laid over a meadow that rolls by
+   several units in that distance. Two surfaces within a hair of each other
+   over a thousand square units, neither one under the other: whichever won a
+   given pixel was decided by float noise, and it changed with the camera.
+
+   So founding.js — which IS allowed to sample the lawn — bakes a coarse grid
+   of it into the descriptor at dig time, and the floor below is clamped to it.
+   Coarse on purpose: it is used for a min() and for clamps with half a unit of
+   margin either side, never for a height anyone stands on that is not already
+   the meadow itself. */
+
+/** Bilinear sample of the baked meadow, or +Infinity where nothing was baked
+ *  (which makes every min() against it a no-op, so an excavation built without
+ *  a grid behaves exactly as it did before). */
+export function bakedLawnAt(ex, x, z) {
+  const g = ex && ex.lawnGrid;
+  if (!g) return Infinity;
+  const fx = clamp((x - g.x0) / g.step, 0, g.nx - 1.0001);
+  const fz = clamp((z - g.z0) / g.step, 0, g.nz - 1.0001);
+  const i = Math.floor(fx), j = Math.floor(fz);
+  const tx = fx - i, tz = fz - j;
+  const h = g.h, nz = g.nz;
+  return lerp(
+    lerp(h[i * nz + j], h[(i + 1) * nz + j], tx),
+    lerp(h[i * nz + j + 1], h[(i + 1) * nz + j + 1], tx),
+    tz,
+  );
+}
+
 let EX = null;
 
 /** Install the excavation (founding.js). One at a time — the game founds one
@@ -226,8 +261,9 @@ export function getExcavation() { return EX; }
  * module allowed to sample the lawn.
  *
  * @param mouth  {x, z} where the cut breaks the surface — the founded point
- * @param lawn   { y, gx, gz } lawn height at the mouth and its gradient, so
- *               the threshold can follow the meadow it cuts into
+ * @param lawn   { y, gx, gz, grid } lawn height at the mouth and its gradient,
+ *               so the threshold can follow the meadow it cuts into, plus the
+ *               baked grid of it the floor is clamped to (bakedLawnAt)
  * @param head   [hx, hz] unit heading the cut sets off on
  */
 export function makeExcavation(mouth, lawn, head, seed) {
@@ -262,7 +298,7 @@ export function makeExcavation(mouth, lawn, head, seed) {
   return {
     seed,
     mouth: { x: mouth.x, z: mouth.z },
-    topY: lawn.y, gx: lawn.gx, gz: lawn.gz,
+    topY: lawn.y, gx: lawn.gx, gz: lawn.gz, lawnGrid: lawn.grid || null,
     floorY: lawn.y - NEST_DEPTH,
     arc: { ax: A.x, az: A.z, R, a0, s, len },
     hw: RAMP_HW,
@@ -540,7 +576,18 @@ export function rampFloorAt(ex, x, z, u, lat) {
      flared mouth rising CROSS_RISE * FLARE^2 — three and a half units of lip
      across the one place the cut is supposed to be walk-in-able. */
   const k = lat / hwAt(ex, u);
-  return y + CROSS_RISE * k * k + FLOOR_GRAIN * (vnoise(x * 0.1 + ex.seed, z * 0.1 + ex.seed) - 0.5) * 2;
+  const dug = y + CROSS_RISE * k * k + FLOOR_GRAIN * (vnoise(x * 0.1 + ex.seed, z * 0.1 + ex.seed) - 0.5) * 2;
+  /* A dug floor is never above the ground it was dug out of (#69). Over most
+     of the cut this changes nothing — the floor is metres down. It bites at
+     the flared mouth, where the profile above says "the meadow's height at the
+     mouth, plus the dish" and the meadow forty units to one side says
+     something else entirely: the apron used to stand up to a unit proud of the
+     field it opens into, which is both an invisible lip to walk over and a
+     ninety-unit plate coplanar with the lawn.
+     min() of two continuous functions is continuous, so this adds no step for
+     movement.js to fall down — it only ever lowers, and only where the cut had
+     claimed to be above the meadow. */
+  return Math.min(dug, bakedLawnAt(ex, x, z));
 }
 
 /** The fine wobble every dug floor carries, so two of them meeting have the

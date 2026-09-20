@@ -23,6 +23,25 @@ export class MeshBuilder {
   addTri(a, b, c) { this.indices.push(a, b, c); }
   addQuad(a, b, c, d) { this.addTri(a, b, c); this.addTri(a, c, d); }
 
+  /* Twice the area of the triangle these three indices name. For callers
+     sweeping a surface that collapses somewhere — a tube trimmed onto the
+     circle of the room it enters keeps whole rows of vertices on one curve —
+     so the triangles that came out with no area can be left out rather than
+     drawn, and their vertices left out of computeVertexNormals()'s sums,
+     where a zero cross-product is a zero normal and a black fragment. */
+  triArea2(a, b, c) {
+    const p = this.positions;
+    const ux = p[b * 3] - p[a * 3], uy = p[b * 3 + 1] - p[a * 3 + 1], uz = p[b * 3 + 2] - p[a * 3 + 2];
+    const vx = p[c * 3] - p[a * 3], vy = p[c * 3 + 1] - p[a * 3 + 1], vz = p[c * 3 + 2] - p[a * 3 + 2];
+    return Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+  }
+
+  /** addQuad, minus whichever of its two triangles has no area. */
+  addQuadIfArea(a, b, c, d, eps = 1e-6) {
+    if (this.triArea2(a, b, c) > eps) this.addTri(a, b, c);
+    if (this.triArea2(a, c, d) > eps) this.addTri(a, c, d);
+  }
+
   /* Bake a primitive (see unitSphere/unitCylinder below) into this builder,
      transformed by `basis` and coloured per-vertex by colorFn(worldX,Y,Z). */
   bake(geo, basis, colorFn) {
@@ -62,7 +81,13 @@ export function unitSphere(seg, ring) {
   for (let r2 = 0; r2 < ring; r2++) {
     for (let s2 = 0; s2 < seg; s2++) {
       const a = r2 * (seg + 1) + s2, b = a + seg + 1;
-      idx.push(a, a + 1, b, a + 1, b + 1, b); // wound outward
+      /* Wound outward, and fanned at the two poles: there the whole top (or
+         bottom) row sits on one point, so one triangle of each quad has no
+         area at all — a sixth of a sphere's index buffer, drawn every frame,
+         contributing nothing to the picture or to a single vertex normal
+         (#69). */
+      if (r2 > 0) idx.push(a, a + 1, b);
+      if (r2 < ring - 1) idx.push(a + 1, b + 1, b);
     }
   }
   return { p, n, i: idx };

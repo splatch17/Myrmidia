@@ -8,7 +8,7 @@ import {
 import {
   makeExcavation, setExcavation, clearExcavation, getExcavation,
   excavationFloorAt, excavationHeadroomAt, excavationFootprint, excavationDescentPath,
-  excavationShellTopAt, chamberDoorR,
+  excavationShellTopAt, chamberDoorR, bakedLawnAt,
   rampCentre, rampParam, rampOffset, rampFloorAt,
   roomFloorY, roomFloorAt, linkFloorY, linkFloorAt, deepestFloorY,
   addRoom, addLink, addDigFace, excavationDigFaces, advanceDigFace,
@@ -57,8 +57,41 @@ import { resettleResources } from './resources.js';
 
 const RIM_H = 1.6;         // the spoil bank stands this proud of the meadow
 const CUT_BATTER = 3.2;     // how far the cut face leans out over its height
-const CUT_BANK = 8.0;       // spoil apron either side, wide enough to cover the
-                            // lawn grid's own transition quads (GS = 6)
+const CUT_BANK = 11.0;      // spoil apron either side, wide enough to cover the
+                            // lawn grid's own transition quads (GS = 6, so up
+                            // to 8.5 on the diagonal) with a margin
+
+/* The bank is wider where the mouth is flared, and that is not a look (#69).
+   The meadow is opened a whole lawn cell past the footprint, and at the very
+   mouth the footprint's own edge sweeps sideways by 2.3 units for every unit
+   of length: a cell measured ALONG the cut is twenty units of width across it,
+   so a bank of constant width left the outer corner of that hole with nothing
+   under it. The extra is buried (the rim is flush at the mouth by design), so
+   what it buys is a closed hole rather than a broader bank. */
+const CUT_BANK_FLARE = 9.0;
+/** How far back from the mouth the cut's own sheet starts, under the meadow.
+ *  Same reason, along the cut instead of across it. */
+const CUT_LEAD = 12;
+/** How far under the meadow the cut's sheet sits where the two are flush. The
+ *  threshold IS the meadow — that is what makes it walk-in-able — so at the
+ *  mouth there are two surfaces claiming the same ground and one of them has
+ *  to be underneath. Half a unit is invisible and unambiguous. */
+const MESH_TUCK = 0.5;
+/** And how far under it the outer hem of the spoil bank is tucked, the same
+ *  way world/founding.js's heapY() tucks a heap's hem (round 18's trick). */
+const HEM_BURY = 0.9;
+/** The outer part of the bank's width spent diving under the meadow. A bank
+ *  that dies into the grass over its whole width is a bank within a hair of
+ *  the meadow over its whole width; concentrated here, the two cross along a
+ *  line instead of sharing a field. */
+const BANK_PLUNGE = 0.34;
+/** A lawn vertex with this much spoil over it is under the heap, not beside
+ *  it, and its triangles go (openTheMeadow). */
+const SPOIL_BURY = 0.6;
+/** And how far the cut has to be below the meadow before the meadow gives way
+ *  to it. Was 1.5, which is also how big a step the ragged edge of the hole
+ *  then showed at the rim — the torn slabs of #69's capture. */
+const MEADOW_OPEN = 0.9;
 
 /* canFoundAt() only has to keep the *chamber* clear of the map edge —
    chooseHeading() steers the cut, so a site near a boundary gets a nest that
@@ -194,6 +227,130 @@ function digColour(proud, extra = 0.18) {
     .lerp(C_SOIL_A, extra + proud * 0.14).multiplyScalar(0.88);
 }
 
+const smoothK = (t) => { const k = clamp(t, 0, 1); return k * k * (3 - 2 * k); };
+/** Every spoil pile but the chamber's mound shares one seed (rebuildSpoil). */
+const spoilSeed = (ex) => (ex.seed + 613) % 9973;
+
+/* ---- the cut's own sheet of ground, as ONE function (#69) ----------------
+
+   Floor, battered face and spoil bank used to be three lists of vertices with
+   three ideas of where the meadow was, written inline in the loop that emitted
+   them — and the meadow itself was a fourth. That is why the entrance was the
+   worst of it: at the mouth all four are within a unit of each other by
+   design, so all four took turns winning the depth test, and the porter's
+   capture is the result.
+
+   They are one function of position now, the way heapY() has been one since
+   round 18, and it is consulted three times over: by the mesh that draws it,
+   by openTheMeadow() deciding which lawn triangles are under it, and by the
+   grass. What the three agree about is not a number passed between them, it is
+   the same code.
+
+   THE RULE IT ENCODES: the cut is never above the meadow, and where the two
+   are flush the cut goes UNDER. MESH_TUCK at the floor, HEM_BURY at the hem,
+   and between them a bank that stands proud only where the cut is deep enough
+   to have produced one. */
+
+/** How wide the spoil bank is at `u` — wider at the flared mouth, and see
+ *  CUT_BANK_FLARE for why that is arithmetic and not taste. */
+function bankWidthAt(ex, u) {
+  return CUT_BANK + CUT_BANK_FLARE * clamp(hwAt(ex, u) / ex.hw - 1, 0, 2);
+}
+
+/** Room the section may take on the INSIDE of the turn before it reaches the
+ *  centre of the turn itself. */
+const CUT_TURN_KEEP = 6;
+
+/**
+ * How far the section is squashed on the inside of the turn at `u`, 0..1.
+ *
+ * The cut curves on a radius of some forty units and its mouth flares to
+ * ninety-five across. Laid out symmetrically, the INNER edge of that section
+ * is placed past the centre of its own turn — so it sweeps backwards as u
+ * advances and the sheet crosses through itself in a bowtie at exactly the
+ * corner #69's capture is of. There is no height that fixes a fold; the
+ * section has to fit inside its turn, which on the inside of a bend means
+ * being narrower, the way a real cut is.
+ *
+ * Uniform, so the stations stay spread (a clamp would pile four of them onto
+ * one circle and make slivers), and 1 wherever there is room — which is the
+ * whole of the cut past the apron.
+ */
+function cutSquash(ex, u, side) {
+  if (side >= 0) return 1;
+  const full = hwAt(ex, u) + CUT_BATTER + bankWidthAt(ex, u);
+  return Math.min(1, (ex.arc.R - CUT_TURN_KEEP) / Math.max(full, 1e-3));
+}
+
+/** The crest of the bank: flush with (just under) the meadow at the mouth,
+ *  standing RIM_H proud once the cut is deep enough to have dug one.
+ *
+ *  It rises over RIM_RUN and not over the whole apron, and that is measured:
+ *  while the crest is crossing the meadow's own level the two surfaces are
+ *  near-parallel and within a hair of each other, so the longer the crossing
+ *  takes the wider the band of ground where neither is clearly on top. Over
+ *  the apron's 24 units that band was five units of u down both banks. */
+const RIM_RUN = 11;
+function cutRimY(ex, x, z, u, lw) {
+  const lump = 0.72 + 0.56 * vnoise(x * 0.15 + ex.seed, z * 0.15 + ex.seed);
+  return lw - MESH_TUCK + (RIM_H * lump + MESH_TUCK) * smoothK(u / RIM_RUN);
+}
+
+/**
+ * Height of the cut's sheet at (x, z), given where that point sits on the cut
+ * — `u` along it, `lat` across it. Covers the whole of it: the walkable floor,
+ * the battered face and the bank out to its buried hem, because what was
+ * broken was the joints BETWEEN those three.
+ *
+ * `lat` is the REAL lateral offset of the point; the section parameter is
+ * recovered from it through cutSquash(), so the mesh (which knows u and lat
+ * because it placed the vertex) and a world-space query (which recovers them
+ * with rampOffset) get the same answer for the same point.
+ */
+function cutSurfaceAt(ex, x, z, u, lat) {
+  const hw = hwAt(ex, u);
+  const W = bankWidthAt(ex, u);
+  const d = lat / cutSquash(ex, u, lat < 0 ? -1 : 1);
+  const over = Math.abs(d) - hw;
+  if (over > CUT_BATTER + W + 1e-3) return null;
+  const lw = lawnY(x, z);
+  const floor = Math.min(rampFloorAt(ex, x, z, u, clamp(lat, -hw, hw)), lw - MESH_TUCK);
+  let y;
+  if (over <= 0) y = floor;
+  else {
+    const rim = cutRimY(ex, x, z, u, lw);
+    if (over <= CUT_BATTER) y = lerp(floor, rim, smoothK(over / CUT_BATTER));
+    else {
+      const t = clamp((over - CUT_BATTER) / W, 0, 1);
+      /* The crest is carried out along the bank, following the meadow rather
+         than chording across it, and only the outer BANK_PLUNGE of the width
+         dives under. */
+      const crest = lw + (rim - lw) * (1 - t * 0.3);
+      y = lerp(crest, lw - HEM_BURY, smoothK((t - (1 - BANK_PLUNGE)) / BANK_PLUNGE));
+    }
+  }
+  /* Where the cut runs into the spoil mound, the two describe the same floor
+     from two different tessellations — the flickering band of the #69 capture.
+     So this one is tucked under the mound's, and buried under its surface:
+     nested, rather than coincident. */
+  const C = ex.chamber;
+  const h = heapY(ex, C, x, z);
+  if (h !== null) {
+    const inM = clamp((moundRadius(ex) - Math.hypot(x - C.x, z - C.z)) / 3, 0, 1);
+    /* 0.8, not 0.4: both surfaces draw their curves as chords between rings a
+       couple of units apart, so a clearance measured between the two FUNCTIONS
+       is spent twice over by the two meshes before a pixel is drawn. */
+    y = Math.min(y - inM * 0.8, h - 0.8);
+  }
+  return y;
+}
+
+/** The same sheet, asked for at a world point that may or may not be on it. */
+function cutSurfaceY(ex, x, z) {
+  const o = rampOffset(ex, x, z, CUT_LEAD);
+  return o ? cutSurfaceAt(ex, x, z, o.u, o.lat) : null;
+}
+
 /**
  * Which way the cut sets off. Not a free choice and no longer noise: the
  * excavation is now sixty-odd units long, so the direction is the difference
@@ -248,6 +405,24 @@ function chooseHeading(x, z) {
 }
 
 /**
+ * The meadow over the dig, sampled once into a plain grid so world/
+ * excavation.js can clamp the cut's floor to it without importing terrain
+ * (bakedLawnAt, and the module header there for why that import may not
+ * exist). Coarse on purpose — it is read for a min() and for clamps that
+ * carry half a unit of margin, never for a height anyone stands on that is
+ * not already the meadow.
+ */
+function bakeLawnGrid(cx, cz, half, step) {
+  const n = Math.ceil((2 * half) / step) + 1;
+  const h = new Float32Array(n * n);
+  const x0 = cx - half, z0 = cz - half;
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) h[i * n + j] = lawnY(x0 + i * step, z0 + j * step);
+  }
+  return { x0, z0, step, nx: n, nz: n, h };
+}
+
+/**
  * Dig the shell: an open, curving cut down from the meadow, and a walled,
  * domed chamber at the bottom of it.
  *
@@ -272,7 +447,13 @@ function buildShell(x, z, seed) {
     clamp((lawnY(x, z + e) - lawnY(x, z - e)) / (2 * e), -0.18, 0.18),
   ];
   const head = chooseHeading(x, z);
-  const ex = makeExcavation({ x, z }, { y: mouthY, gx: grad[0], gz: grad[1] }, head, seed);
+  /* The meadow over the whole dig, baked coarse, so world/excavation.js can
+     clamp the cut's floor to ground it is not allowed to ask about (#69, and
+     bakedLawnAt() for why the cycle forbids asking). The half-extent covers
+     the arc's chord (~50), the chamber and its mound (~34) and the bank. */
+  const ex = makeExcavation({ x, z }, {
+    y: mouthY, gx: grad[0], gz: grad[1], grid: bakeLawnGrid(x, z, 130, 4),
+  }, head, seed);
   setExcavation(ex);
 
   const M = new MeshBuilder();
@@ -280,95 +461,94 @@ function buildShell(x, z, seed) {
   const C = ex.chamber;
 
   /* ---- the open cut ----------------------------------------------------
-     One swept U: floor, a battered face either side up to the meadow, and a
-     spoil bank beyond that, wide enough to hide where the lawn grid was cut.
-     It stops as soon as the centre line is inside the spoil mound — from there
-     the mound's own carved slot takes over, and then the doorway. */
-  const LAT = [-1, -0.62, -0.24, 0.24, 0.62, 1];
-  const rows = [];
-  /* The trench stops where the SPOIL MOUND starts, not where the chamber
-     does. Running it to the chamber wall left its banks buried a unit or two
-     inside the heap, and two solids interpenetrating at a shallow angle is a
-     flickering seam, not a joint. The mound carries the passage from here on
-     (it is carved by the same rampFloorAt), overlapped by two units so there
-     is nothing to see between them. */
+     One swept U — floor, battered face, spoil bank — sampled off cutSurfaceY()
+     at every vertex, so the sheet the mesh draws and the sheet the meadow is
+     opened under are the same sheet.
+
+     ONE GRID, NO SPLIT. It used to be two: full rows while the trench was
+     outside the spoil mound, then two-vertex "wings" carrying the banks on
+     into it. Two strips with different vertex counts meeting along a row is a
+     T-junction, and a T-junction on ground this size is the torn slab of the
+     #69 capture. The rows are the same width for the whole run now; past the
+     mound's edge only the FLOOR quads are dropped, so every vertex on the
+     seam is shared by both sides of it.
+
+     ACROSS, the stations are what the flare costs: at the mouth the walkable
+     half-width is 2.4 x RAMP_HW, i.e. ninety-five units of floor, and the six
+     stations this had drew it in nineteen-unit facets — the slabs themselves.
+     Eleven spans across the floor is eight units at the widest, and the bank
+     gets four of its own so it follows the meadow it is buried in instead of
+     chording over it. */
+  const FLOOR_K = [];
+  for (let i = 0; i <= 10; i++) FLOOR_K.push(-1 + i / 5);
+  const BANK_T = [0.3, 0.62, 0.85, 1];      // fractions of the bank's width
   const MOUND_R = moundRadius(ex);
+  /* The floor stops where the SPOIL MOUND starts, not where the chamber does.
+     Run to the chamber wall it left its banks a unit or two inside the heap,
+     and two solids interpenetrating at a shallow angle is a flickering seam,
+     not a joint. The mound carries the passage from here on (carved by the
+     same rampFloorAt), overlapped by seven units of buried sheet. */
   let uCut = ex.arc.len;
   for (let u = 0; u <= ex.arc.len; u += 1.0) {
     const c = rampCentre(ex, u);
     if (Math.hypot(c.x - C.x, c.z - C.z) <= MOUND_R * 0.98) { uCut = Math.min(ex.arc.len, u + 7); break; }
   }
-  /* The banks run on past the end of the trench, as far as it takes for both
-     of them to be well inside the mound. Stopped with the trench, their ends
-     stood out past the mound's hem — the cut is twenty units wide now — and
-     between the two the meadow had been opened and nothing covered it: two
-     notches of sky beside the entrance, seen from above. */
-  const wings = [];
-  for (let u = -4; u <= ex.arc.len + 1e-4; u += 2.0) {
+
+  const rows = [];
+  for (let u = -CUT_LEAD; u <= ex.arc.len + 1e-4; u += 2.0) {
     const c = rampCentre(ex, u);
-    const full = u <= uCut + 1e-4;
-    const t = u / Math.max(ex.arc.len, 1e-3);
     const hw = hwAt(ex, u);
-    /* The spoil stands out of the way of the apron. A bank is only a bank
-       where the cut is deep enough to have produced one, and at the mouth the
-       cut is flush with the meadow — so a rim there was earth from nowhere,
-       and it was the whole reason the entrance had to be walked into head-on.
-       Smoothstepped over the same run the flare uses, so the two read as one
-       shape: a ravine that shallows and widens as it comes up. */
-    const rimK = (() => { const k = clamp(u / APRON_LEN, 0, 1); return k * k * (3 - 2 * k); })();
+    const W = bankWidthAt(ex, u);
+    const t = clamp(u / Math.max(ex.arc.len, 1e-3), 0, 1);
     // lateral unit vector: the arc's own outward normal
     const nx = (c.x - ex.arc.ax) / ex.arc.R, nz = (c.z - ex.arc.az) / ex.arc.R;
+    /* Lateral stations, outside in: hem, bank, rim, batter, floor, and back
+       out — in SECTION space, then squashed to fit inside the turn (see
+       cutSquash). `k` is the floor's own normalised offset, for colour. */
+    const lats = [];
+    for (const side of [-1, 1]) {
+      for (const bt of side < 0 ? [...BANK_T].reverse() : BANK_T) {
+        lats.push({ d: side * (hw + CUT_BATTER + bt * W), k: side, bank: true });
+      }
+      if (side < 0) {
+        lats.push({ d: -(hw + CUT_BATTER), k: -1, rim: true });
+        for (const k of FLOOR_K) lats.push({ d: k * hw, k });
+        lats.push({ d: hw + CUT_BATTER, k: 1, rim: true });
+      }
+    }
+    const sqIn = cutSquash(ex, u, -1);
     const row = [];
-    const put = (lat, y, col) => row.push(M.addVertex(c.x + nx * lat, y, c.z + nz * lat, col));
-    const bankAt = (side) => {
-      const rim = side * (hw + CUT_BATTER);
-      const bank = side * (hw + CUT_BATTER + CUT_BANK);
-      const rx = c.x + nx * rim, rz = c.z + nz * rim;
-      const bx = c.x + nx * bank, bz = c.z + nz * bank;
-      const lump = 0.72 + 0.56 * vnoise(bx * 0.15 + seed, bz * 0.15 + seed);
-      return { rim, bank, rx, rz, bx, bz, lump };
-    };
-    /* Where the cut runs into the mound, its rim is tucked just under the
-       mound's own surface, so the two meet by overlapping rather than leaving
-       a notch of sky between the trench's face and the mound's slot. */
-    const rimY = (B) => Math.min(lawnY(B.rx, B.rz) + RIM_H * B.lump * rimK, (heapY(ex, C, B.rx, B.rz) ?? Infinity) - 0.4);
-
-    const L = bankAt(-1);
-    const Rr = bankAt(1);
-    if (!full) {
-      const wing = (B, first) => {
-        const b = M.addVertex(c.x + nx * B.bank, lawnY(B.bx, B.bz) + 0.15 * B.lump, c.z + nz * B.bank, mixColor(digColour(B.lump, 0.34), C_CHITIN, 0.12).toArray());
-        const r = M.addVertex(c.x + nx * B.rim, rimY(B), c.z + nz * B.rim, mixColor(digColour(B.lump, 0.30), C_CHITIN, 0.10).toArray());
-        return first ? [b, r] : [r, b];
-      };
-      wings.push({ l: wing(L, true), r: wing(Rr, false) });
-      const inMound = (B) => Math.hypot(B.bx - C.x, B.bz - C.z) < MOUND_R - 3;
-      if (inMound(L) && inMound(Rr)) break;
-      continue;
-    }
-    put(L.bank, lawnY(L.bx, L.bz) + 0.15 * L.lump, mixColor(digColour(L.lump, 0.34), C_CHITIN, 0.12).toArray());
-    put(L.rim, rimY(L), mixColor(digColour(L.lump, 0.30), C_CHITIN, 0.10).toArray());
-    for (const k of LAT) {
-      const lat = k * hw;
+    for (const st of lats) {
+      const lat = st.d < 0 ? st.d * sqIn : st.d;
       const px = c.x + nx * lat, pz = c.z + nz * lat;
-      const wob = wobbleAt(k * Math.PI, u, seed);
-      put(lat, rampFloorAt(ex, px, pz, u, lat) - (u < 0 ? 0.3 : 0),
-        digColour(clamp((wob - 0.84) / 0.34 + 0.45, 0, 1), 0.22 + t * 0.06).toArray());
+      const wob = wobbleAt(st.k * Math.PI, u, seed);
+      const proud = clamp((wob - 0.84) / 0.34 + 0.45, 0, 1);
+      const col = st.bank || st.rim
+        ? mixColor(digColour(proud, st.bank ? 0.34 : 0.30), C_CHITIN, st.bank ? 0.12 : 0.10).toArray()
+        : digColour(proud, 0.22 + t * 0.06).toArray();
+      row.push(M.addVertex(px, cutSurfaceAt(ex, px, pz, u, lat), pz, col));
     }
-    put(Rr.rim, rimY(Rr), mixColor(digColour(Rr.lump, 0.30), C_CHITIN, 0.10).toArray());
-    put(Rr.bank, lawnY(Rr.bx, Rr.bz) + 0.15 * Rr.lump, mixColor(digColour(Rr.lump, 0.34), C_CHITIN, 0.12).toArray());
-    rows.push(row);
-    wings.push({ l: [row[0], row[1]], r: [row[row.length - 2], row[row.length - 1]] });
+    rows.push({ row, floor: u <= uCut + 1e-4 });
+    /* The banks run on until both are well inside the mound. Stopped with the
+       floor, their ends stood out past the mound's hem — the cut is forty
+       units wide now — and between the two the meadow had been opened and
+       nothing covered it: two notches of sky beside the entrance. */
+    if (u > uCut) {
+      const deep = [-1, 1].every((s) => {
+        const lat = s * (hw + CUT_BATTER + W) * (s < 0 ? sqIn : 1);
+        return Math.hypot(c.x + nx * lat - C.x, c.z + nz * lat - C.z) < MOUND_R - 3;
+      });
+      if (deep) break;
+    }
   }
+  const NB = BANK_T.length;                      // bank stations per side
+  const firstFloor = NB, lastFloor = rows[0].row.length - 1 - NB;
   for (let r = 0; r < rows.length - 1; r++) {
-    for (let i = 1; i < rows[r].length - 2; i++) {
-      M.addQuad(rows[r][i], rows[r][i + 1], rows[r + 1][i + 1], rows[r + 1][i]);
-    }
-  }
-  for (let r = 0; r < wings.length - 1; r++) {
-    for (const s of ['l', 'r']) {
-      const a = wings[r][s], b = wings[r + 1][s];
-      M.addQuad(a[0], a[1], b[1], b[0]);
+    const a = rows[r], b = rows[r + 1];
+    for (let i = 0; i < a.row.length - 1; i++) {
+      // the floor and its two battered faces exist only outside the mound
+      if (i >= firstFloor && i < lastFloor && !(a.floor && b.floor)) continue;
+      M.addQuad(a.row[i], a.row[i + 1], b.row[i + 1], b.row[i]);
     }
   }
 
@@ -429,8 +609,13 @@ function addRoomShell(M, ex, room, seed, ANG, skip) {
   const dh = room.roof - room.wall;
   const skirtR = room.r * (WALL_OUT + WALL_WOBBLE) + 1.6;
 
+  /* The floor is a fan from a real centre, not a ring of radius zero: ANG
+     coincident vertices carry ANG triangles of no area at all, and a vertex
+     that collects one contributes nothing to its own normal (#69). */
+  const hub = M.addVertex(room.x, roomFloorAt(ex, room, room.x, room.z), room.z,
+    digColour(clamp((wobbleAt(0, 0, seed) - 0.84) / 0.34 + 0.45, 0, 1), 0.26).toArray());
   const floorRows = [];
-  for (let ri = 0; ri <= FLOOR_RINGS + 1; ri++) {
+  for (let ri = 1; ri <= FLOOR_RINGS + 1; ri++) {
     const skirt = ri > FLOOR_RINGS;
     const rr = skirt ? skirtR : (ri / FLOOR_RINGS) * room.r;
     const row = [];
@@ -450,6 +635,8 @@ function addRoomShell(M, ex, room, seed, ANG, skip) {
     }
     floorRows.push(row);
   }
+  // wound to match the rings above it, or the hub's own normal cancels theirs
+  for (let a = 0; a < ANG; a++) M.addTri(hub, floorRows[0][(a + 1) % ANG], floorRows[0][a]);
   for (let ri = 0; ri < floorRows.length - 1; ri++) {
     for (let a = 0; a < ANG; a++) {
       const b = (a + 1) % ANG;
@@ -458,7 +645,10 @@ function addRoomShell(M, ex, room, seed, ANG, skip) {
   }
 
   const rows = [];
-  for (let i = 0; i <= wallRings + domeRings; i++) {
+  /* One ring short of the apex: the last one would be at cos(PI/2) = 0, i.e.
+     ANG vertices on the same point as `top` below, and a whole ring of
+     triangles with no area (#69). The fan closes it instead. */
+  for (let i = 0; i < wallRings + domeRings; i++) {
     const row = [];
     for (let a = 0; a < ANG; a++) {
       const th = (2 * Math.PI * a) / ANG;
@@ -495,7 +685,8 @@ function addRoomShell(M, ex, room, seed, ANG, skip) {
   }
   const top = M.addVertex(room.x, floorY + room.roof, room.z, digColour(0.5, 0.24).toArray());
   const last = rows[rows.length - 1];
-  for (let a = 0; a < ANG; a++) M.addTri(top, last[(a + 1) % ANG].i, last[a].i);
+  // wound like the dome's own quads (inward), or the apex cancels the ring
+  for (let a = 0; a < ANG; a++) M.addTri(top, last[a].i, last[(a + 1) % ANG].i);
   return quads;
 }
 
@@ -549,10 +740,14 @@ function heapY(ex, room, x, z) {
   let y = base + (peak - base) * Math.pow(Math.max(0, 1 - t * t), 0.85) + lump * (first ? 2.2 : 1.6) * (1 - t);
   const shell = excavationShellTopAt(x, z);
   if (shell !== null) y = Math.max(y, shell + ROOF_COVER * (first ? 0.55 : 0.5));
-  /* The hem goes a hair INTO the meadow, so it is buried, never floating —
-     except where something built runs out under it. A hem pulled down across
-     the corridor was a slab through the corridor's roof. */
-  else if (t > 0.999) y = Math.min(y, base - 0.3);
+  /* The hem goes INTO the meadow, so it is buried, never floating — except
+     where something built runs out under it. A hem pulled down across the
+     corridor was a slab through the corridor's roof.
+     Eased over the last of the skirt rather than dropped at t = 1 (#69): a
+     step in this function is a step in every surface clamped under it — the
+     cut's bank and every berm are — and a step shared by three meshes is the
+     kind of seam this is all about. */
+  else y -= HEM_BURY * Math.pow(t, 6);
   return y;
 }
 
@@ -580,7 +775,9 @@ function buildMound(ex, seed) {
   const lintel = floorY + C.wall;
   const radii = [];
   const INNER = 8, OUTER = 6;
-  for (let i = 0; i < INNER; i++) radii.push((i / INNER) * RH);
+  // from i = 1: radius zero is MANG coincident vertices and a ring of
+  // triangles with no area. The hub below closes the middle.
+  for (let i = 1; i < INNER; i++) radii.push((i / INNER) * RH);
   const HEAD_IN = radii.length;
   radii.push(RH - 0.05);
   const HEAD_OUT = radii.length;
@@ -612,14 +809,19 @@ function buildMound(ex, seed) {
         const k = clamp(over / CUT_BATTER, 0, 1);
         y = lerp(lintel, y, k * k * (3 - 2 * k));
       }
-      row.push({ i: M.addVertex(px, y, pz, mixColor(digColour(0.5 + lump, 0.34), C_CHITIN, 0.14).toArray()), over });
+      row.push({ i: M.addVertex(px, y, pz, mixColor(digColour(0.5 + lump, 0.34), C_CHITIN, 0.14).toArray()), over, p: [px, y, pz] });
     }
     mound.push(row);
   }
+  const hubLump = vnoise(C.x * 0.13 + seed, C.z * 0.13 + seed) - 0.5;
+  const hub = M.addVertex(C.x, heapY(ex, C, C.x, C.z), C.z,
+    mixColor(digColour(0.5 + hubLump, 0.34), C_CHITIN, 0.14).toArray());
+  for (let a = 0; a < MANG; a++) M.addTri(hub, mound[0][a + 1].i, mound[0][a].i);
   for (let ri = 0; ri < mound.length - 1; ri++) {
     for (let a = 0; a < MANG; a++) {
       const q = [mound[ri][a], mound[ri][a + 1], mound[ri + 1][a + 1], mound[ri + 1][a]];
       if (ri === HEAD_IN && q.every((v) => v.over <= 0)) continue;   // the doorway
+      if (buriedQuad(C, q.map((v) => v.p))) continue;
       M.addQuad(q[0].i, q[1].i, q[2].i, q[3].i);
     }
   }
@@ -681,7 +883,44 @@ function meadowCut(x, z) {
   const hr = excavationHeadroomAt(x, z);
   return Number.isFinite(hr)
     ? lawnY(x, z) < dug + hr + MEADOW_CLEAR   // roofed: the room comes through
-    : lawnY(x, z) - dug > 1.5;                // open cut, but not the threshold
+    : lawnY(x, z) - dug > MEADOW_OPEN;        // open cut, but not the threshold
+}
+
+/**
+ * The top of the spoil lying over (x, z), or null where none does — the cut's
+ * own bank, a room's heap, a corridor's berm.
+ *
+ * Every one of those is a function the mesh is built from, so a lawn triangle
+ * this says is buried really is buried: the test and the thing it is testing
+ * against are the same arithmetic. Round 18 did this for the ROOF (a heap has
+ * to cover what is under it); #69 is the same question asked the other way
+ * round — what is under the heap has to stop being drawn.
+ */
+function spoilTopAt(x, z, skip = null) {
+  const ex = getExcavation();
+  if (!ex) return null;
+  let y = null;
+  const put = (v) => { if (v !== null && v !== undefined && (y === null || v > y)) y = v; };
+  if (skip !== 'cut') put(cutSurfaceY(ex, x, z));
+  for (const r of ex.rooms) if (r !== skip) put(heapY(ex, r, x, z));
+  for (const L of ex.links) if (L !== skip) put(bermY(ex, L, x, z));
+  return y;
+}
+
+/** How far under another spoil surface a quad has to be before it is dropped
+ *  rather than drawn (buriedQuad). Two heaps that intersect are two domes with
+ *  a crossing curve, and along that curve neither is on top; drawn, they trade
+ *  pixels the length of it. */
+const SPOIL_OVERLAP = 0.4;
+
+/** Is this quad entirely under some OTHER pile of spoil? Then it is not
+ *  visible and drawing it can only make a seam. Corners are [x, y, z]. */
+function buriedQuad(skip, corners) {
+  for (const c of corners) {
+    const other = spoilTopAt(c[0], c[2], skip);
+    if (other === null || other < c[1] + SPOIL_OVERLAP) return false;
+  }
+  return true;
 }
 
 /* Grass does not grow through a spoil heap. It did, and the tallest blades
@@ -709,10 +948,19 @@ function openTheMeadow() {
   const NEAR = 7.0;
   const soil = C_WALL_B.clone().lerp(C_SOIL_A, 0.4);
   const buried = new Uint8Array(pos.count);
-  let moved = 0;
+  const under = new Uint8Array(pos.count);
+  let moved = 0, sunk = 0;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
     if (meadowCut(x, z)) { buried[i] = 1; moved++; continue; }
+    /* Under the spoil, as opposed to over the hole (#69). A spoil bank that
+       dies into the meadow is within a hair of the meadow over the width of
+       its skirt, and the two then trade pixels — which is the seam the porter
+       photographed, drawn along the whole length of the cut. Measured against
+       the vertex's own DRAWN height rather than lawnY(), because what fights
+       is the triangle, not the field it was sampled from. */
+    const sp = spoilTopAt(x, z);
+    if (sp !== null && sp >= pos.getY(i) + SPOIL_BURY) { under[i] = 1; sunk++; }
     if (!col) continue;
     /* Soil-coloured only beside the OPEN cut, where the grid's transition
        quads show through the bank. Beside a corridor the meadow is a meadow,
@@ -729,9 +977,16 @@ function openTheMeadow() {
     if (!lawnMesh.userData.meadowIndex) lawnMesh.userData.meadowIndex = index.array.slice();
     const orig = lawnMesh.userData.meadowIndex;
     const arr = index.array;
+    /* ANY corner over the hole, but ALL THREE under the spoil. The two
+       polarities are deliberate and opposite. Over the hole there is nothing
+       below, so the meadow has to go generously and something dug has to cover
+       what that overshoots. Under the spoil there is something above, so the
+       meadow may only go where it is certainly hidden — removed generously,
+       the hole would reach out past the hem into open field. */
     for (let t = 0; t < orig.length; t += 3) {
       const a = orig[t], b = orig[t + 1], c = orig[t + 2];
-      if (buried[a] || buried[b] || buried[c]) { arr[t] = a; arr[t + 1] = a; arr[t + 2] = a; }
+      const gone = buried[a] || buried[b] || buried[c] || (under[a] && under[b] && under[c]);
+      if (gone) { arr[t] = a; arr[t + 1] = a; arr[t + 2] = a; }
       else { arr[t] = a; arr[t + 1] = b; arr[t + 2] = c; }
     }
     index.needsUpdate = true;
@@ -743,7 +998,10 @@ function openTheMeadow() {
   if (grassField && typeof grassField.clearIn === 'function') {
     /* The same test, so no blade is left standing on a triangle that is no
        longer drawn — and so the meadow over a corridor keeps its grass. */
-    grassField.clearIn((x, z) => meadowCut(x, z) || underSpoil(x, z) || excavationFloorAt(x, z) !== null);
+    /* Plus anything the spoil has actually buried: a blade rooted on meadow
+       the cut's bank was heaped over came up THROUGH the bank. */
+    grassField.clearIn((x, z) => meadowCut(x, z) || underSpoil(x, z) || excavationFloorAt(x, z) !== null
+      || ((spoilTopAt(x, z) ?? -Infinity) >= lawnY(x, z) - 0.2));
   }
   return moved;
 }
@@ -1484,7 +1742,13 @@ function buildTunnelMesh(ex, L, seed) {
   for (let i = 0; i < segs; i++) {
     for (let a = 0; a < ANG_TUNNEL; a++) {
       const b = (a + 1) % ANG_TUNNEL;
-      M.addQuad(rows[i][a], rows[i][b], rows[i + 1][b], rows[i + 1][a]);
+      /* The trim slides every vertex that would stand inside a room back onto
+         that room's circle, so near a doorway whole rows land on the same
+         curve and a quarter of this tube came out with no area at all. Drawn,
+         they cost nothing and shade nothing; SUMMED, they gave the vertices on
+         that curve a zero normal, which is a black band across the one place
+         the player is looking (#69). */
+      M.addQuadIfArea(rows[i][a], rows[i][b], rows[i + 1][b], rows[i + 1][a]);
     }
   }
   return M.toBufferGeometry();
@@ -1649,21 +1913,28 @@ function buildSpoilHeap(ex, room, seed) {
   const R = heapRadius(ex, room);
   const RINGS = 10, ANG = 48;
   const rows = [];
-  for (let ri = 0; ri <= RINGS; ri++) {
+  const hubLump = vnoise(room.x * 0.13 + seed, room.z * 0.13 + seed) - 0.5;
+  const hub = M.addVertex(room.x, heapY(ex, room, room.x, room.z), room.z,
+    mixColor(digColour(0.5 + hubLump, 0.34), C_CHITIN, 0.14).toArray());
+  for (let ri = 1; ri <= RINGS; ri++) {     // ri = 0 is the hub, not a ring
     const t = ri / RINGS;
     const row = [];
     for (let a = 0; a < ANG; a++) {
       const th = (2 * Math.PI * a) / ANG;
       const px = room.x + Math.cos(th) * t * R, pz = room.z + Math.sin(th) * t * R;
       const lump = vnoise(px * 0.13 + seed, pz * 0.13 + seed) - 0.5;
-      row.push(M.addVertex(px, heapY(ex, room, px, pz), pz, mixColor(digColour(0.5 + lump, 0.34), C_CHITIN, 0.14).toArray()));
+      const py = heapY(ex, room, px, pz);
+      row.push({ i: M.addVertex(px, py, pz, mixColor(digColour(0.5 + lump, 0.34), C_CHITIN, 0.14).toArray()), p: [px, py, pz] });
     }
     rows.push(row);
   }
-  for (let ri = 0; ri < RINGS; ri++) {
+  for (let a = 0; a < ANG; a++) M.addTri(hub, rows[0][(a + 1) % ANG].i, rows[0][a].i);
+  for (let ri = 0; ri < rows.length - 1; ri++) {
     for (let a = 0; a < ANG; a++) {
       const b = (a + 1) % ANG;
-      M.addQuad(rows[ri][a], rows[ri][b], rows[ri + 1][b], rows[ri + 1][a]);
+      const q = [rows[ri][a], rows[ri][b], rows[ri + 1][b], rows[ri + 1][a]];
+      if (buriedQuad(room, q.map((v) => v.p))) continue;
+      M.addQuad(q[0].i, q[1].i, q[2].i, q[3].i);
     }
   }
   return M.toBufferGeometry();
@@ -1680,13 +1951,57 @@ function buildSpoilHeap(ex, room, seed) {
  * under a cover over what is built — so the two meet by intersecting, with no
  * open end to see into.
  */
+/** Plan half-width of the berm over a corridor. */
+function bermWidth(L) {
+  return L.hw * TUNNEL_BORE * (1 + MOUTH_FLARE) * (1 + TUNNEL_LUMP) + HEAP_SKIRT;
+}
+
+/**
+ * Height of a corridor's berm at (x, z), or null off it. heapY()'s opposite
+ * number, and for the same reason: the mesh below is built from it and
+ * openTheMeadow() decides which lawn triangles are under it from it, so there
+ * is no second opinion about where the top of the berm is.
+ */
+function bermY(ex, L, x, z) {
+  /* A hair of tolerance at both edges, because the mesh below samples this at
+     its own outermost vertices: recovering s and t from a point placed AT the
+     boundary lands on either side of it, and a strict test there answers null
+     for a vertex that has to have a height. */
+  const s0 = (x - L.ax) * L.hx + (z - L.az) * L.hz;
+  if (s0 < -1e-3 || s0 > L.len + 1e-3) return null;
+  const s = clamp(s0, 0, L.len);
+  const W = bermWidth(L);
+  const tRaw = Math.abs(-(x - L.ax) * L.hz + (z - L.az) * L.hx) / W;
+  if (tRaw > 1 + 1e-6) return null;
+  /* Clamped, and not for tidiness: the profile below raises (1 - t*t) to a
+     fractional power, and a t of 1 + 1e-16 — which is what recovering t from a
+     vertex placed AT the edge gives — makes that NaN, times a zero that does
+     not rescue it. Four NaN vertices, one NaN bounding sphere, one mesh that
+     never draws. */
+  const t = clamp(tRaw, 0, 1);
+  const seed = spoilSeed(ex);
+  const base = lawnY(x, z);
+  const lump = vnoise(x * 0.13 + seed + 7, z * 0.13 + seed + 7) - 0.5;
+  const crest = linkFloorY(ex, L, s) + L.roof * (1 + TUNNEL_LUMP) + ROOF_COVER * 0.55;
+  let y = base + Math.max(0, crest - base) * Math.pow(1 - t * t, 0.85) + lump * 1.2 * (1 - t);
+  const shell = excavationShellTopAt(x, z);
+  const floor = shell === null ? -Infinity : shell + ROOF_COVER * 0.3;
+  if (shell !== null) y = Math.max(y, shell + ROOF_COVER * 0.5);
+  else y -= HEM_BURY * Math.pow(t, 6);       // eased, like heapY's own hem
+  for (const id of L.ends || []) {
+    const r = ex.rooms.find((q) => q.id === id);
+    if (!r) continue;
+    const h = heapY(ex, r, x, z);
+    if (h !== null) y = Math.min(y, h - 0.8);
+  }
+  return Math.max(y, floor);
+}
+
 function buildBerm(ex, L, seed) {
   const M = new MeshBuilder();
-  const outer = L.hw * TUNNEL_BORE * (1 + MOUTH_FLARE) * (1 + TUNNEL_LUMP);
-  const W = outer + HEAP_SKIRT;
+  const W = bermWidth(L);
   const LAT = [-1, -0.84, -0.7, -0.58, -0.46, -0.34, -0.2, 0, 0.2, 0.34, 0.46, 0.58, 0.7, 0.84, 1];
   const px = -L.hz, pz = L.hx;
-  const ends = L.ends.map((id) => ex.rooms.find((r) => r.id === id)).filter(Boolean);
   const segs = Math.max(4, Math.round(L.len / 2.0));
   const rows = [];
   for (let i = 0; i <= segs; i++) {
@@ -1695,26 +2010,17 @@ function buildBerm(ex, L, seed) {
     for (const k of LAT) {
       const lat = k * W;
       const x = L.ax + L.hx * u + px * lat, z = L.az + L.hz * u + pz * lat;
-      const base = lawnY(x, z);
       const lump = vnoise(x * 0.13 + seed + 7, z * 0.13 + seed + 7) - 0.5;
-      const crest = linkFloorY(ex, L, u) + L.roof * (1 + TUNNEL_LUMP) + ROOF_COVER * 0.55;
-      const t = Math.abs(k);
-      let y = base + Math.max(0, crest - base) * Math.pow(1 - t * t, 0.85) + lump * 1.2 * (1 - t);
-      const shell = excavationShellTopAt(x, z);
-      const floor = shell === null ? -Infinity : shell + ROOF_COVER * 0.3;
-      if (shell !== null) y = Math.max(y, shell + ROOF_COVER * 0.5);
-      else if (t >= 1) y = Math.min(y, base - 0.3);
-      for (const r of ends) {
-        const h = heapY(ex, r, x, z);
-        if (h !== null) y = Math.min(y, h - 0.8);
-      }
-      row.push(M.addVertex(x, Math.max(y, floor), z, mixColor(digColour(0.5 + lump, 0.34), C_CHITIN, 0.14).toArray()));
+      const y = bermY(ex, L, x, z);
+      row.push({ i: M.addVertex(x, y, z, mixColor(digColour(0.5 + lump, 0.34), C_CHITIN, 0.14).toArray()), p: [x, y, z] });
     }
     rows.push(row);
   }
   for (let i = 0; i < segs; i++) {
     for (let a = 0; a < LAT.length - 1; a++) {
-      M.addQuad(rows[i][a], rows[i][a + 1], rows[i + 1][a + 1], rows[i + 1][a]);
+      const q = [rows[i][a], rows[i][a + 1], rows[i + 1][a + 1], rows[i + 1][a]];
+      if (buriedQuad(L, q.map((v) => v.p))) continue;
+      M.addQuad(q[0].i, q[1].i, q[2].i, q[3].i);
     }
   }
   return M.toBufferGeometry();
