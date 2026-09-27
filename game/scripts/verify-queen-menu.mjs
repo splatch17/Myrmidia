@@ -229,9 +229,9 @@ async function main() {
   const asWorker = { state: await page.evaluate(() => window.__caste()), panel: await panel() };
   console.log('  after Digit5:', JSON.stringify(asWorker.state), '|', asWorker.panel.text);
   check(asWorker.state.caste === 'worker', `Digit5 switched the caste back (state says "${asWorker.state.caste}")`);
-  /* ● is the filled bullet (&#9679;) the panel marks the PICKED caste
-     with — textContent gives the real glyph, not the source's HTML entity. */
-  check(new RegExp('●\\s*5\\s*ouvrière').test(asWorker.panel.text),
+  /* Since the round-17 skin the PICKED caste carries a PROCHAINE tag right
+     after its name (it was a ● bullet before). */
+  check(/5\s*ouvrière\s*PROCHAINE/i.test(asWorker.panel.text),
     'the panel itself marks ouvrières as the next clutch, not just the internal state');
   await shot('02-caste-worker');
 
@@ -240,7 +240,7 @@ async function main() {
   const asDigger = { state: await page.evaluate(() => window.__caste()), panel: await panel() };
   console.log('  after Digit6:', JSON.stringify(asDigger.state), '|', asDigger.panel.text);
   check(asDigger.state.caste === 'digger', `Digit6 switched the caste (state says "${asDigger.state.caste}")`);
-  check(new RegExp('●\\s*6\\s*fouisseuse').test(asDigger.panel.text),
+  check(/6\s*fouisseuse\s*PROCHAINE/i.test(asDigger.panel.text),
     'the panel itself marks fouisseuses as the next clutch, not just the internal state');
   await shot('03-caste-digger');
 

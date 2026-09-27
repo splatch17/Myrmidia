@@ -219,7 +219,7 @@ const CSS = `
 .mm-qhp-bar { height: 17px; }
 .mm-qhp-bar > span { font: 700 11px/17px var(--mm-body); }
 
-.mm-casterow { display: flex; align-items: center; gap: 8px; padding: 8px 10px 14px; }
+.mm-casterow { display: flex; align-items: center; gap: 8px; padding: 8px 10px 24px; }
 .mm-caste-sq {
   position: relative; width: 32px; height: 32px; border-radius: 4px;
   border: 1px solid rgba(110,79,34,.65); background: rgba(0,0,0,.35);
