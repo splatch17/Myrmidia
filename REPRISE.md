@@ -13,60 +13,64 @@
 
 ## 0. LA DEMANDE EN COURS — c'est ici qu'on reprend
 
-### Mon dernier prompt, littéralement
+*État au 2026-09-28 : round 20 publié (`d6bced5`), les quatre harnais passent.
+Le §0 du round 16 (entrée raccourcie, front de taille, hall) est livré ; il
+reste lisible dans l'historique git de ce fichier.*
 
-> **« assez bien mais il y a des choses à modifier. l'entrée est relativement
-> compliquée, et la remontée bug encore, il faut faciliter les déplacements et
-> la transition avec les zones réduites. On peut au départ arriver simplement
-> en bas devant de la terre à creuser. Pour cela il faudra pondre des
-> creuseuses (trouver un meilleur nom) qui commenceront à creuser (je veux une
-> petite animation de barre de chargement circulaire, type MMORPG/jeu récent,
-> qui en finissant laisse apparaître une nouvelle petite 'salle' qui serve
-> simplement de 'hall' pour commencer à creuser des tunnels. il faudra alors un
-> certain nombre de fourmis pour creuser plus, on brainstormera sur la manière
-> dont tout cela doit fonctionner. crée des tickets et implémente ce que je
-> viens d'expliquer, et continue le développement suivant ce qui est prévu
-> initialement. »**
+### La direction du jeu, telle que je l'ai posée — elle commande tout le reste
 
-### Livré au round 16 (`3175592`, `f3a5015`)
+**La reine s'installe, puis ne bouge plus** ([#77](https://github.com/splatch17/Myrmidia/issues/77)).
+C'est un **renversement du prologue**, pas un ajout :
 
-Tickets **#48 à #53**, tous implémentés. Quatre harnais passent :
-`verify-descent`, `verify-dig`, `verify-gallery-walk`, `verify-queen-menu`.
+- **Avant l'installation : une course.** Creuser le plus loin possible, mais
+  sans tarder : la reine est vulnérable, et tarder tue.
+- **L'installation : le point de bascule.** Elle s'immobilise, définitivement.
+- **Après : elle doit être protégée.** Elle a de vrais points de vie, elle peut
+  être attaquée, et **le joueur passe dans les autres fourmis** (#36 contrôle
+  de n'importe quelle fourmi, #34 mode macro). La protéger devient l'objectif
+  permanent.
+- **L'XP et les niveaux** ([#7](https://github.com/splatch17/Myrmidia/issues/7))
+  sont **la même progression** que #77, pas un chantier à part.
 
-| Demande | État |
-|---|---|
-| L'entrée est compliquée | ✅ 73 u de tranchée pour 18 de descente → **46 u pour 13**. Virage 1,9 rad → 0,85 |
-| Arriver en bas devant de la terre à creuser | ✅ Le front de taille est posé sur le dernier segment du chemin de descente : **mesuré à 0,0° de son axe d'arrivée** |
-| La remontée bugue | ✅ Deux causes, ci-dessous |
-| Faciliter les zones réduites | ✅ Les parois glissent au lieu d'arrêter net |
-| Meilleur nom que « creuseuse » | ✅ **fouisseuse** (terme zoologique réel). Si tu préfères autre chose, c'est une ligne |
-| Jauge circulaire type MMO | ✅ Anneau SVG **posé sur le front de taille**, projeté à l'écran, avec pulsation à l'achèvement |
-| Une petite salle « hall » | ✅ S'ouvre d'un coup quand la jauge se remplit, r 8,5, reliée par un couloir |
-| Un certain nombre de fourmis pour creuser plus | ⏳ Le mécanisme est là (les fronts sont une liste, chacun avec son coût) — **les nombres restent à brainstormer, comme demandé** |
-| Continuer le développement prévu | ✅ Étape 5 : **le menu de gestion de la reine** (`C`) |
+**#77 est un ticket de design : ses quatre questions se tranchent AVEC MOI
+avant d'implémenter** — qu'est-ce qui presse, que rapporte le risque de
+creuser loin, dans quelle fourmi passe le joueur au basculement, et ce que
+veut dire mourir. Ne rien coder de #77 sans ces réponses.
 
-### Les deux causes de « la remontée bugue »
+Conséquence déjà valable : tout ce qui s'écrit maintenant doit supposer que
+la reine **ne sera pas toujours la fourmi contrôlée** (déjà la règle du §2 :
+le contrôle est un attribut, le menu tient au drapeau `manages`).
 
-1. **La galerie était plus étroite que la reine.** Elle publiait 3,1 de
-   demi-largeur marchable pour un corps de rayon 3,3. Quatrième fois que ce
-   piège frappe. Aucun harnais ne l'avait vu **parce qu'ils suivaient tous la
-   ligne centrale**, là où il n'y a rien à toucher. Le harnais a maintenant un
-   test qui va volontairement **dans le mur**.
-2. **Le nid était la seule surface du jeu qui arrêtait net.** `containNest()`
-   la remettait sur le point frontière et le pas s'arrêtait là — donc monter
-   une tranchée qui tourne en frottant le mur extérieur n'avançait pas d'un
-   pouce. Ça glisse maintenant, sur une normale estimée depuis `contains()`
-   seul, donc ça tient quelle que soit la forme creusée.
+### Ce que je viens de demander (tickets ouverts, round 21)
 
-### Ce qui reste ouvert
+Ordre arbitré : **#75, puis #78, puis #76.**
 
-- **Le brainstorm que tu as annoncé** : combien de fourmis pour quel
-  creusement, coût en fourmis-secondes ou en effectif minimum, ce qu'on creuse
-  après le hall, si un tunnel se paye aussi en ressources. Rien n'a été tranché
-  à ta place — les valeurs actuelles (75 fourmis-secondes pour le hall) sont
-  des points de départ.
-- Le hall est nu : c'est un volume, pas encore un lieu. Il n'a **pas** encore
-  ses propres fronts de taille sur ses parois (le modèle les supporte).
+| # | Demande | Agent |
+|---|---|---|
+| [#75](https://github.com/splatch17/Myrmidia/issues/75) | **Interface MMO** : menu de la reine ouvert au lancement, raccourci pour le masquer écrit sur le panneau ; **barre de vie de la reine** en bas (pleine pour l'instant, prête pour de vrais PV) ; rangée de **carrés de castes** à trois états : débloquée / en production / pas encore débloquée | Cataglyphis |
+| [#78](https://github.com/splatch17/Myrmidia/issues/78) | **Ambiance** : le nid bascule vers le bleu/violet (lumière, parois, brume, lampes), le jardin garde toute sa palette, la bouche est un seuil entre deux mondes. Plus les trois recettes qui manquent (reprend #28) : bloom sur les émissifs, rais de lumière dans le puits, poussière en suspension. Spec DA : `design/ambiance-prologue.md` §9 et §9f | Atta (+ Cephalotes) |
+| [#76](https://github.com/splatch17/Myrmidia/issues/76) | **Effectif minimum de fouisseuses par front** : 1 au hall, 3 à la génération suivante, 6 ensuite, davantage pour une grande salle. Sous le seuil le front **n'avance pas du tout**, et le jeu dit « il faut N fouisseuses, il y en a M ». C'est ce qui force à pondre | Cataglyphis |
+
+### Défauts encore ouverts
+
+[#69](https://github.com/splatch17/Myrmidia/issues/69) parois mal affichées à
+l'entrée (le maillage de la tranchée dessine du sol que le monde ne déclare
+pas — la mesure et le test à écrire sont dans le ticket), #72, #35, #74.
+
+### Règles de travail qui ont coûté des sessions
+
+- **Un ticket = un agent NEUF avec une consigne complète.** Ne jamais réveiller
+  un agent terminé : ça recharge tout son historique (317 000 tokens pour une
+  correction de cadrage). Les petites retouches, la session principale les fait.
+- Les copies de travail d'agent partent de `main`, pas de la branche : leur
+  commit se replace sur `feature/threejs-migration` au moment de fusionner.
+- Les harnais servent `dist/` : **recompiler avant CHAQUE passe**, un seul
+  harnais à la fois, et **regarder les PNG**.
+- Sous Windows le serveur de test survit à la fin du script : `taskkill`. Tout
+  éteindre en fin de round, copies de travail comprises.
+- Rapports d'agents : 10 lignes maximum.
+
+---
 
 ## 1. Le projet, et ce que j'en attends
 
@@ -147,7 +151,7 @@ Conséquences **immédiates** sur le code (`design/castes-et-micro-macro.md` §3
 | 3 | Le tunnel s'ouvre d'un coup | ✅ fait |
 | 4 | **Y entrer et en sortir** | ✅ **fait au tour 15** (`da6d7ce`) |
 | 5 | Le menu de gestion de la reine | ✅ fait au tour 16 (`f3a5015`) |
-| 6 | **Contrôler n'importe quelle fourmi** | 🔴 **la suite** — le menu de la reine a déjà posé la moitié du terrain : il s'affiche sur le drapeau `manages` du profil, pas sur « est-ce le joueur » |
+| 6 | **Contrôler n'importe quelle fourmi** — devient le cœur du jeu après l'installation de la reine (§0, #77) | 🔴 **la suite** — le menu de la reine a déjà posé la moitié du terrain : il s'affiche sur le drapeau `manages` du profil, pas sur « est-ce le joueur » |
 | 7 | Creuser depuis le hall | à venir — **à brainstormer avec le porteur d'abord** |
 
 ---
