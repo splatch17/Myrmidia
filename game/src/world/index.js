@@ -12,7 +12,7 @@ import { createGrassField } from './grass.js';
 import { buildTree, TREE, treeTrunkRadius, walkBranch as treeWalkBranch } from './tree.js';
 import { buildNestDecor, MUSHROOMS, ROCKS, mushroomCollideR } from './nestDecor.js';
 import { buildQueen } from './queen.js';
-import { addLocalLight, updateLocalLights, applyNestShading, daylightAt, pitFactorAt } from './lighting.js';
+import { addLocalLight, updateLocalLights, applyNestShading, daylightAt, pitFactorAt, nestInsideAt } from './lighting.js';
 import { shadeAt } from './shade.js';
 import { RESOURCE_NODES, harvestNode, nodesNear, buildResources } from './resources.js';
 import {
@@ -21,6 +21,7 @@ import {
   nestFootprint, descentPath, _coverAt,
 } from './founding.js';
 import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
+import { createAtmosphere } from './atmosphere.js';
 
 // Re-exported so Cataglyphis can pull everything needed for collision/climb
 // from one module without reaching into world/underground.js, world/tree.js,
@@ -79,7 +80,7 @@ export {
   TREE, treeTrunkRadius, treeWalkBranch,
   QUEEN, START, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R,
   LAWN_BOUNDS, TERRAIN_BOUNDS, WATER_Y, RIVER,
-  MUSHROOMS, ROCKS, mushroomCollideR, applyNestShading, daylightAt, pitFactorAt,
+  MUSHROOMS, ROCKS, mushroomCollideR, applyNestShading, daylightAt, pitFactorAt, nestInsideAt,
   shadeAt,
   RESOURCE_NODES, harvestNode, nodesNear,
   canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
@@ -168,9 +169,14 @@ export function createWorld() {
      made that obvious. */
   initFounding(dug, { lawn, grass });
 
+  /* Light shafts down the cut, dust and lamp bodies in the rooms (#78). */
+  const atmosphere = createAtmosphere();
+  group.add(atmosphere.group);
+
   function update(dt, elapsed, camera) {
     grass.update(dt, elapsed, camera);
     updateFounding(dt);
+    atmosphere.update(elapsed);
     queen.update(elapsed);
     water.update(elapsed);
     if (camera) {

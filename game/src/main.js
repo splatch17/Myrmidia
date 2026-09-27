@@ -4,7 +4,7 @@ import {
   createWorld, containUnderground, profileR, groundY, applyNestShading, TREE,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, setFoundedMix, foundedMix,
   nestOrigin, canFoundAt, foundNest, populateNest, sealNest, getFoundedNest,
-  pitFactorAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
+  nestInsideAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
   MUSHROOMS, ROCKS, TERRAIN_BOUNDS,
   digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundSlope,
 } from './world/index.js';
@@ -12,6 +12,7 @@ import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
 import { setOutlineZone } from './core/outline.js';
 import { createQualityPanel } from './core/quality.js';
+import { createBloom } from './core/bloom.js';
 import { indexWorld, worldQuery } from './core/worldIndexBridge.js';
 import { attachSpatialIndex, status as spatialStatus } from './player/spatial.js';
 
@@ -40,7 +41,12 @@ scene.fog = new THREE.Fog(0x1a1610, 40, 220);
 const hemi = new THREE.HemisphereLight(0xbfd8f5, 0x6e6a38, 0.85);
 scene.add(hemi);
 
-const HEMI_IN = { sky: new THREE.Color(0x4a5c86), ground: new THREE.Color(0x241f33), intensity: 0.55 };
+/* #78: the nest is blue and violet — its air, not a filter. Sky side pushed
+   from slate 0x4a5c86 to indigo-violet, ground side from 0x241f33 to a deeper
+   violet, and a little more of it (0.55 -> 0.72) since a cold fill on cold
+   earth reads darker than the old brown did at the same number. The warm
+   pools (brood, dig face, bead) are local lamps and do not go through this. */
+const HEMI_IN = { sky: new THREE.Color(0x5b50b0), ground: new THREE.Color(0x2b1f4e), intensity: 0.72 };
 
 /* The outdoor end of every commutation below is itself commuted, by a second
    scalar: `founded`, 0 during the prologue (queen alone, end of dusk) and 1
@@ -104,8 +110,8 @@ function trackSun(camera) {
    exposure in its frame loop): outdoors a warm haze that recedes for 400
    units, indoors a near-black one that closes in at 120 so the far end of the
    gallery falls away into darkness instead of staying a uniform brown wash. */
-const FOG_IN = new THREE.Color(0x191a2e);
-const SKY_IN = new THREE.Color(0x0c0b16);
+const FOG_IN = new THREE.Color(0x1f1a44);   // #78: was 0x191a2e
+const SKY_IN = new THREE.Color(0x0d0a20);   // #78: was 0x0c0b16
 
 const world = createWorld();
 scene.add(world.group);
@@ -195,7 +201,8 @@ function frame() {
   player.syncDigDial(dt);
 
   applyEnvironment();
-  renderer.render(scene, camera);
+  bloom.setActive(emittersInView());
+  bloom.render();
   quality.update(dt);
 }
 
@@ -234,7 +241,10 @@ function nestness(cam, ant) {
      the gates above know nothing about it: without this the freshly dug
      chamber is a hole in the ground with the meadow's own haze in it. Same
      "whichever is more outdoors" rule as the tube. */
-  const pit = Math.min(pitFactorAt(cam.x, cam.y, cam.z), pitFactorAt(ant.x, ant.y, ant.z));
+  /* #78: nestInsideAt() = the pit factor OR depth under the rim along the
+     cut, so the air turns as the view goes down the ramp — the mouth as a
+     threshold — instead of only once the chamber's roof is overhead. */
+  const pit = Math.min(nestInsideAt(cam.x, cam.y, cam.z), nestInsideAt(ant.x, ant.y, ant.z));
   return Math.max(tube, pit);
 }
 
@@ -298,6 +308,8 @@ if (!NO_SPATIAL) attachSpatialIndex(worldQuery, 'world');
 window.__spatial = () => ({ ...spatialStatus(), ...indexStats });
 
 const quality = createQualityPanel({ renderer, sun, scene });
+const bloom = createBloom(renderer, scene, camera);
+window.__bloom = bloom;
 
 renderer.setAnimationLoop(frame);
 // named and exposed so a verification driver can stop the loop, time a burst
@@ -317,5 +329,16 @@ window.__renderView = (eye, target, elapsed = 0) => {
   world.update(1 / 60, elapsed, camera);
   if (player.syncDigDial) player.syncDigDial(0);
   applyEnvironment();
-  renderer.render(scene, camera);
+  bloom.setActive(emittersInView());
+  bloom.render();
 };
+
+/* The only emitters are in a founded nest (the glow bead, the lamp bodies and
+   spores of world/atmosphere.js, whose own fade ends at 80 units), so the
+   bloom's side passes are skipped everywhere else — the prologue lawn pays
+   nothing for them. */
+function emittersInView() {
+  const n = getFoundedNest();
+  if (!n) return false;
+  return Math.hypot(camera.position.x - n.chamber.x, camera.position.z - n.chamber.z) < 160;
+}

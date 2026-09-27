@@ -475,3 +475,50 @@ d'atténuation dans `applyNestShading`).
 - Particules de spores/poussière en suspension dans la chambre de couvain,
   pour vendre l'air immobile et confiné une fois que l'éclairage en flaques
   est en place.
+
+### 9g. Le nid en bleu/violet, et les trois recettes de 9f (#78) — valeurs retenues
+
+Principe : pas de filtre d'écran. Ce qui bascule, c'est l'air (hémisphère,
+brume, fond), la matière (la terre creusée) et les lampes du nid ; les trois
+sources chaudes (couvée, front de taille, perle) ne bougent pas, ou montent
+d'un cran — elles sont ce qui doit rester chaud contre tout le reste.
+
+- **Air du nid** (`main.js`) : `HEMI_IN` ciel `0x4a5c86 → 0x5b50b0`, sol
+  `0x241f33 → 0x2b1f4e`, intensité `0.55 → 0.72` ; `FOG_IN 0x191a2e →
+  0x1f1a44` ; `SKY_IN 0x0c0b16 → 0x0d0a20`. Dehors (`RIG_PROLOGUE` /
+  `RIG_FOUNDED`) inchangé.
+- **Terre creusée** (`world/lighting.js`, option `cool` d'`applyNestShading`,
+  posée sur la coque et les salles/couloirs de `world/founding.js`) :
+  l'albédo est remplacé à 78 % (`COOL_MIX`) par sa luminance × `COOL_TINT
+  (0.84, 0.68, 1.15)`, au prorata de `nestInside()`. Le rouge est gardé
+  assez haut pour que la lumière des couvées reste une flaque chaude.
+  Les œufs, la reine, la perle ne sont pas concernés.
+- **Le seuil** : `nestInside()` = le facteur de puits existant **ou** la
+  profondeur sous le bord (2,5 → 11 unités) le long de l'axe bouche →
+  chambre, sur 1,3-2,2 demi-largeurs de rampe. Même fonction côté shader
+  (terre) et côté CPU (`nestInsideAt`, qui commute brume/fond/hémisphère
+  dans `main.js`) : l'air et les murs changent au même endroit, en
+  descendant la rampe. Le haut de la tranchée reste ocre, le bas est indigo.
+- **Lampes** (`world/founding.js`) : hall `HALL_LAMP_LINK [0.66, 0.52, 1.45]`,
+  `MID [0.92, 0.62, 1.90]`, `FAR [0.58, 0.60, 1.70]` (étaient ambre) ;
+  `COLD_SHAFT_LIGHT [0.55, 0.62, 0.82] → [0.42, 0.56, 1.00]` ;
+  `BROOD_LIGHT [0.85, 0.55, 0.22] → [1.00, 0.58, 0.20]` (compense la terre
+  plus froide). `DIG_FACE_LIGHT`, `GLOW_LIGHT`, `WARM_MOUTH_LIGHT` inchangés.
+  `LIGHT_SLOTS 8 → 12`, et une lampe éteinte ne prend plus de place : à 8,
+  les lampes du hall ou deux couvées tombaient hors sélection.
+- **Halo** (`core/bloom.js`) : sélectif, pas un seuil — seuls les objets
+  sur la couche 1 (perle, corps des lampes froides, une spore sur douze)
+  débordent. Passe annexe au quart de résolution, flou 1/4 + 1/8, ajouté
+  sur le canevas (force 1.6). La pelouse et le ciel ne peuvent pas baver :
+  rien dehors n'est sur la couche. Sautée hors du nid fondé. Touche P → 6.
+  Perle : émissif `0.95 → 2.2`.
+- **Rais de lumière** (`world/atmosphere.js`) : 6 cartes additives face
+  caméra le long de la rampe, inclinées sur le soleil fondé, gain 0.2,
+  couleur `(0.52, 0.66, 1.0)`, stries qui glissent ; s'éteignent avec
+  `sealNest()` comme la lampe froide.
+- **Poussière et spores** : 130 par salle, dérive dans le vertex shader,
+  lavande (70 %) et miel (30 %) ; une sur douze est une spore vive sur la
+  couche du halo. Deux Points, un seul matériau.
+
+Captures avant/après : `game/_mood78/` (`before-*` / `after-*`,
+`verify-mood-78.mjs`).

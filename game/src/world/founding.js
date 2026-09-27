@@ -18,7 +18,8 @@ import {
   QUEEN_R, hwAt, APRON_LEN,
 } from './excavation.js';
 import { texturedSurfaceMaterial, texturedEmissiveMaterial, dirtAlbedo, capAlbedo } from './texturing.js';
-import { addLocalLight, applyNestShading, setNestPit } from './lighting.js';
+import { addLocalLight, applyNestShading, setNestPit, setNestMouth } from './lighting.js';
+import { markEmitter } from '../core/bloom.js';
 import { resettleResources } from './resources.js';
 
 /* ==========================================================================
@@ -107,7 +108,9 @@ const C_CHITIN = new THREE.Color('#e0a752');
 const C_BROOD = new THREE.Color('#efdcb0');
 const C_GLOW = new THREE.Color('#ffc46a');
 
-const COLD_SHAFT_LIGHT = [0.55, 0.62, 0.82];   // ambiance §2c plan 2 (soie)
+/* #78: pushed from silk-grey [0.55, 0.62, 0.82] to a clearer blue — it is the
+   first thing of the nest's own palette she meets on the way down. */
+const COLD_SHAFT_LIGHT = [0.42, 0.56, 1.00];   // ambiance §2c plan 2 (soie)
 /* Cut from [0.85,0.48,0.17]. The art direction measured this lamp and the
    queen's lighter chitin separately and each is right on its own, but their
    SUM at two units was never measured and she went white under it (defect 2b).
@@ -116,7 +119,11 @@ const COLD_SHAFT_LIGHT = [0.55, 0.62, 0.82];   // ambiance §2c plan 2 (soie)
    than a source. */
 const WARM_MOUTH_LIGHT = [0.46, 0.26, 0.10];   // ambiance §2b: the one warm
                                                // point on the outdoor map
-const BROOD_LIGHT = [0.85, 0.55, 0.22];        // ambiance §2c plan 5
+/* #78: 0.85 -> 1.0 on red. The earth under the clutches is now pulled toward
+   indigo (world/lighting.js COOL_TINT), which reflects less red; without the
+   bump the warm pool round each clutch — the point of the whole palette —
+   came back as a beige smudge. */
+const BROOD_LIGHT = [1.00, 0.58, 0.20];        // ambiance §2c plan 5
 /* The face the diggers are still working, at the far end of the gallery. Its
    own colour on purpose: reusing WARM_MOUTH_LIGHT would tie the deepest point
    of the nest to the brightness of its doorway, and those two want to move in
@@ -127,9 +134,17 @@ const DIG_FACE_LIGHT = [1.15, 0.66, 0.24];
    under a 13-unit dome, so the same radiance spread over roughly six times the
    volume arrives at the floor as nothing. The first shot of the finished hall
    had a lit ceiling and a black floor, which is exactly that arithmetic. */
-const HALL_LAMP_LINK = [1.20, 0.72, 0.30];
-const HALL_LAMP_MID = [1.55, 0.95, 0.42];
-const HALL_LAMP_FAR = [1.35, 0.78, 0.30];
+/* #78: the nest's own lamps are cold — indigo and violet — so that the only
+   warm light underground is what the colony is FOR (brood, dig face, glow
+   bead). Same luminance budget as the amber they replace, plus a little: blue
+   reads darker than amber at equal radiance. Values: design/ambiance-prologue.md §9g. */
+const HALL_LAMP_LINK = [0.66, 0.52, 1.45];
+const HALL_LAMP_MID = [0.92, 0.62, 1.90];
+const HALL_LAMP_FAR = [0.58, 0.60, 1.70];
+/* Where each cold lamp hangs, so world/atmosphere.js can give it a small
+   visible body (the bloom needs something to bloom from). Warm lamps are
+   deliberately not listed: a clutch lights itself, it does not get an orb. */
+export const LAMP_GLOWS = [];
 /* Three lamps down the bore rather than one at the end. One lamp with the
    1/(1 + 0.017 d^2) falloff this rig uses is at 0.027 of its value 46 units
    away, which is the whole of the gallery in darkness and a bright disc at
@@ -137,8 +152,8 @@ const HALL_LAMP_FAR = [1.35, 0.78, 0.30];
    not exposure. Fractions of GALLERY_LEN, so they follow the bore if it is
    ever lengthened. */
 const GALLERY_LAMPS = [
-  { t: 0.18, c: [0.95, 0.56, 0.22] },
-  { t: 0.55, c: [0.72, 0.42, 0.16] },
+  { t: 0.18, c: [0.60, 0.50, 1.30] },
+  { t: 0.55, c: [0.48, 0.42, 1.10] },
   { t: 0.92, c: DIG_FACE_LIGHT },
 ];
 const GLOW_LIGHT = [1.95, 1.20, 0.52];         // ambiance §2c plan 6
@@ -1085,9 +1100,12 @@ function buildFurnishing(shell, seed) {
   const by = C.ceilY - 3.2;
   B.bake(sphere, box(1.5, 1.8, 1.5, [bx, by, bz]), () => C_GLOW.toArray());
   const beadMesh = new THREE.Mesh(B.toBufferGeometry(), texturedEmissiveMaterial({
-    map: capAlbedo(), strength: 0.7, emissive: 0.95, color: 0x777777, side: THREE.DoubleSide,
+    // #78: 0.95 -> 2.2, so the bead reads as a source in its own right; the
+    // halo round it is core/bloom.js, which only this and the lamp bodies feed.
+    map: capAlbedo(), strength: 0.7, emissive: 2.2, color: 0x777777, side: THREE.DoubleSide,
   }));
   beadMesh.name = 'nest-glow-bead';
+  markEmitter(beadMesh);
   beadMesh.visible = false;
   const beadLamp = addLocalLight([bx, by, bz], [0, 0, 0]);
 
@@ -1112,7 +1130,7 @@ export function foundNest(x, z) {
   group.name = 'founded-nest';
   const shellMesh = new THREE.Mesh(shell.geometry, applyNestShading(texturedSurfaceMaterial({
     map: dirtAlbedo(), strength: 0.62, side: THREE.DoubleSide,
-  })));
+  }), { cool: true }));
   shellMesh.name = 'founded-nest-shell';
   shellMesh.receiveShadow = true;
   group.add(shellMesh);
@@ -1177,6 +1195,7 @@ export function foundNest(x, z) {
      roofed end of the nest may be darkened, or the ramp reads as a tunnel
      someone forgot to light. */
   setNestPit(shell.chamber.x, shell.mouthY, shell.chamber.z, CHAMBER_R * 1.25, NEST_DEPTH);
+  setNestMouth(x, z, shell.ex.hw);
 
   return { ok: true };
 }
@@ -2101,7 +2120,7 @@ function rebuildSpoil() {
 function nestMaterial() {
   return applyNestShading(texturedSurfaceMaterial({
     map: dirtAlbedo(), strength: 0.62, side: THREE.DoubleSide,
-  }));
+  }), { cool: true });
 }
 
 /** Build what a finished face revealed, light it, and return the room. */
@@ -2179,12 +2198,13 @@ function openRoom(spec) {
      1/(1 + 0.017 d^2) falloff a single lamp is at a fifth of its value at the
      doorway, and the first shot of a branch tunnel was a black slot in a lit
      wall — the gallery's own measurement (GALLERY_LAMPS) all over again. */
+  const coldLamp = (p, c) => { LAMP_GLOWS.push(addLocalLight(p, c)); };
   for (const t of [0.18, 0.55]) {
-    addLocalLight([link.ax + link.hx * link.len * t, linkFloorY(ex, link, link.len * t) + 6.5,
+    coldLamp([link.ax + link.hx * link.len * t, linkFloorY(ex, link, link.len * t) + 6.5,
       link.az + link.hz * link.len * t], HALL_LAMP_LINK);
   }
-  addLocalLight([room.x, fy + 7.5, room.z], HALL_LAMP_MID);
-  addLocalLight([room.x + hx * room.r * 0.55, fy + 5.0, room.z + hz * room.r * 0.55], HALL_LAMP_FAR);
+  coldLamp([room.x, fy + 7.5, room.z], HALL_LAMP_MID);
+  coldLamp([room.x + hx * room.r * 0.55, fy + 5.0, room.z + hz * room.r * 0.55], HALL_LAMP_FAR);
 
   /* And the room comes with its own work to do: 2 or 3 faces on ITS walls,
      each opening a room one generation deeper (contract §8). This is what
@@ -2299,4 +2319,6 @@ export function _resetFounding() {
   nest = null;
   clearExcavation();
   setNestPit(0, 0, 0, 0, 0);
+  setNestMouth(0, 0, 0);
+  LAMP_GLOWS.length = 0;
 }

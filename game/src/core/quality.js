@@ -46,7 +46,7 @@ const LEVELS = {
    returning null. */
 const STORE = 'myrmidia.quality';
 function load() {
-  const d = { resolution: 2, shadows: 2, grass: 2, textures: true };
+  const d = { resolution: 2, shadows: 2, grass: 2, textures: true, bloom: true };
   try {
     const raw = localStorage.getItem(STORE);
     return raw ? { ...d, ...JSON.parse(raw) } : d;
@@ -66,6 +66,7 @@ export function current() {
     shadowMap: LEVELS.shadows[state.shadows].value,
     grassFraction: LEVELS.grass[state.grass].value,
     textures: state.textures,
+    bloom: state.bloom,
   };
 }
 
@@ -161,6 +162,7 @@ export function createQualityPanel({ renderer, sun, scene }) {
       ['3', 'Herbe', LEVELS.grass[state.grass].label + ' (au prochain chargement)'],
       ['4', 'Textures', state.textures ? 'oui' : 'non'],
       ['5', 'Cadence de test', testPace() ? 'ON — attentes /8, coûts /5' : 'off (cadence réelle)'],
+      ['6', 'Halo des lumières', state.bloom ? 'oui' : 'non'],
     ];
     panel.innerHTML = '<div style="opacity:0.75;margin-bottom:3px">Graphismes — P pour fermer</div>'
       + rows.map(([k, name, val]) =>
@@ -204,7 +206,7 @@ export function createQualityPanel({ renderer, sun, scene }) {
       if (code === 'KeyP') {
         open = !open;
         panel.style.display = open ? 'block' : 'none';
-        fps.style.bottom = open ? '104px' : '12px';
+        fps.style.bottom = open ? '124px' : '12px';
         return true;
       }
       if (!open) return false;
@@ -216,6 +218,8 @@ export function createQualityPanel({ renderer, sun, scene }) {
          test pace while this panel is open, which is why the panel owns the
          key and returns true to swallow it. */
       else if (code === 'Digit5') { setTestPace(!testPace()); }
+      // same ownership as Digit5: a caste key in play, the bloom switch here
+      else if (code === 'Digit6') { state.bloom = !state.bloom; }
       else return false;
       render();
       save();
