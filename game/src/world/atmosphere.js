@@ -28,7 +28,7 @@ import { markEmitter } from '../core/bloom.js';
 
 const SHAFT_COUNT = 6;
 const SHAFT_COLOUR = new THREE.Color(0.52, 0.66, 1.0);   // COLD_SHAFT_LIGHT, cleaner
-const SHAFT_GAIN = 0.2;
+const SHAFT_GAIN = 0.1;
 
 const DUST_PER_ROOM = 130;
 const DUST_COOL = new THREE.Color(0.62, 0.58, 1.0);
