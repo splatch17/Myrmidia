@@ -45,6 +45,8 @@ le contrôle est un attribut, le menu tient au drapeau `manages`).
 
 Ordre arbitré : **#75, puis #78, puis #76.**
 
+**Les trois sont livrés en local au round 21** (`8417c91` → `7facc32`, voir `PROGRESS.md`). Restent à publier (push vers `preview`) et à fermer. Restes signalés : tache blanche de bloom possible sur la reine dans le nid ; `verify-descent` voit un trou d'une cellule hors du nid (antérieur à #78).
+
 | # | Demande | Agent |
 |---|---|---|
 | [#75](https://github.com/splatch17/Myrmidia/issues/75) | **Interface MMO** : menu de la reine ouvert au lancement, raccourci pour le masquer écrit sur le panneau ; **barre de vie de la reine** en bas (pleine pour l'instant, prête pour de vrais PV) ; rangée de **carrés de castes** à trois états : débloquée / en production / pas encore débloquée | Cataglyphis |
