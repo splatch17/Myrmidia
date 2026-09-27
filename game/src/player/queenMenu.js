@@ -91,7 +91,7 @@ export function createQueenMenu(root = document.body) {
      *   counts,           { worker, digger, eggs }
      *   brood,            clutches laid
      *   rooms,            [{ id }]
-     *   faces,            [{ id, worked, needed, diggers }]
+     *   faces,            [{ id, worked, needed, diggers, required }]
      * }
      */
     render(profile, s) {
@@ -114,13 +114,22 @@ export function createQueenMenu(root = document.body) {
       /* Work in progress, from the world's own face list. Listed even when
          nobody is on it — an empty chantier with a crew of zero is the whole
          reason to lay fouisseuses, and a panel that hides it hides the
-         decision it exists to support. */
+         decision it exists to support.
+
+         #76: the crew value now names the REQUIREMENT alongside who is
+         there, "2 / 3 fouisseuses" — the number that decides whether the bar
+         below it is going to move at all — rather than just how many are
+         present. "personne" stays the word for zero (scripts/verify-queen-
+         menu.mjs matches it), with the requirement added alongside it. */
       const faceRows = (s.faces || []).length
         ? s.faces.map((f) => {
             const p = f.needed > 0 ? f.worked / f.needed : 0;
-            return kv(f.id === 'face-hall' ? 'le hall' : f.id,
-              f.diggers > 0 ? `${f.diggers} au front` : 'personne')
-              + bar(p);
+            const req = f.required || 1;
+            const plural = req > 1 ? 's' : '';
+            const crewLabel = f.diggers > 0
+              ? `${f.diggers} / ${req} fouisseuse${plural}`
+              : `personne (0 / ${req})`;
+            return kv(f.id === 'face-hall' ? 'le hall' : f.id, crewLabel) + bar(p);
           }).join('')
         : '<div class="mm-empty">rien à creuser pour l\'instant</div>';
 

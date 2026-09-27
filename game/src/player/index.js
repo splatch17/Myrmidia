@@ -19,7 +19,7 @@ import { resourceNodes } from './resources.js';
 import { nestOrigin, canFound, found, refusalText } from './founding.js';
 import { createHud } from './hud.js';
 import { createTargetMarker } from './marker.js';
-import { createColony } from './colony.js';
+import { createColony, requiredCrewFor } from './colony.js';
 import { createCrowd } from './crowd.js';
 import { nestInfo, nestFootprint } from './nest.js';
 import { WORKER } from './avatar.js';
@@ -271,7 +271,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
       },
       rooms: dugRooms(),
       faces: digFaces().map((f) => ({
-        ...f, diggers: colony.state.faceWork.get(f.id) || 0,
+        ...f, diggers: colony.state.faceWork.get(f.id) || 0, required: requiredCrewFor(f),
       })),
     };
     queenMenu.render(profile, colonyView);
@@ -359,6 +359,9 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__foundNest = (x, z) => found(x, z);
     window.__rooms2 = () => dugRooms();
     window.__faces = () => digFaces();
+    // #76: the crew threshold as a pure function of a face, so a harness can
+    // check its own numbers against the same formula colony.js pays against
+    window.__requiredCrew = requiredCrewFor;
     /* #40: where the nest is walkable, whether she is in it, and which floor
        the controller is following. `approx` says whether that came from the
        world's own nestFootprint() or from the stand-in nest.js keeps until
@@ -412,6 +415,14 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
       const st = interaction.burrow.state;
       return { active: st.active, t: +st.t.toFixed(3) };
     };
+    /* #76: lets a harness drive the whole player tick (colony + HUD + queen
+       menu) with a SYNTHETIC dt instead of real wall-clock seconds — the
+       crew-threshold measurement needs to simulate tens or hundreds of
+       ant-seconds of digging, and doing that by actually waiting that long
+       in a headless browser would make the harness itself the slow part.
+       Safe to call with no input pending: an idle real frame already calls
+       this with an empty input state whenever the player stands still. */
+    window.__playerUpdate = (dt, elapsed = 0) => update(dt, elapsed);
   }
 
   function dispose() {

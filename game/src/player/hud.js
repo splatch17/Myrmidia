@@ -287,8 +287,10 @@ export function createHud() {
 
     /**
      * Draw the dig gauge. `g` is null when there is nothing being dug, else
-     * { progress, diggers, sx, sy, scale, visible } — the caller does the
-     * projection, so this file stays a DOM file and knows no geometry.
+     * { progress, diggers, required, sx, sy, scale, visible } — the caller
+     * does the projection, so this file stays a DOM file and knows no
+     * geometry. `required` is the minimum crew (#76): below it the face is
+     * not progressing at all, and the text below the ring says so.
      *
      * It shows at zero as soon as there is a face, dimmed and empty: the
      * player has to be able to learn where the work happens BEFORE laying
@@ -307,10 +309,28 @@ export function createHud() {
 
       const pct = Math.round(p * 100);
       if (pct !== lastPct) { dialPct.textContent = `${pct}%`; lastPct = pct; }
-      const crewText = g.diggers > 0
-        ? `${g.diggers} au front`
-        : 'personne ne creuse';
-      if (crewText !== lastCrewText) { dialCrew.textContent = crewText; lastCrewText = crewText; }
+      /* #76: below the required crew the face is not slow, it is WAITING —
+         and the gauge has to say why, in the crew's own numbers, rather than
+         let a stalled ring at 0% read as a bug. That sentence does not fit
+         the ring on one line the way "N au front" always has, so it is the
+         one case drawn as two short tspans instead of plain text. */
+      const req = g.required || 1;
+      const short = g.diggers > 0 && g.diggers < req;
+      const crewText = g.diggers === 0
+        ? 'personne ne creuse'
+        : short
+          ? [`il faut ${req} fouisseuses,`, `il y en a ${g.diggers}`]
+          : `${g.diggers} au front`;
+      const crewKey = Array.isArray(crewText) ? crewText.join('|') : crewText;
+      if (crewKey !== lastCrewText) {
+        lastCrewText = crewKey;
+        if (Array.isArray(crewText)) {
+          dialCrew.innerHTML = `<tspan x="54" dy="-0.45em" style="font-size:8px">${crewText[0]}</tspan>`
+            + `<tspan x="54" dy="1.05em" style="font-size:8px">${crewText[1]}</tspan>`;
+        } else {
+          dialCrew.textContent = crewText;
+        }
+      }
 
       /* Completion pulse: one ring expanding out of the dial. It is the only
          thing that says "look here, it just opened" at the moment the room

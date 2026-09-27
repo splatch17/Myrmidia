@@ -56,6 +56,74 @@ const FACE_STANDOFF = 5.0;
 const ARRIVE = 6;                    // how close counts as "there"
 const REPATH_EVERY = 0.6;            // seconds between target re-picks
 
+/* ---- minimum crew per face (#76) ---------------------------------------
+
+   Digging further has to demand MORE fouisseuses, not just more time —
+   below the threshold a face does not creep, it waits, and the game says
+   why ("il faut N fouisseuses, il y en a M"). The requirement is keyed off
+   `opensGen`, the generation of the room the face OPENS (world/founding.js,
+   contract §8), which is exactly the number the ticket's own examples count
+   by: 1 for the hall, 3 for a face on the hall's walls, 6 one generation
+   further.
+
+   That sequence is the triangular numbers (n(n+1)/2), so it is written as a
+   formula rather than a table to extend: "and so on, growing" is then
+   automatic instead of needing a new array entry every time the nest grows
+   one generation deeper, and an arbitration of #63 is still a one-line
+   change — the formula (or swap it for a literal table then, if #63 wants
+   per-generation tuning a formula can't express).
+
+   The hall face is the one exception, checked by its own opensGen (1) rather
+   than assumed by id: it always asks for exactly 1, whatever size the hall
+   turns out to be. It is the face the queen finds alone at the foot of the
+   ramp (#48) — gating it by a room size nobody chose yet would make the very
+   first clutch a guess instead of a certainty. */
+const SIZE_K = { small: 0.75, medium: 1.0, large: 1.4 };  // mirrors world/founding.js's ROOM_SIZES factors; the world only publishes the label (contract §7)
+const triangular = (n) => (n * (n + 1)) / 2;
+
+/** The minimum crew a face needs before it advances at all. */
+export function requiredCrewFor(face) {
+  const gen = face.opensGen || 1;
+  if (gen <= 1) return 1;
+  const k = SIZE_K[face.size] || 1;
+  return Math.max(1, Math.ceil(triangular(gen) * k));
+}
+
+/**
+ * Which face each fouisseuse works, this frame. Diggers CONCENTRATE on one
+ * face at a time rather than spreading — with a threshold, spreading can
+ * deadlock the colony forever (4 diggers split 2/2 across two faces that
+ * each need 3 never opens either). Faces are filled in order of the
+ * CHEAPEST requirement first: the nearest diggers to that face are sent to
+ * it until it is crewed, then the next-cheapest face gets what is left. A
+ * digger left over once every open face is fully crewed goes to whichever
+ * is nearest — extra hands on an already-crewed face only make it faster,
+ * never wrong.
+ */
+function assignDiggers(diggers, faces) {
+  const ordered = faces.slice().sort((a, b) => (
+    requiredCrewFor(a) - requiredCrewFor(b) || a.id.localeCompare(b.id)
+  ));
+  const pool = diggers.slice();
+  const assignment = new Map();
+  for (const f of ordered) {
+    const need = requiredCrewFor(f);
+    pool.sort((wa, wb) => (
+      Math.hypot(wa.ant.x - f.x, wa.ant.z - f.z) - Math.hypot(wb.ant.x - f.x, wb.ant.z - f.z)
+    ));
+    for (const w of pool.splice(0, need)) assignment.set(w.id, f.id);
+  }
+  for (const w of pool) {
+    let best = null, bestD = Infinity;
+    for (const f of faces) {
+      const d = Math.hypot(w.ant.x - f.x, w.ant.z - f.z);
+      if (d < bestD) { bestD = d; best = f; }
+    }
+    if (best) assignment.set(w.id, best.id);
+  }
+  return assignment;
+}
+
 /* Workers are slower than the queen in absolute terms even though they are
    smaller — she has a 2.2x stride. Read as body-lengths a second this makes a
    worker noticeably brisker than her, which is the right reading: she is the
@@ -128,13 +196,19 @@ export function createColony() {
      at the face itself: aiming at the face packs the crew into one spot and
      the second fouisseuse is invisible behind the first, which is exactly the
      thing the gauge is supposed to make visible. */
-  function stepDigger(w, dt) {
+  function stepDigger(w, dt, faces, assignedId) {
     const a = w.ant;
-    const faces = digFaces();
-    let face = null, bestD = Infinity;
-    for (const f of faces) {
-      const d = Math.hypot(f.x - a.x, f.z - a.z);
-      if (d < bestD) { bestD = d; face = f; }
+    /* Go to the face assigned this frame (assignDiggers, #76) so the crew
+       concentrates instead of splitting itself between the two nearest
+       walls; fall back to nearest if nothing was assigned (e.g. no faces are
+       open at all). */
+    let face = assignedId ? faces.find((f) => f.id === assignedId) : null;
+    if (!face) {
+      let bestD = Infinity;
+      for (const f of faces) {
+        const d = Math.hypot(f.x - a.x, f.z - a.z);
+        if (d < bestD) { bestD = d; face = f; }
+      }
     }
     w.faceId = face ? face.id : null;
     if (!face) { w.atFace = false; a.speed = 0; return; }
@@ -235,10 +309,14 @@ export function createColony() {
       }
     }
 
+    const faces = digFaces();
+    const diggerWorkers = state.workers.filter((w) => w.profileId === 'digger');
+    const assignment = faces.length ? assignDiggers(diggerWorkers, faces) : null;
+
     state.digging = 0;
     for (const w of state.workers) {
       if (w.profileId === 'digger') {
-        stepDigger(w, dt);
+        stepDigger(w, dt, faces, assignment && assignment.get(w.id));
         if (w.atFace) state.digging++;
       } else {
         stepWorker(w, dt);
@@ -257,7 +335,12 @@ export function createColony() {
       if (w.profileId !== 'digger' || !w.atFace || !w.faceId) continue;
       state.faceWork.set(w.faceId, (state.faceWork.get(w.faceId) || 0) + 1);
     }
+    const facesById = new Map(faces.map((f) => [f.id, f]));
     for (const [id, crew] of state.faceWork) {
+      /* #76: below the minimum crew, a face does not creep — it pays
+         nothing at all, rather than a trickle no one would notice. */
+      const f = facesById.get(id);
+      if (f && crew < requiredCrewFor(f)) continue;
       const r = payDigFace(id, crew * dt * paceDigMultiplier());
       if (r && r.opened) {
         state.opened.push(r.opened.id);
@@ -286,6 +369,7 @@ export function createColony() {
       id: f.id, x: f.x, y: f.y, z: f.z,
       progress: f.needed > 0 ? f.worked / f.needed : 0,
       diggers: state.faceWork.get(f.id) || 0,
+      required: requiredCrewFor(f),   // #76: so the HUD can say why it waits
     }));
   }
 
@@ -336,8 +420,21 @@ export function createColony() {
     };
   }
 
+  /* Test-only: places a worker directly rather than through an egg (#76's
+     verify-crew-76.mjs measures the crew threshold without waiting out
+     HATCH_SECONDS or a walk from the nest mouth first). Not reached by any
+     in-game code path — spawnWorker() above is what the real hatch loop
+     calls — but it is the same function, so a harness-spawned digger is
+     exactly what a hatched one would be, not a stand-in shaped like one. */
+  function spawnAt(x, z, profileId = 'digger') {
+    const w = spawnWorker(x, z, profileId);
+    state.workers.push(w);
+    return w;
+  }
+
   return {
     state, addEggs, update, statusText, digCandidates, serialise, casteProgress,
+    spawnAt,
     collideRadius: () => collideRadius(WORKER),
   };
 }
