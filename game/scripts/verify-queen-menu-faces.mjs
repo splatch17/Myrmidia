@@ -22,9 +22,21 @@ class FakeEl {
   removeChild(c) { this.children = this.children.filter((x) => x !== c); return c; }
   set innerHTML(v) { this._html = v; }
   get innerHTML() { return this._html; }
+  set textContent(v) { this._html = v; }
   get textContent() { return this._html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(); }
 }
-global.document = { createElement: (tag) => new FakeEl(tag), body: new FakeEl('body') };
+/* Pre-existing gap, unrelated to #75: uiTheme.js's ensureUiTheme() (round 17)
+   calls document.getElementById()/document.head.appendChild() to inject the
+   skin's <style> once, and this stub never grew those — every run of this
+   harness was throwing before a single check ran. Filled in rather than
+   worked around, since queenMenu.js now calls ensureUiTheme() unconditionally
+   on construction and always will. */
+global.document = {
+  createElement: (tag) => new FakeEl(tag),
+  getElementById: () => null,
+  body: new FakeEl('body'),
+  head: new FakeEl('head'),
+};
 
 let failures = 0;
 const check = (c, m) => { if (!c) { failures++; console.log('  FAIL: ' + m); } else console.log('  ok:   ' + m); };
@@ -35,6 +47,7 @@ const casteLabel = (id) => (id === 'digger' ? 'fouisseuse' : 'ouvrière');
 function baseState(faces) {
   return {
     caste: 'worker', casteUnlocked: () => true, casteLabel,
+    casteOrder: ['worker', 'digger'],
     reserve: 3, cost: 5, brood: 1,
     counts: { worker: 2, digger: 1, eggs: 0 },
     rooms: [{ id: 'chamber' }],
@@ -43,11 +56,14 @@ function baseState(faces) {
 }
 
 /** A fresh panel per call — createQueenMenu appends one element to `root`
- *  and it is that element's own open/render state we are reading back. */
+ *  and it is that element's own open/render state we are reading back.
+ *  #75: the panel now starts OPEN for a profile that manages, so render()
+ *  alone is enough — no toggle() needed before it (a toggle here would now
+ *  CLOSE the default-open panel and render nothing, which is the opposite
+ *  of what this file is checking). */
 function renderPanel(faces) {
   const root = new FakeEl('root');
   const menu = createQueenMenu(root);
-  menu.toggle(profile);              // it renders nothing while closed
   menu.render(profile, baseState(faces));
   return root.children[0];
 }

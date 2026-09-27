@@ -17,6 +17,8 @@
      #event      — a short-lived line for what just happened, as zone text
      #controls   — the key bindings, open at first launch, toggled with H
      #digdial    — the circular gauge on the dig face (#51)
+     #queenhud   — bottom-left: the queen's health bar and the caste roster
+                   (#75) — see setQueenHp()/setCastes() below
 
    The controls panel is not decoration. The player's report on an earlier
    build was that they could not tell what the game wanted from them: nothing
@@ -43,6 +45,7 @@ function nullHud() {
   return {
     setSite() {}, setPrompt() {}, setObjective() {}, setStock() {}, setEvent() {},
     setHold() {}, setDig() {}, setEventNow() {}, setUnit() {},
+    setQueenHp() {}, setCastes() {},
     toggleControls() {}, closeControls() {}, dispose() {},
   };
 }
@@ -171,6 +174,47 @@ export function createHud() {
   const dialPct = dial.querySelector('#dialpct');
   const dialCrew = dial.querySelector('#dialcrew');
   let lastPct = -1, lastCrewText = null, pulseT = 0, wasFull = false;
+
+  /* ---- bottom-left: queen health + caste roster (#75) -------------------
+     One frame, always on screen — not gated on which ant is controlled
+     (design/castes-et-micro-macro.md 3: the queen's vitals are hers, not
+     "the player's"). The caste squares are built lazily, one DOM node per
+     id the caller ever hands in, and updated in place after that: the
+     roster is fixed for a session (PRODUCED_CASTES, avatar.js) so this
+     never has to tear anything down, only the dig ring/queen bar are
+     re-drawn every frame. */
+  const queenhud = el('queenhud', 'mm');
+  queenhud.innerHTML = '<div class="mm-frame mm-qhp">'
+    + '<div class="mm-qhp-name">LA REINE</div>'
+    + '<div class="mm-bar mm-qhp-bar"><i></i><span></span></div>'
+    + '</div>'
+    + '<div class="mm-frame mm-casterow"></div>';
+  const qhpFill = queenhud.querySelector('.mm-qhp-bar > i');
+  const qhpText = queenhud.querySelector('.mm-qhp-bar > span');
+  const casterow = queenhud.querySelector('.mm-casterow');
+  const casteEls = new Map();     // id -> { root, ring, ico, cap, ...cache }
+  const CASTE_RING_R = 15, CASTE_RING_C = 2 * Math.PI * CASTE_RING_R;
+
+  function buildCasteSquare() {
+    const root = document.createElement('div');
+    root.className = 'mm-caste-sq';
+    root.innerHTML = `<svg class="mm-caste-ring" viewBox="0 0 32 32" width="32" height="32">
+        <circle cx="16" cy="16" r="${CASTE_RING_R}" fill="none" stroke="rgba(255,214,150,.16)" stroke-width="2.4"/>
+        <circle class="mm-caste-ringfill" cx="16" cy="16" r="${CASTE_RING_R}" fill="none"
+                stroke="#f3cf7a" stroke-width="2.4" stroke-linecap="round" transform="rotate(-90 16 16)"
+                stroke-dasharray="${CASTE_RING_C}" stroke-dashoffset="${CASTE_RING_C}"/>
+      </svg><span class="mm-caste-ico"></span><div class="mm-caste-cap"></div>`;
+    root.querySelector('.mm-caste-ring').style.display = 'none';
+    return {
+      root,
+      ring: root.querySelector('.mm-caste-ring'),
+      ringFill: root.querySelector('.mm-caste-ringfill'),
+      ico: root.querySelector('.mm-caste-ico'),
+      cap: root.querySelector('.mm-caste-cap'),
+      state: null, icoText: null, capText: null,
+    };
+  }
+  let lastQueenHpKey = null;
 
   let lastSite = null, lastDetail = null, lastPrompt = null;
   let lastObjective = null, lastStock = null, lastEvent = null;
@@ -307,6 +351,61 @@ export function createHud() {
       }
       if (on) holdFill.style.width = `${Math.min(100, progress * 100)}%`;
     },
+    /**
+     * The queen's health, WoW/Dofus register: frame, fill, "cur / max". No
+     * damage exists yet (#78) so this always reads full — the point is the
+     * screen space and the shape being right before the mechanic is, so a
+     * real hit only ever has to change the two numbers it is handed.
+     */
+    setQueenHp(hp) {
+      if (!hp) return;
+      const max = Math.max(1, hp.max || 1);
+      const cur = Math.max(0, Math.min(max, hp.cur));
+      const key = `${cur}|${max}`;
+      if (key === lastQueenHpKey) return;
+      lastQueenHpKey = key;
+      qhpFill.style.width = `${((cur / max) * 100).toFixed(1)}%`;
+      qhpText.textContent = `${Math.round(cur)} / ${Math.round(max)}`;
+    },
+
+    /**
+     * The caste roster: one square per produced caste (list handed in by
+     * the caller, read off avatar.js's own PRODUCED_CASTES so this file
+     * never hardcodes which castes exist). Each entry is
+     *   { id, label, unlocked, progress, hint }
+     * `progress` null/undefined means "not currently incubating" (state
+     * "unlocked", plain letter); a number means "in production" (the ring
+     * sweeps, the square shows a percentage); `unlocked` false means
+     * "locked" (greyed, the square's own caption becomes `hint` — what
+     * unlocks it — since this HUD has no hover: everything here is
+     * pointer-events:none, keyboard-only, same as the rest of the file).
+     */
+    setCastes(list) {
+      if (!list) return;
+      for (const c of list) {
+        let e = casteEls.get(c.id);
+        if (!e) { e = buildCasteSquare(); casterow.appendChild(e.root); casteEls.set(c.id, e); }
+        const inProd = c.unlocked && c.progress !== null && c.progress !== undefined;
+        const state = !c.unlocked ? 'locked' : (inProd ? 'inprod' : 'active');
+        if (e.state !== state) {
+          e.root.classList.toggle('mm-caste-locked', state === 'locked');
+          e.root.classList.toggle('mm-caste-inprod', state === 'inprod');
+          e.ring.style.display = state === 'inprod' ? '' : 'none';
+          e.state = state;
+        }
+        if (state === 'inprod') {
+          const p = Math.max(0, Math.min(1, c.progress));
+          e.ringFill.style.strokeDashoffset = `${CASTE_RING_C * (1 - p)}`;
+        }
+        const icoText = state === 'inprod'
+          ? `${Math.round(c.progress * 100)}%`
+          : (c.label ? c.label.charAt(0).toUpperCase() : '?');
+        if (e.icoText !== icoText) { e.ico.textContent = icoText; e.icoText = icoText; }
+        const capText = state === 'locked' && c.hint ? c.hint : (c.label || '');
+        if (e.capText !== capText) { e.cap.textContent = capText; e.capText = capText; }
+      }
+    },
+
     toggleControls() {
       controlsOpen = !controlsOpen;
       controls.style.display = controlsOpen ? 'block' : 'none';
@@ -318,7 +417,7 @@ export function createHud() {
       controls.style.display = 'none';
     },
     dispose() {
-      for (const n of [unit, stock, tracker, promptWrap, holdOuter, event, controls, dial]) {
+      for (const n of [unit, stock, tracker, promptWrap, holdOuter, event, controls, dial, queenhud]) {
         if (n.parentNode) n.parentNode.removeChild(n);
       }
     },

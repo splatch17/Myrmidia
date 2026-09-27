@@ -30,16 +30,22 @@
 
    It reads state it is handed. No world imports, no colony import: everything
    comes through render(), so this file cannot be the place two answers to the
-   same question start to disagree.
+   same question start to disagree. That is also why the caste list is read
+   off `s.casteOrder` rather than imported from avatar.js directly (#75) — the
+   order is player/index.js's own PRODUCED_CASTES (avatar.js), handed in with
+   the rest of the reading rather than a second door into the same data.
+
+   OPEN BY DEFAULT (#75). The porter's ask was that the screen reads as an
+   MMO "from the first second" — a management panel nobody has ever opened is
+   not that. `open` now starts true; nothing about WHO gets the panel
+   changed, only whether it starts shown to the profile that does. The
+   shortcut to put it away is written on the panel itself (the title row's
+   own key-cap, labelled "masquer") rather than left to the help panel alone.
    ========================================================================== */
 
 import { ensureUiTheme, keycap } from './uiTheme.js';
 
 const PANEL_ID = 'queenmenu';
-
-/* Kept out of the markup so a caste added to avatar.js shows up here without
-   this file being edited. */
-const CASTE_ORDER = ['worker', 'digger'];
 
 export function createQueenMenu(root = document.body) {
   ensureUiTheme();
@@ -51,7 +57,7 @@ export function createQueenMenu(root = document.body) {
   el.style.display = 'none';
   root.appendChild(el);
 
-  let open = false;
+  let open = true;
   let lastHtml = null;
 
   const kv = (label, value) => `<div class="mm-kv"><span>${label}</span><b>${value}</b></div>`;
@@ -95,7 +101,7 @@ export function createQueenMenu(root = document.body) {
       }
       if (!show) return;
 
-      const casteRows = CASTE_ORDER.map((id, i) => {
+      const casteRows = (s.casteOrder || []).map((id, i) => {
         const unlocked = s.casteUnlocked(id);
         const picked = s.caste === id;
         const cls = `mm-slot${picked ? ' mm-picked' : ''}${unlocked ? '' : ' mm-locked'}`;
@@ -118,7 +124,8 @@ export function createQueenMenu(root = document.body) {
           }).join('')
         : '<div class="mm-empty">rien à creuser pour l\'instant</div>';
 
-      const html = `<div class="mm-win-title"><span class="mm-title">LA REINE</span>${keycap('C')}</div>`
+      const html = `<div class="mm-win-title"><span class="mm-title">LA REINE</span>`
+        + `<span class="mm-win-hide">${keycap('C')} masquer</span></div>`
         + `<div class="mm-win-sub">${profile.label}</div>`
         + heading('PONTE')
         + casteRows
@@ -131,7 +138,7 @@ export function createQueenMenu(root = document.body) {
         + kv('salles creusées', s.rooms.length)
         + heading('CHANTIERS')
         + faceRows
-        + `<div class="mm-win-foot">${keycap('C')} — fermer  ·  ${keycap('E')} — pondre</div>`;
+        + `<div class="mm-win-foot">${keycap('C')} — masquer  ·  ${keycap('E')} — pondre</div>`;
 
       // written only on change: this runs every frame
       if (html !== lastHtml) { el.innerHTML = html; lastHtml = html; }

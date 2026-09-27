@@ -230,3 +230,10 @@ export function collideRadius(p) { return p.bodyR * p.scale; }
    copy of the body plan. */
 export const PROFILES = { worker: WORKER, queen: FOUNDING_QUEEN, digger: DIGGER };
 export function profileById(id) { return PROFILES[id] || WORKER; }
+
+/* Castes the colony actually PRODUCES from an egg — everything in PROFILES
+   except a caste that `manages` (the queen is founded, never hatched). Read
+   off the table rather than written as a literal ['worker','digger'] so that
+   #75's HUD row (and the queen panel's own list) grow the day a caste is
+   added here, with neither file touched. */
+export const PRODUCED_CASTES = Object.values(PROFILES).filter((p) => !p.manages).map((p) => p.id);

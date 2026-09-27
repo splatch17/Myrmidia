@@ -84,6 +84,13 @@ export function createColony() {
     faceWork: new Map(),  // face id -> how many are working it this frame
     opened: [],        // ids of the rooms the colony has dug open
     lastOpened: null,  // the most recent one, for the HUD to announce
+    /* #75: the bottom-of-screen health bar needs somewhere to read from that
+       is not a THREE.js object and not the static profile row (avatar.js's
+       own header rules that out — a profile is a shared definition, not
+       state). No damage exists yet (#78): the bar is built now, full, so the
+       screen reads as an MMO from frame one, and a real hit just has to
+       lower `cur`. */
+    queenHp: { max: 100, cur: 100 },
   };
 
   function spawnWorker(x, z, profileId = 'worker') {
@@ -282,6 +289,26 @@ export function createColony() {
     }));
   }
 
+  /**
+   * How far along the most-advanced egg of this caste is (0..1), or null
+   * when none is incubating. #75's caste squares read this for the
+   * "in production" state — the clutch/laying state living in colony.js's
+   * own eggs, not a second tally kept beside it. The MOST advanced egg
+   * (not the average) is shown: a clutch is laid all at once so its eggs
+   * share an age, and this only diverges once an older clutch of the same
+   * caste is still incubating behind a newer one — the number the square
+   * should show is "how soon until one more hatches", not a blend.
+   */
+  function casteProgress(id) {
+    let best = -1;
+    for (const e of state.eggs) {
+      if (e.profileId !== id) continue;
+      const p = e.age / paceTime(HATCH_SECONDS);
+      if (p > best) best = p;
+    }
+    return best < 0 ? null : Math.min(1, best);
+  }
+
   /** One line for the HUD, or null while there is nothing to say. */
   function statusText() {
     if (!state.workers.length && !state.eggs.length) return null;
@@ -299,6 +326,7 @@ export function createColony() {
   function serialise() {
     return {
       delivered: state.delivered,
+      queenHp: { ...state.queenHp },
       eggs: state.eggs.map((e) => ({ id: e.id, age: e.age })),
       opened: state.opened.slice(),
       workers: state.workers.map((w) => ({
@@ -309,7 +337,7 @@ export function createColony() {
   }
 
   return {
-    state, addEggs, update, statusText, digCandidates, serialise,
+    state, addEggs, update, statusText, digCandidates, serialise, casteProgress,
     collideRadius: () => collideRadius(WORKER),
   };
 }

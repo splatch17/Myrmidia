@@ -166,8 +166,12 @@ const CSS = `
 
 /* ---- windows (the queen's panel, and whatever comes next) ---- */
 #queenmenu { left: 16px; top: 122px; width: 300px; padding: 10px 14px 11px; font-size: 12.5px; }
-.mm-win-title { display: flex; align-items: center; justify-content: space-between; }
+.mm-win-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mm-win-title .mm-title { font-size: 15px; }
+.mm-win-hide {
+  display: flex; align-items: center; gap: 5px; font-size: 10.5px;
+  color: var(--mm-dim); text-transform: uppercase; letter-spacing: .06em; white-space: nowrap;
+}
 .mm-win-sub { color: var(--mm-dim); font-size: 11px; letter-spacing: .06em; margin: 1px 0 2px; }
 .mm-h {
   display: flex; align-items: center; gap: 8px; margin: 10px 0 4px;
@@ -197,6 +201,47 @@ const CSS = `
   margin-top: 9px; padding-top: 6px; border-top: 1px solid rgba(110,79,34,.5);
   color: var(--mm-dim); font-size: 11px; text-align: center;
 }
+
+/* ---- bottom-left: the queen's health, and the caste roster (#75) --------
+   Deliberately the one screen corner nothing else claims: #promptwrap/#hold
+   sit centre-bottom at 104-128px, #controls is bottom-right, so this whole
+   strip (left-anchored, under 60px tall) never fights either at 1280x800 or
+   the smaller 1024x640 window the ticket asks to be checked against.
+   Always on screen, not gated on which ant is controlled: the queen's own
+   vitals do not depend on whether she is the one currently being played
+   (design/castes-et-micro-macro.md 3 — see queenMenu.js's own header). */
+#queenhud { left: 14px; bottom: 14px; display: flex; align-items: flex-end; gap: 10px; }
+.mm-qhp { width: 208px; padding: 7px 12px 8px; }
+.mm-qhp-name {
+  font: 700 11px/1.2 var(--mm-title); color: var(--mm-gold);
+  letter-spacing: .1em; margin-bottom: 5px;
+}
+.mm-qhp-bar { height: 17px; }
+.mm-qhp-bar > span { font: 700 11px/17px var(--mm-body); }
+
+.mm-casterow { display: flex; align-items: center; gap: 8px; padding: 8px 10px 14px; }
+.mm-caste-sq {
+  position: relative; width: 32px; height: 32px; border-radius: 4px;
+  border: 1px solid rgba(110,79,34,.65); background: rgba(0,0,0,.35);
+  display: flex; align-items: center; justify-content: center;
+}
+.mm-caste-sq .mm-caste-ring { position: absolute; inset: -2px; }
+.mm-caste-sq .mm-caste-ico {
+  font: 700 12px/1 var(--mm-title); color: var(--mm-gold); letter-spacing: 0;
+}
+.mm-caste-sq .mm-caste-cap {
+  /* Exactly one square's own column (its width + the row's gap) — a wider
+     box reads fine for one square in isolation but overlaps the NEXT
+     square's caption the moment two sit side by side (#75 round 1 shipped
+     this at 68px and "ouvrière"/"dès la 2e ponte" ran into each other). */
+  position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  margin-top: 3px; width: 40px; text-align: center;
+  font-size: 8px; line-height: 1.25; color: var(--mm-dim); white-space: normal;
+}
+.mm-caste-sq.mm-caste-inprod { border-color: var(--mm-gold-2); }
+.mm-caste-sq.mm-caste-inprod .mm-caste-ico { color: #fff0cc; }
+.mm-caste-sq.mm-caste-locked { opacity: .5; filter: grayscale(0.9); }
+.mm-caste-sq.mm-caste-locked .mm-caste-ico { color: var(--mm-dim); }
 `;
 
 /** Inject the skin once. Safe to call from every panel's constructor. */

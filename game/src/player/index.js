@@ -1,7 +1,7 @@
 import { antState } from '../core/antState.js';
 import { clamp } from '../core/noise.js';
 import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath } from '../world/index.js';
-import { PLAYER_AVATAR, collideRadius, profileById, legLengths } from './avatar.js';
+import { PLAYER_AVATAR, collideRadius, profileById, legLengths, PRODUCED_CASTES } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { makeAnt, makeLegState, updateLegs, antMatrix, localToWorld, solveKnee } from './legs.js';
 import { buildAntMesh } from './antMesh.js';
@@ -135,6 +135,14 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
      both castes existed from the first frame and the choice was free, which
      is the same as no choice. */
   const CASTE_UNLOCK = { worker: 0, digger: 1 };   // clutches required
+  /* What the bottom-of-screen caste square says while it is still grey
+     (#75) — read off the same CASTE_UNLOCK the picker itself enforces, so
+     the legend can never promise a caste sooner than E actually allows one.
+     "ᵉ" matches laying.js's own ordinal spelling ("2ᵉ couvée"). */
+  function casteHint(id) {
+    const need = CASTE_UNLOCK[id] ?? 0;
+    return need > 0 ? `dès la ${need + 1}ᵉ ponte` : null;
+  }
   /* Kept here rather than pushed through interaction.say(): this is feedback
      on a *player* keypress, and interaction.js's message queue belongs to
      world events. Merged into the same HUD line below, with the player's own
@@ -251,6 +259,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     const colonyView = {
       caste,
       casteUnlocked,
+      casteOrder: PRODUCED_CASTES,
       casteLabel: (id) => profileById(id).label,
       reserve: interaction.harvest.stock(),
       cost: interaction.clutchCost(),
@@ -267,6 +276,18 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     };
     queenMenu.render(profile, colonyView);
     hud.setUnit(profile, colonyView);
+    /* Bottom-left, always: the queen's own vitals, not the controlled unit's
+       (#75). She stays the same ant whether or not she is the one under the
+       player's hand right now (design/castes-et-micro-macro.md 3), so this
+       does not gate on `profile.manages` the way the panel above does. */
+    hud.setQueenHp(colony.state.queenHp);
+    hud.setCastes(PRODUCED_CASTES.map((id) => ({
+      id,
+      label: profileById(id).label,
+      unlocked: casteUnlocked(id),
+      progress: colony.casteProgress(id),
+      hint: casteHint(id),
+    })));
     /* The dig gauge is NOT drawn here. It is projected against the camera, and
        the camera is not final until cameraRig.update() further down — so main
        .js calls syncDigDial() once the camera is where the frame will be

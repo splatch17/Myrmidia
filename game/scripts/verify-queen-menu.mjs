@@ -71,6 +71,20 @@ async function main() {
       text: el ? el.textContent.replace(/\s+/g, ' ').trim() : null,
     };
   });
+  /* #75: the bottom-left health bar + caste roster. Read by class rather than
+     a per-square id, since the row is built one node per caste in
+     PRODUCED_CASTES (avatar.js) and this harness should not have to know how
+     many that is today. */
+  const queenHud = () => page.evaluate(() => {
+    const el = document.getElementById('queenhud');
+    if (!el) return null;
+    return {
+      text: el.textContent.replace(/\s+/g, ' ').trim(),
+      squares: el.querySelectorAll('.mm-caste-sq').length,
+      locked: el.querySelectorAll('.mm-caste-sq.mm-caste-locked').length,
+      inprod: el.querySelectorAll('.mm-caste-sq.mm-caste-inprod').length,
+    };
+  });
 
   /* ---- 1. it belongs to the profile, not to the player ------------------ */
   console.log('\n=== whose panel is it ===');
@@ -84,18 +98,44 @@ async function main() {
   check(who.worker === false, 'a forager does not — the panel is refused by caste, not by a player check');
   check(who.digger === false, 'nor does a fouisseuse');
 
-  /* ---- 2. it opens and closes on a real key ----------------------------- */
+  /* ---- 2. it is open on arrival, and C hides/shows it -------------------
+     #75: the porter wants the screen to read as an MMO "from the first
+     second" — a management panel nobody has opened yet is not that. So the
+     panel now starts SHOWN for a profile that manages, and this checks the
+     opposite of what it used to: that C can put it away, and bring it back,
+     rather than that a keypress is required just to see it once. */
   console.log('\n=== the key ===');
-  const closed0 = await panel();
-  check(!closed0.shown, 'it starts closed');
+  const opened0 = await panel();
+  check(opened0.shown, 'it is open on arrival, not something the player has to discover');
+  check(/masquer/.test(opened0.text), 'the panel itself names the key that hides it');
+
+  /* ---- 2b. the bottom-left health bar + caste squares (#75) --------------
+     Present from the same first frame, and — crucially — NOT tied to the
+     panel's own open/closed state: the queen has these whether or not the
+     player currently has her management window up, or is even the one
+     driving her (design/castes-et-micro-macro.md 3). Checked once at launch
+     and once with the panel hidden, so "hides everything" cannot silently
+     start meaning "hides the queen's own vitals too". */
+  const hud0 = await queenHud();
+  check(!!hud0, 'the queen health/caste HUD exists');
+  check(/LA REINE/.test(hud0.text), 'the health bar is labelled');
+  check(/\d+\s*\/\s*\d+/.test(hud0.text), 'health reads as a value, e.g. "100 / 100"');
+  check(hud0.squares >= 2, `one square per produced caste (found ${hud0.squares})`);
+  check(hud0.locked >= 1, 'the digger reads as locked before any clutch is laid');
+  check(/dès la/.test(hud0.text), 'the locked square says what unlocks it');
+  await shot('00-launch-open');
+
   await page.keyboard.press('KeyC');
   await page.waitForTimeout(250);
-  const opened = await panel();
-  console.log('  after C:', opened.shown);
-  check(opened.shown, 'C opens it');
+  const closed = await panel();
+  console.log('  after C:', closed.shown);
+  check(!closed.shown, 'C hides the management panel');
+  const hud1 = await queenHud();
+  check(!!hud1 && hud1.squares === hud0.squares, 'the health bar and caste squares stay up — C only hides the panel, not the game\'s own HUD');
+  await shot('00b-after-c-hidden');
   await page.keyboard.press('KeyC');
   await page.waitForTimeout(250);
-  check(!(await panel()).shown, 'C closes it again');
+  check((await panel()).shown, 'C shows it again');
 
   /* ---- 3. the numbers are the colony's own ------------------------------ */
   console.log('\n=== the numbers ===');
@@ -106,11 +146,12 @@ async function main() {
     window.__foundNest(a.x + 40, a.z + 40);
   });
   await page.waitForTimeout(400);
-  await page.keyboard.press('KeyC');
-  await page.waitForTimeout(300);
+  // it is already open from the check above (#75 default) — only press C if
+  // some earlier step left it hidden, so this does not silently flip it shut
+  if (!(await panel()).shown) { await page.keyboard.press('KeyC'); await page.waitForTimeout(300); }
   const withNest = await panel();
   console.log('  panel:', withNest.text);
-  check(withNest.shown, 'it is open again');
+  check(withNest.shown, 'it is open');
   check(/LA REINE/.test(withNest.text), 'it names who it belongs to');
   check(/fouisseuse/.test(withNest.text), 'the caste is called a fouisseuse, not a creuseuse (#50)');
   check(/PONTE/.test(withNest.text) && /COLONIE/.test(withNest.text) && /CHANTIERS/.test(withNest.text),
@@ -160,6 +201,16 @@ async function main() {
 
   const unlocked = await page.evaluate(() => window.__caste().unlocked);
   check(unlocked === true, 'window.__caste() now reports the digger as unlocked');
+
+  /* #75: the clutch just laid (3 worker eggs — the first laying is always
+     caste "worker") is still incubating (HATCH_SECONDS, paced): the worker
+     square should read as "in production", ring and all, before either of
+     the checks below gets a chance to wait long enough for it to hatch. */
+  const hudLaying = await queenHud();
+  check(!!hudLaying && hudLaying.inprod >= 1,
+    `a caste square shows production in progress (inprod=${hudLaying && hudLaying.inprod})`);
+  check(hudLaying && /%/.test(hudLaying.text), 'its square shows a percentage, not just a bare ring');
+  await shot('01b-caste-in-production');
 
   if (!(await panel()).shown) { await page.keyboard.press('KeyC'); await page.waitForTimeout(250); }
 
