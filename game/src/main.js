@@ -6,7 +6,7 @@ import {
   nestOrigin, canFoundAt, foundNest, populateNest, sealNest, getFoundedNest,
   nestInsideAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
   MUSHROOMS, ROCKS, TERRAIN_BOUNDS,
-  digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundSlope,
+  digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundSlope, NEST_FUNGUS,
 } from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
@@ -153,6 +153,9 @@ importWorldCover();
 async function importWorldCover() {
   const w = await import('./world/index.js');
   window.__coverAt = w._coverAt;
+  // the local-light pool, so a harness can name the lamp behind a hot spot
+  // instead of guessing from a capture (#80, the queen's white thorax)
+  window.__lights = (await import('./world/lighting.js')).getLocalLights;
 }
 window.__tree = TREE;
 
@@ -171,6 +174,9 @@ window.__world6 = {
      walks descentPath() and ray-casts the result. THREE itself is exposed
      for that ray-cast; there is no second copy of the library to import. */
   digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundY, groundSlope, THREE,
+  // #80: the dug rooms' fungus footprints and the garden's props
+  get nestFungus() { return NEST_FUNGUS; }, get rocks() { return ROCKS; },
+  get garden() { return world.garden; },
 };
 
 renderer.setResizeCallback((aspect) => {

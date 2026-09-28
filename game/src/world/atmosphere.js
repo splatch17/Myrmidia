@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { rng } from '../core/noise.js';
-import { getFoundedNest, descentPath, dugRooms, LAMP_GLOWS } from './founding.js';
+import { getFoundedNest, descentPath, dugRooms, LAMP_GLOWS, FUNGUS_GLOWS } from './founding.js';
 import { RIG_FOUNDED } from './sun.js';
 import { markEmitter } from '../core/bloom.js';
 
@@ -15,7 +15,8 @@ import { markEmitter } from '../core/bloom.js';
       the job a depth-fade would do for the only case that shows here. They
       follow the cold shaft lamp: sealNest() takes both away together.
 
-   2. DUST AND SPORES where light catches them (the cut, round each lamp), and a small visible body for each
+   2. DUST AND SPORES where light catches them (the cut, round each lamp, a
+      spore cloud round each fungus cluster, #80), and a small visible body for each
       of the nest's cold lamps, in ONE Points draw call. Drift is computed in
       the vertex shader from a per-particle seed and the time uniform, so the
       CPU writes nothing per frame. Rebuilt only when a room opens.
@@ -195,6 +196,10 @@ function moteMaterial() {
    read as places. */
 const DUST_IN_CUT = 60;
 const DUST_PER_LAMP = 8;
+/* #80: a fungus cluster breathes spores rather than gathering dust — fewer
+   motes, more of them bright, hugging the caps rather than the lamp height.
+   No orb: the caps are the lamp's body. */
+const SPORES_PER_FUNGUS = 7;
 function pushMote(sets, R, x, y, z, colour, sporeChance) {
   const spore = R() < sporeChance;
   const c = colour.clone().multiplyScalar(spore ? 2.2 : 0.38);
@@ -204,7 +209,7 @@ function pushMote(sets, R, x, y, z, colour, sporeChance) {
   S.col.push(c.r, c.g, c.b);
   S.size.push(spore ? 0.34 : 0.22 + R() * 0.16);
 }
-function buildMotes(nest, path, lamps, seed) {
+function buildMotes(nest, path, lamps, seed, fungi = []) {
   const R = rng(seed ^ 0x51d);
   const sets = { dust: { pos: [], sd: [], col: [], size: [] }, bright: { pos: [], sd: [], col: [], size: [] } };
   if (path && path.length > 2) {
@@ -228,6 +233,14 @@ function buildMotes(nest, path, lamps, seed) {
     for (let i = 0; i < DUST_PER_LAMP; i++) {
       const a = R() * Math.PI * 2, rr = 0.6 + Math.sqrt(R()) * 2.6;
       pushMote(sets, R, L.p[0] + Math.cos(a) * rr, L.p[1] - 1.5 + R() * 3.5, L.p[2] + Math.sin(a) * rr, tint, 0.1);
+    }
+  }
+  for (const L of fungi) {
+    const m = Math.max(L.c[0], L.c[1], L.c[2]) || 1;
+    const tint = new THREE.Color(L.c[0] / m, L.c[1] / m, L.c[2] / m);
+    for (let i = 0; i < SPORES_PER_FUNGUS; i++) {
+      const a = R() * Math.PI * 2, rr = 0.8 + Math.sqrt(R()) * 3.4;
+      pushMote(sets, R, L.p[0] + Math.cos(a) * rr, L.p[1] - 2.2 + R() * 4.5, L.p[2] + Math.sin(a) * rr, tint, 0.3);
     }
   }
   for (const L of lamps) {
@@ -268,7 +281,7 @@ function buildMotes(nest, path, lamps, seed) {
 export function createAtmosphere() {
   const group = new THREE.Group();
   group.name = 'nest-atmosphere';
-  let forNest = null, shafts = null, motes = null, builtRooms = -1, builtLamps = -1;
+  let forNest = null, shafts = null, motes = null, builtRooms = -1, builtLamps = -1, builtFungi = -1;
 
   function dispose(o) {
     if (!o) return;
@@ -280,7 +293,7 @@ export function createAtmosphere() {
     const nest = getFoundedNest();
     if (nest !== forNest) {
       dispose(shafts); dispose(motes);
-      shafts = motes = null; builtRooms = builtLamps = -1;
+      shafts = motes = null; builtRooms = builtLamps = builtFungi = -1;
       forNest = nest;
       if (nest) {
         const path = descentPath();
@@ -289,11 +302,11 @@ export function createAtmosphere() {
     }
     if (!nest) return;
     const rooms = dugRooms();
-    if (rooms.length !== builtRooms || LAMP_GLOWS.length !== builtLamps) {
+    if (rooms.length !== builtRooms || LAMP_GLOWS.length !== builtLamps || FUNGUS_GLOWS.length !== builtFungi) {
       dispose(motes);
-      motes = buildMotes(nest, descentPath(), LAMP_GLOWS, Math.round(nest.x * 3 + nest.z * 5));
+      motes = buildMotes(nest, descentPath(), LAMP_GLOWS, Math.round(nest.x * 3 + nest.z * 5), FUNGUS_GLOWS);
       group.add(motes);
-      builtRooms = rooms.length; builtLamps = LAMP_GLOWS.length;
+      builtRooms = rooms.length; builtLamps = LAMP_GLOWS.length; builtFungi = FUNGUS_GLOWS.length;
     }
     if (shafts) {
       shafts.material.uniforms.uTime.value = elapsed;

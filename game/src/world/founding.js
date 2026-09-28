@@ -21,6 +21,7 @@ import { texturedSurfaceMaterial, texturedEmissiveMaterial, dirtAlbedo, capAlbed
 import { addLocalLight, applyNestShading, setNestPit, setNestMouth } from './lighting.js';
 import { markEmitter } from '../core/bloom.js';
 import { resettleResources } from './resources.js';
+import { stemGeometry, capGeometry } from './gardenDecor.js';
 
 /* ==========================================================================
    Founding the nest at run time (#11, #12; contract §4).
@@ -145,6 +146,29 @@ const HALL_LAMP_FAR = [0.58, 0.60, 1.70];
    visible body (the bloom needs something to bloom from). Warm lamps are
    deliberately not listed: a clutch lights itself, it does not get an orb. */
 export const LAMP_GLOWS = [];
+
+/* ---- glowing fungus, the nest's own light (#80) -------------------------
+   One cluster in every other dug room (the hall first), against the wall
+   furthest from the corridor it was entered by and from every dig face on
+   it: never on the brood (the chamber keeps its clutches and its bead) and
+   never in front of a face. The cluster's lamp TAKES THE PLACE of that
+   room's far cold lamp rather than adding one, so a fungus room costs the
+   light pool nothing (LIGHT_SLOTS, world/lighting.js).
+   Palette: design/ambiance-prologue.md 9g. The nest is indigo/violet, and
+   the fungus is the one living thing in it that makes that colour itself:
+   violet, or a teal that reads as the same family under the cold lamps.
+   Stems, caps and the one halo'd cap per cluster are three InstancedMeshes
+   for the whole nest, whatever the room count. */
+export const NEST_FUNGUS = [];   // collision footprints {x, z, r, y, room}
+export const FUNGUS_GLOWS = [];  // the clusters' lamps, for world/atmosphere.js
+const FUNGUS_MAX = 64;
+const FUNGUS_KINDS = [
+  /* Caps saturated and well under 1: they are lit by their own lamp AND emit,
+     and at the first try's pale lavender the sum went white — the queen's
+     spot problem again, on a mushroom. */
+  { cap: [0.44, 0.24, 0.90], stem: [0.30, 0.26, 0.42], light: [0.64, 0.46, 1.62] },
+  { cap: [0.14, 0.58, 0.74], stem: [0.20, 0.32, 0.38], light: [0.30, 0.70, 1.42] },
+];
 /* Three lamps down the bore rather than one at the end. One lamp with the
    1/(1 + 0.017 d^2) falloff this rig uses is at 0.027 of its value 46 units
    away, which is the whole of the gallery in darkness and a bright disc at
@@ -165,6 +189,7 @@ const MAX_BROOD = 6;
 let host = null;          // the THREE.Group foundNest() may add to
 let lawnMesh = null;      // the meadow, so the cut can be opened in it
 let grassField = null;    // ditto, so no blade is left standing in mid air
+let gardenDecor = null;   // ditto for the garden's mushrooms/pebbles/leaf (#80)
 let nest = null;          // the founded nest, or null
 const mixColor = (a, b, t) => new THREE.Color(a).lerp(b, clamp(t, 0, 1));
 
@@ -174,6 +199,7 @@ export function initFounding(group, surface = {}) {
   host = group;
   lawnMesh = surface.lawn || null;
   grassField = surface.grass || null;
+  gardenDecor = surface.garden || null;
 }
 
 /** { x, z } of the founded nest, or null while nothing has been founded. */
@@ -1049,6 +1075,15 @@ function openTheMeadow() {
        the cut's bank was heaped over came up THROUGH the bank. */
     grassField.clearIn((x, z) => meadowCut(x, z) || underSpoil(x, z) || excavationFloorAt(x, z) !== null
       || ((spoilTopAt(x, z) ?? -Infinity) >= lawnY(x, z) - 0.2));
+  }
+  if (gardenDecor) {
+    /* Same test, plus the ground in front of the mouth: a mushroom standing
+       on the apron would be on the one path every ant of the colony takes. */
+    const ex = getExcavation();
+    const m = ex ? rampCentre(ex, 0) : null;
+    gardenDecor.clearIn((x, z) => meadowCut(x, z) || underSpoil(x, z) || excavationFloorAt(x, z) !== null
+      || ((spoilTopAt(x, z) ?? -Infinity) >= lawnY(x, z) - 0.2),
+    m ? m.x : NaN, m ? m.z : NaN, ex ? hwAt(ex, 0) * 1.5 + APRON_LEN : 0);
   }
   return moved;
 }
@@ -2123,6 +2158,89 @@ function nestMaterial() {
   }), { cool: true });
 }
 
+/** The nest's three fungus meshes, created on first use and kept on the nest. */
+function fungusField() {
+  if (nest._fungus) return nest._fungus;
+  const stemMat = applyNestShading(new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: 0.8, metalness: 0,
+  }));
+  const capMat = (emissive) => applyNestShading(texturedEmissiveMaterial({
+    map: capAlbedo(), strength: 0.7, emissive, color: 0x777777, side: THREE.DoubleSide,
+  }));
+  const make = (geo, mat, name) => {
+    const m = new THREE.InstancedMesh(geo, mat, FUNGUS_MAX);
+    m.count = 0;
+    m.name = name;
+    m.frustumCulled = false;   // grows room by room; a stale bound would cull it
+    m.setColorAt(0, new THREE.Color(1, 1, 1));
+    nest.group.add(m);
+    return m;
+  };
+  nest._fungus = {
+    stems: make(stemGeometry(), stemMat, 'nest-fungus-stems'),
+    caps: make(capGeometry(), capMat(0.95), 'nest-fungus-caps'),
+    // the one cap per cluster that feeds the halo: a few bright points, not a
+    // glowing carpet (core/bloom.js takes everything on its layer at full)
+    bright: markEmitter(make(capGeometry(), capMat(0.95), 'nest-fungus-bright')),
+  };
+  return nest._fungus;
+}
+
+/**
+ * Plant one cluster against `room`'s wall, as far round it as possible from
+ * every direction in `avoid` (radians from the room's centre). Returns the
+ * lamp it lights, or null if the field is full.
+ */
+function plantFungus(ex, room, avoid, kind, R) {
+  const F = fungusField();
+  if (F.caps.count + 8 > FUNGUS_MAX) return null;
+  const angGap = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
+  let best = 0, bestGap = -1;
+  for (let k = 0; k < 24; k++) {
+    const a = (k / 24) * Math.PI * 2;
+    const gap = Math.min(...avoid.map((b) => angGap(a, b)));
+    if (gap > bestGap + 1e-3) { bestGap = gap; best = a; }
+  }
+  const fy = roomFloorY(ex, room);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  const v = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
+  const n = 5 + Math.floor(R() * 3);
+  for (let i = 0; i < n; i++) {
+    const big = i === 0 ? 1.45 : 0.55 + R() * 0.75;
+    const a = best + (i === 0 ? 0 : (R() - 0.5) * (9 / room.r));
+    const rr = room.r * (i === 0 ? 0.86 : 0.78 + R() * 0.19);
+    const x = room.x + Math.cos(a) * rr, z = room.z + Math.sin(a) * rr;
+    const y = excavationFloorAt(x, z) ?? fy;
+    const s = 2.3 * big;
+    const H = 1.7 * s, capR = 1.15 * s, stemR = 0.2 * s;
+    // leaning off the wall, into the room, like anything growing to the light
+    e.set(Math.sin(a) * 0.18 + (R() - 0.5) * 0.12, R() * 6.28, -Math.cos(a) * 0.18 + (R() - 0.5) * 0.12);
+    q.setFromEuler(e);
+    m4.compose(v.set(x, y - 0.4, z), q, sc.set(stemR, H + 0.4, stemR));
+    F.stems.setMatrixAt(F.stems.count, m4);
+    F.stems.setColorAt(F.stems.count, c.setRGB(kind.stem[0], kind.stem[1], kind.stem[2]));
+    F.stems.count++;
+    const top = new THREE.Vector3(0, H + 0.4, 0).applyQuaternion(q).add(v);
+    m4.compose(top, q, sc.set(capR, capR * 0.8, capR));
+    const into = i === 0 ? F.bright : F.caps;
+    const shade = 0.8 + R() * 0.3;
+    into.setMatrixAt(into.count, m4);
+    into.setColorAt(into.count, c.setRGB(kind.cap[0] * shade, kind.cap[1] * shade, kind.cap[2] * shade));
+    into.count++;
+    NEST_FUNGUS.push({ x, z, r: capR * 0.65, y, room: room.id });
+  }
+  for (const m of [F.stems, F.caps, F.bright]) {
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+  }
+  // in front of the cluster and over it, lighting the room from the caps
+  // rather than sitting in them
+  const lx = room.x + Math.cos(best) * room.r * 0.7, lz = room.z + Math.sin(best) * room.r * 0.7;
+  const lamp = addLocalLight([lx, fy + 4.6, lz], kind.light);
+  FUNGUS_GLOWS.push(lamp);
+  return lamp;
+}
+
 /** Build what a finished face revealed, light it, and return the room. */
 function openRoom(spec) {
   const ex = getExcavation();
@@ -2199,19 +2317,36 @@ function openRoom(spec) {
      doorway, and the first shot of a branch tunnel was a black slot in a lit
      wall — the gallery's own measurement (GALLERY_LAMPS) all over again. */
   const coldLamp = (p, c) => { LAMP_GLOWS.push(addLocalLight(p, c)); };
-  for (const t of [0.18, 0.55]) {
-    coldLamp([link.ax + link.hx * link.len * t, linkFloorY(ex, link, link.len * t) + 6.5,
-      link.az + link.hz * link.len * t], HALL_LAMP_LINK);
+  /* Down the TUBE, between the two walls, and high under its roof (#80). At
+     0.18 of the link's length from a start half a radius inside the parent,
+     the first lamp hung in the parent room's own air at 6.5 over its floor,
+     the queen's eye height, and its bloomed body sat on her thorax in every
+     shot of the chamber: the "white spot" of round 21. */
+  const s0 = parent.r * 0.5, s1 = Math.max(s0 + 1, link.len - spec.r * 0.5);
+  for (const t of [0.3, 0.72]) {
+    const sl = s0 + (s1 - s0) * t;
+    coldLamp([link.ax + link.hx * sl, linkFloorY(ex, link, sl) + 9.0,
+      link.az + link.hz * sl], HALL_LAMP_LINK);
   }
-  coldLamp([room.x, fy + 7.5, room.z], HALL_LAMP_MID);
-  coldLamp([room.x + hx * room.r * 0.55, fy + 5.0, room.z + hz * room.r * 0.55], HALL_LAMP_FAR);
+  // over her head when she stands in the middle of the room, for the same reason
+  coldLamp([room.x, fy + 10.0, room.z], HALL_LAMP_MID);
 
   /* And the room comes with its own work to do: 2 or 3 faces on ITS walls,
      each opening a room one generation deeper (contract §8). This is what
      makes the hall a hub instead of the end of the game — and it is decided
      here, by the world, because where a tunnel may go is a question about the
      ground and player/** cannot see the ground. */
-  publishRoomFaces(ex, room, [hx, hz]);
+  const faces = publishRoomFaces(ex, room, [hx, hz]);
+
+  /* Every other room grows a fungus cluster, whose lamp stands in for the far
+     cold lamp; the others keep that lamp. */
+  const R = rng((seed * 31 + ex.rooms.length * 977) % 99991);
+  const avoid = [Math.atan2(-hz, -hx), ...faces.map((f) => Math.atan2(f.z - room.z, f.x - room.x))];
+  const fungusLamp = ex.rooms.length % 2 === 0
+    ? plantFungus(ex, room, avoid, FUNGUS_KINDS[(ex.rooms.length / 2 + 1) % 2], R) : null;
+  if (!fungusLamp) {
+    coldLamp([room.x + hx * room.r * 0.55, fy + 8.0, room.z + hz * room.r * 0.55], HALL_LAMP_FAR);
+  }
 
   openTheMeadow();
   resettleResources((x, z) => excavationFloorAt(x, z) !== null || underSpoil(x, z));
@@ -2321,4 +2456,6 @@ export function _resetFounding() {
   setNestPit(0, 0, 0, 0, 0);
   setNestMouth(0, 0, 0);
   LAMP_GLOWS.length = 0;
+  NEST_FUNGUS.length = 0;
+  FUNGUS_GLOWS.length = 0;
 }

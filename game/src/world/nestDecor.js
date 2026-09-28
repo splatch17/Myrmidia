@@ -8,7 +8,6 @@ import {
   undergroundFloor, wallPoint, profileR,
   QUEEN, START, CH_Z, CH_R, TUNNEL_BACK, DAIS_R,
 } from './underground.js';
-import { groundY, waterDepthAt, distanceToWater } from './terrain.js';
 
 /* ==========================================================================
    Everything that lives *inside* the nest: the queen's dais, roots arching
@@ -67,9 +66,10 @@ const SPORE_LIGHT = [0.72, 0.48, 1.75];
 // one fantastical note reads brighter than every warm-but-mundane lamp elsewhere
 const GLOW_LIGHT = [1.95, 1.20, 0.52];
 
-/** Collision footprints, same shape (and same generous-radius policy) as the
-    old prototype's MUSHROOMS/ROCKS. Filled by buildNestDecor(); exported for a
-    later gameplay pass to consume - deliberately not wired to the player here. */
+/** Collision footprints, same shape as the old prototype's MUSHROOMS/ROCKS.
+    MUSHROOMS is filled by buildNestDecor() (the pre-built nest's caps); ROCKS
+    is the lawn's collider list, filled by world/gardenDecor.js (#80).
+    player/decorCollision.js reads both. */
 export const MUSHROOMS = [];
 export const ROCKS = [];
 
@@ -353,22 +353,10 @@ export function buildNestDecor(rooms) {
     }
   }
 
-  /* ---- lawn pebbles: the outdoor half of the decor collision set --------- */
-  for (let pb = 0; pb < 42; pb++) {
-    const px2 = -200 + R() * 380, pz2 = 8 + R() * 250;
-    if (waterDepthAt(px2, pz2) > 0 || distanceToWater(px2, pz2) < 4) continue;
-    const sxx = 2 + R() * 6, syy = 1.5 + R() * 4, szz = 2 + R() * 6;
-    const yy = groundY(px2, pz2) + syy * 0.35;
-    const shade = 0.75 + R() * 0.5;
-    const mossSeed = R() * 40, mossCap = R() < 0.6 ? 0.5 + R() * 0.5 : 0;
-    S.bake(sphere, box(sxx, syy, szz, [px2, yy, pz2]), (x, y, z) => {
-      const stone = scl(C_STONE, shade);
-      if (mossCap <= 0) return stone;
-      const up = clamp((y - yy) / syy + 0.15 * vnoise(x * 0.3 + mossSeed, z * 0.3 + mossSeed), 0, 1);
-      return mix(stone, C_MOSS_A, up * up * mossCap);
-    });
-    ROCKS.push({ x: px2, z: pz2, r: (sxx + szz) * 0.5 + 1.0 });
-  }
+  /* The lawn pebbles that used to be baked here went with the pre-built nest
+     when it stopped being drawn — and kept colliding, invisible, on the lawn.
+     The garden has its own pass now (world/gardenDecor.js, #80), which fills
+     ROCKS with what it actually draws. */
 
   const group = new THREE.Group();
   group.name = 'nest-decor';

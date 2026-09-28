@@ -55,8 +55,20 @@ export function indexWorld({ grassFootprints, mushrooms, rocks, bounds }) {
       worldIndex.add('grass', g.x, g.z, g.w, g);
     }
   }
-  if (mushrooms) for (const m of mushrooms) worldIndex.add('mushrooms', m.x, m.z, m.r || 0, m);
-  if (rocks) for (const r of rocks) worldIndex.add('rocks', r.x, r.z, r.r || 0, r);
+  /* The handle is kept on the record so the world can take one entry back
+     out (unindexWorldEntry) — a garden prop under a freshly dug nest. The
+     index hands queries its own copy of x/z/r, so clearing the record alone
+     would leave a collider standing where nothing is drawn. */
+  if (mushrooms) for (const m of mushrooms) m._indexHandle = worldIndex.add('mushrooms', m.x, m.z, m.r || 0, m);
+  if (rocks) for (const r of rocks) r._indexHandle = worldIndex.add('rocks', r.x, r.z, r.r || 0, r);
 
   return worldIndex.stats();
+}
+
+/** Take one world entry indexed by indexWorld() back out. No-op if it was
+ *  never indexed (the index is built after createWorld(), or detached). */
+export function unindexWorldEntry(rec) {
+  if (!rec || !rec._indexHandle) return;
+  worldIndex.remove(rec._indexHandle);
+  rec._indexHandle = null;
 }

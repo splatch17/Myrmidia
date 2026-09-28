@@ -237,7 +237,11 @@ export function texturedEmissiveMaterial({ map, strength = 1.0, emissive = 1.6, 
       `#include <emissivemap_fragment>
        totalEmissiveRadiance += vColor * gTriTex * ${emissive.toFixed(2)};`);
   };
-  material.userData.shaderTag = 'triplanar-emissive';
-  material.customProgramCacheKey = () => 'triplanar-emissive';
+  /* The strength is baked into the shader text, so it has to be in the key:
+     the glow bead (2.2) and a fungus cap (0.95) sharing one program is one of
+     them glowing at the other's strength (#80). */
+  const tag = 'triplanar-emissive-' + emissive.toFixed(2);
+  material.userData.shaderTag = tag;
+  material.customProgramCacheKey = () => tag;
   return material;
 }

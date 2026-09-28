@@ -332,3 +332,42 @@ Une capture du hall avec ses fronts de taille visibles sur les parois, une de
 la deuxième salle ouverte avec la reine dedans arrivée à pied, et un harnais
 qui creuse deux générations de suite sans qu'aucun toit ne perce la pelouse
 (0 cellule ouverte, comme `verify-descent` le mesure déjà).
+
+## 9. Décors : jardin et champignons du nid — round 22 (#80)
+
+Ajouté par Atta avec le ticket, à la demande de l'intégrateur (« ajoute au
+contrat si tu ajoutes une API »). Rien d'existant n'est renommé.
+
+### Ce que `world/**` livre
+
+```
+ROCKS          -> inchangé de forme ({x, z, r}). Contient maintenant tout ce
+                  que le jardin DESSINE : cailloux moussus, champignons
+                  (tige seule si le chapeau passe au-dessus de la reine,
+                  chapeau sinon), feuille morte (sa moitié relevée).
+                  Les 42 cailloux invisibles de l'ancien nid pré-construit
+                  en sont sortis : ils collisionnaient sans être dessinés.
+                  Un décor recouvert par une fondation (fosse, déblais,
+                  embouchure) est retiré de ROCKS ET de l'index spatial.
+NEST_FUNGUS    -> nouveau. Les bouquets lumineux des salles creusées,
+                  {x, z, r, y, room}, remplis quand une salle s'ouvre
+                  (une salle sur deux, le hall d'abord). Vidé par
+                  _resetFounding().
+```
+
+### Ce que `player/**` livre en face
+
+- **Rien à faire pour le jardin** : `decorCollision.js` lit déjà `ROCKS` sur la
+  pelouse.
+- **À brancher pour le nid** : `forEachCollider()` sort tôt quand
+  `insideNest(x, z)` est vrai, donc aucun collisionneur n'est testé dans le
+  nid. `NEST_FUNGUS` doit y être parcouru (liste courte, balayage linéaire
+  suffisant), avec le même rayon `r` que le monde publie. Les bouquets sont
+  posés contre la paroi, loin des fronts et du couloir d'entrée : ils ne
+  peuvent pas fermer un passage.
+
+### Critère de fin commun
+
+`scripts/verify-decor-80.mjs` : chaque décor du jardin est vu par
+`__decorPenetration`, une reine lâchée dedans en ressort ; le hall porte un
+bouquet contre sa paroi, à plus de 7 unités de tout front.
