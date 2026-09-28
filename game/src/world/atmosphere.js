@@ -15,7 +15,7 @@ import { markEmitter } from '../core/bloom.js';
       the job a depth-fade would do for the only case that shows here. They
       follow the cold shaft lamp: sealNest() takes both away together.
 
-   2. DUST AND SPORES in every dug room, and a small visible body for each
+   2. DUST AND SPORES where light catches them (the cut, round each lamp), and a small visible body for each
       of the nest's cold lamps, in ONE Points draw call. Drift is computed in
       the vertex shader from a per-particle seed and the time uniform, so the
       CPU writes nothing per frame. Rebuilt only when a room opens.
@@ -30,7 +30,6 @@ const SHAFT_COUNT = 6;
 const SHAFT_COLOUR = new THREE.Color(0.52, 0.66, 1.0);   // COLD_SHAFT_LIGHT, cleaner
 const SHAFT_GAIN = 0.1;
 
-const DUST_PER_ROOM = 130;
 const DUST_COOL = new THREE.Color(0.62, 0.58, 1.0);
 const DUST_WARM = new THREE.Color(1.0, 0.72, 0.36);
 
@@ -188,22 +187,47 @@ function moteMaterial() {
 
 /* Two Points objects sharing one material: the faint dust stays off the
    bloom layer (fed to it, hundreds of dim motes add up to a grey veil over the
-   whole room), the spores and lamp bodies go on it. */
-function buildMotes(rooms, lamps, seed) {
+   whole room), the spores and lamp bodies go on it.
+
+   Dust only where light catches it (round 22, porter: "il y en a trop
+   partout"): a column in the daylit cut, and a small cloud round each lamp.
+   A dark room with no lamp stays clear, which is what makes the lit spots
+   read as places. */
+const DUST_IN_CUT = 60;
+const DUST_PER_LAMP = 8;
+function pushMote(sets, R, x, y, z, colour, sporeChance) {
+  const spore = R() < sporeChance;
+  const c = colour.clone().multiplyScalar(spore ? 2.2 : 0.38);
+  const S = spore ? sets.bright : sets.dust;
+  S.pos.push(x, y, z);
+  S.sd.push(R(), R(), R(), 0);
+  S.col.push(c.r, c.g, c.b);
+  S.size.push(spore ? 0.34 : 0.22 + R() * 0.16);
+}
+function buildMotes(nest, path, lamps, seed) {
   const R = rng(seed ^ 0x51d);
   const sets = { dust: { pos: [], sd: [], col: [], size: [] }, bright: { pos: [], sd: [], col: [], size: [] } };
-  for (const room of rooms) {
-    for (let i = 0; i < DUST_PER_ROOM; i++) {
-      const a = R() * Math.PI * 2, rr = Math.sqrt(R()) * room.r * 0.85;
-      const y = room.floorY + 0.8 + R() * 10;
-      const seedv = [R(), R(), R(), 0];
-      const spore = R() < 0.08;
-      const c = (R() < 0.3 ? DUST_WARM : DUST_COOL).clone().multiplyScalar(spore ? 2.2 : 0.38);
-      const S = spore ? sets.bright : sets.dust;
-      S.pos.push(room.x + Math.cos(a) * rr, y, room.z + Math.sin(a) * rr);
-      S.sd.push(...seedv);
-      S.col.push(c.r, c.g, c.b);
-      S.size.push(spore ? 0.34 : 0.22 + R() * 0.16);
+  if (path && path.length > 2) {
+    const n = path.length;
+    for (let i = 0; i < DUST_IN_CUT; i++) {
+      const t = 0.05 + 0.6 * R();   // the upper cut, under the sky
+      const k = Math.min(n - 2, Math.floor(t * (n - 1))), f = t * (n - 1) - k;
+      const a = path[k], b = path[k + 1];
+      const tx = b.x - a.x, tz = b.z - a.z, tl = Math.hypot(tx, tz) || 1;
+      const off = (R() - 0.5) * nest.mouth.r * 1.2;
+      pushMote(sets, R,
+        a.x + (b.x - a.x) * f + (-tz / tl) * off,
+        a.y + (b.y - a.y) * f + 0.6 + R() * 6,
+        a.z + (b.z - a.z) * f + (tx / tl) * off,
+        R() < 0.5 ? DUST_WARM : DUST_COOL, 0.03);
+    }
+  }
+  for (const L of lamps) {
+    const m = Math.max(L.c[0], L.c[1], L.c[2]) || 1;
+    const tint = new THREE.Color(L.c[0] / m, L.c[1] / m, L.c[2] / m).lerp(DUST_COOL, 0.4);
+    for (let i = 0; i < DUST_PER_LAMP; i++) {
+      const a = R() * Math.PI * 2, rr = 0.6 + Math.sqrt(R()) * 2.6;
+      pushMote(sets, R, L.p[0] + Math.cos(a) * rr, L.p[1] - 1.5 + R() * 3.5, L.p[2] + Math.sin(a) * rr, tint, 0.1);
     }
   }
   for (const L of lamps) {
@@ -267,7 +291,7 @@ export function createAtmosphere() {
     const rooms = dugRooms();
     if (rooms.length !== builtRooms || LAMP_GLOWS.length !== builtLamps) {
       dispose(motes);
-      motes = buildMotes(rooms, LAMP_GLOWS, Math.round(nest.x * 3 + nest.z * 5));
+      motes = buildMotes(nest, descentPath(), LAMP_GLOWS, Math.round(nest.x * 3 + nest.z * 5));
       group.add(motes);
       builtRooms = rooms.length; builtLamps = LAMP_GLOWS.length;
     }
