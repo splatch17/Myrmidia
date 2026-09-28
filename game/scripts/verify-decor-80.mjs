@@ -187,6 +187,14 @@ async function main() {
   check(inHall.length >= 5, `hall has a fungus cluster (${inHall.length} caps)`);
   // hall adds 2 link lamps + mid + (far OR the cluster's lamp) = 4 either way
   check(setup.lamps1 - setup.lamps0 === 4, `hall added ${setup.lamps1 - setup.lamps0} lamps (4 expected: the cluster replaces the far lamp)`);
+  if (inHall.length) {
+    const fp = await page.evaluate((f) => ({
+      same: window.__decorPenetration(f.x, f.z, 0, f.y),
+      above: window.__decorPenetration(f.x, f.z, 0, f.y + 20),
+    }), inHall[0]);
+    check(fp.same > 0, `a nest fungus cap collides on its own floor (${fp.same.toFixed(2)})`);
+    check(fp.above === 0 || fp.above < fp.same, `not from twenty units above it (${fp.above.toFixed(2)})`);
+  }
   if (hall && inHall.length) {
     const d = Math.min(...inHall.map((f) => Math.hypot(f.x - hall.x, f.z - hall.z)));
     check(d > hall.r * 0.6, `the cluster stands against the wall (nearest cap ${d.toFixed(1)} of r=${hall.r.toFixed(1)})`);
