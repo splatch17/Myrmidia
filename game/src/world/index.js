@@ -217,5 +217,11 @@ export function createWorld() {
     mushrooms: decor.mushrooms,
     rocks: decor.rocks,
     garden,
+    /* #34: everything that is "the earth" when the macro view hides it to
+       show the nest as a model (world/macroView.js). Handles, not copies. */
+    surface: {
+      lawn, water: water.mesh, horizon: horizon.group, grass: grass.mesh, tree: tree.group,
+      resources: resources.group, garden: garden.group, atmosphere: atmosphere.group,
+    },
   };
 }

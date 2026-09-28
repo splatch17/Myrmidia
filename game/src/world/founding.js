@@ -2257,6 +2257,7 @@ function openRoom(spec) {
   const parent = ex.rooms.find((r) => r.id === spec.from.id) || ex.chamber;
 
   const room = addRoom(spec.id, spec.x, spec.z, spec.r, spec.fy, spec.gen || 1);
+  room.size = spec.size || null;   // #34: the macro tooltip names it
   /* Both ends well inside the rooms they join. The tube is trimmed back to
      their walls anyway (linkTrimS); what the ends decide is how far the
      walkable strip reaches, and it must reach into the rooms' floors. */
@@ -2366,6 +2367,8 @@ export function dugRooms() {
     // same for every room, and a caller that assumed so would place a camera,
     // a lamp or an ant a generation's drop off the ground.
     floorY: roomFloorY(ex, r), gen: r.gen || 0,
+    // #34: 'small' | 'medium' | 'large' for a dug room, 'chamber' for room 0
+    size: r.size || (r === ex.chamber || r.id === 'chamber' ? 'chamber' : null),
   })) : [];
 }
 

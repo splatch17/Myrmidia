@@ -15,6 +15,8 @@ import { createQualityPanel } from './core/quality.js';
 import { createBloom } from './core/bloom.js';
 import { indexWorld, worldQuery } from './core/worldIndexBridge.js';
 import { attachSpatialIndex, status as spatialStatus } from './player/spatial.js';
+import { createMacroView, applyMacroEnvironment } from './world/macroView.js';
+import { createMacroMode } from './core/macroMode.js';
 
 // Entry point for the Three.js/Vite migration (see design docs for the full
 // vision). Atta's world (underground gallery + side rooms, lawn, grass, tree
@@ -202,12 +204,17 @@ function frame() {
   // tree LOD against last frame's camera — one frame of lag, imperceptible),
   // then the player (writes this frame's antState/camera for next frame).
   world.update(dt, t, camera);
-  player.update(dt, t);
+  /* #34: in (or on the way in/out of) the macro view the player is frozen
+     and the macro mode writes the camera instead. */
+  const inMacro = macro.freezesPlayer();
+  player.update(dt, t, { macro: inMacro });
+  macro.update(dt, t);
   // the camera is final only now, and the dig ring is projected against it
-  player.syncDigDial(dt);
+  if (!inMacro) player.syncDigDial(dt);
 
   applyEnvironment();
-  bloom.setActive(emittersInView());
+  applyMacroEnvironment({ scene, renderer, hemi }, macro.mix());
+  bloom.setActive(emittersInView() || macro.mode === 'macro');
   bloom.render();
   quality.update(dt);
 }
@@ -312,6 +319,21 @@ const indexStats = indexWorld({
 const NO_SPATIAL = typeof location !== 'undefined' && /[?&]nospatial=1/.test(location.search);
 if (!NO_SPATIAL) attachSpatialIndex(worldQuery, 'world');
 window.__spatial = () => ({ ...spatialStatus(), ...indexStats });
+
+/* #34 macro mode: the nest as a scale model, M to toggle. The look is
+   world/macroView.js, the mode (orbit camera, input, picking, selection) is
+   core/macroMode.js; see design/api-monde-gameplay.md 10. Created after the
+   one-shot applyNestShading traverse above: its materials are unlit on
+   purpose and must not be patched. */
+const macroView = createMacroView({ world, scene });
+const macro = createMacroMode({
+  camera, domElement: renderer.domElement, view: macroView,
+  getAnt: () => player.ant,
+  forEachAnt: player.macroInfo.forEachAnt,
+  faceCrew: player.macroInfo.faceCrew,
+  hud: player.hud,
+});
+window.__macro = macro;
 
 const quality = createQualityPanel({ renderer, sun, scene });
 const bloom = createBloom(renderer, scene, camera);

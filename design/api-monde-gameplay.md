@@ -371,3 +371,71 @@ NEST_FUNGUS    -> nouveau. Les bouquets lumineux des salles creusées,
 `scripts/verify-decor-80.mjs` : chaque décor du jardin est vu par
 `__decorPenetration`, une reine lâchée dedans en ressort ; le hall porte un
 bouquet contre sa paroi, à plus de 7 unités de tout front.
+
+## 10. Mode macro : le nid en maquette — round 22 (#34, première tranche)
+
+Ajouté par Atta avec le ticket, à la demande de l'intégrateur. Rien d'existant
+n'est renommé ; `dugRooms()` gagne un champ.
+
+### Ce que `world/**` livre
+
+```
+dugRooms()     -> inchangé, plus `size` : 'chamber' pour la salle 0,
+                  'small' | 'medium' | 'large' pour une salle creusée
+                  (libellé technique, comme `kind` de soilAt).
+createWorld()  -> gagne `surface` : { lawn, water, horizon, grass, tree,
+                  resources, garden, atmosphere } — ce que la maquette cache.
+world/macroView.js
+  createMacroView({ world, scene }) -> {
+    setActive(on, focus), update(dt, elapsed, camera, forEachAnt, focus),
+    rooms(), faces(), bounds(),          // relus à 4 Hz
+    setHover(room | null), setSelected(room | null),
+  }
+  applyMacroEnvironment({ scene, renderer, hemi }, mix)
+```
+
+La maquette ne reconstruit rien : chaque maillage de cavité (coque de
+fondation, salles, tunnels) change de matériau (intérieur opaque, faces vers
+la caméra coupées) et reçoit un double en faces arrière (silhouette en
+fresnel additif). La pelouse, l'herbe, le décor, l'arbre, l'eau, les déblais
+sont cachés ; la surface reste lisible par une grille posée sur `lawnY()` et
+l'anneau de la bouche. Tout est rendu à l'identique en sortie.
+
+### Ce que `core/macroMode.js` livre (câblé dans `main.js`)
+
+```
+createMacroMode({ camera, domElement, view, getAnt, forEachAnt, faceCrew, hud })
+  toggle()                 // la touche M (Échap sort aussi)
+  mode                     // 'play' | 'enter' | 'macro' | 'exit'
+  freezesPlayer()          // vrai hors 'play' : le joueur ne pilote plus
+  mix()                    // 0..1, suit la transition de 0,6 s
+  getSelection()           // salle choisie (forme de dugRooms()) | null
+  onSelect(fn)             // fn(salle | null) à chaque clic ; renvoie le
+                           // désabonnement
+  setTool({ hover(pick), click(pick) })   // null = outil 'select'
+  pickAt(x, y) -> { room, point }         // salle sous un point écran
+  roomScreen(id) -> { x, y }              // pour les harnais
+```
+
+`pick` = `{ room, point, hit }` : la salle dont le disque de sol est sous le
+curseur, et le point touché. C'est la prise pour la suite — peindre un volume
+à creuser, attribuer une fonction à une salle — : un outil de plus, pas un
+second mode.
+
+### Ce que `player/**` livre en face (fait dans ce ticket, minimal)
+
+- `update(dt, elapsed, { macro })` : en macro, pas de déplacement, pas de E,
+  la caméra de suivi n'est pas écrite ; l'état caméra d'`input.js` est remis
+  à la sortie (le glisser/la molette de la maquette passent aussi par lui).
+  Retour garanti sur la pose de jeu exacte.
+- `macroInfo.forEachAnt(fn)` → `fn(x, y, z, 'queen'|'worker'|'digger')`, sans
+  allocation ; `macroInfo.faceCrew(face)` → `{ diggers, required }`.
+- `hud.setMacro(on)` : cache commandes, invite, barre d'action, jauge et
+  objectif ; garde la vie de la reine et les castes ; affiche la légende.
+
+### Critère de fin
+
+`scripts/verify-macro-34.mjs` : M avant fondation (note « pas encore de
+fourmilière »), puis nid à trois salles, trois angles d'orbite, zoom, survol +
+infobulle, clic → sélection, retour sur la pose de jeu à 0,1 unité près,
+≥ 60 i/s en maquette à 1280×800, aucune erreur console.

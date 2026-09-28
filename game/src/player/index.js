@@ -202,8 +202,25 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     hud.setSite(siteHeadline(site), siteDetail(site), site.diggable);
   }
 
-  function update(dt, elapsed) {
-    const intent = input.readMoveIntent();
+  /* #34: while the macro view is up (core/macroMode.js) the queen is not
+     steered and the follow camera is not written, so leaving the model
+     lands on exactly the shot the player left. The orbit drag/wheel still
+     reach input.js underneath; its camera state is put back on the way out
+     rather than teaching input.js about modes. The colony keeps living. */
+  const IDLE_INTENT = { ix: 0, iy: 0, mag: 0, sprint: false };
+  let macroSnap = null;
+
+  function update(dt, elapsed, opts) {
+    const macro = !!(opts && opts.macro);
+    if (macro && !macroSnap) {
+      macroSnap = { camYaw: input.state.camYaw, wantPitch: input.state.wantPitch, camDist: input.state.camDist };
+    } else if (!macro && macroSnap) {
+      input.state.camYaw = macroSnap.camYaw;
+      input.state.wantPitch = macroSnap.wantPitch;
+      input.state.camDist = macroSnap.camDist;
+      macroSnap = null;
+    }
+    const intent = macro ? IDLE_INTENT : input.readMoveIntent();
 
     /* E, resolved in context (interaction.js): climb on/off, harvest a node,
        drop what she carries, or dig the first chamber. Both readings of the
@@ -221,7 +238,8 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     // a caste can be locked again by nothing, but the guard costs one line and
     // stops a saved pick from outliving the rule that allowed it
     if (!casteUnlocked(caste)) caste = 'worker';
-    const act = interaction.update(ant, input.consumeInteract(), input.isInteractHeld(), dt);
+    const pressedE = input.consumeInteract();
+    const act = interaction.update(ant, macro ? false : pressedE, macro ? false : input.isInteractHeld(), dt);
 
     if (interaction.busy()) {
       /* The founding sequence (laying.js, #6) is placing her along a path
@@ -329,6 +347,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        *in*, which after a sequence that turned her round is a shot of her
        face from the far side of the spoil heap. */
     if (interaction.laying.state.justEnded) input.state.camYaw = ant.yaw;
+    if (macro) return;
     cameraRig.update(ant, input.state.camYaw, input.state.wantPitch, input.state.camDist, dt,
       interaction.shot(ant));
   }
@@ -465,5 +484,23 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     hud.setDig(projectDig(colony.digCandidates()), dt);
   }
 
-  return { ant, group, update, syncDigDial, dispose };
+  /* #34: what the macro view needs from the colony, and nothing more —
+     every ant's position for the dots, and a face's crew for the tooltip.
+     A callback rather than an array so the per-frame dot pass allocates
+     nothing. */
+  const macroInfo = {
+    forEachAnt(fn) {
+      fn(ant.x, ant.y, ant.z, 'queen');
+      const ws = colony.state.workers;
+      for (let i = 0; i < ws.length; i++) {
+        const w = ws[i];
+        fn(w.ant.x, w.ant.y, w.ant.z, w.profileId === 'digger' ? 'digger' : 'worker');
+      }
+    },
+    faceCrew(face) {
+      return { diggers: colony.state.faceWork.get(face.id) || 0, required: requiredCrewFor(face) };
+    },
+  };
+
+  return { ant, group, update, syncDigDial, dispose, hud, macroInfo };
 }

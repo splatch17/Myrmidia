@@ -45,7 +45,7 @@ function nullHud() {
   return {
     setSite() {}, setPrompt() {}, setObjective() {}, setStock() {}, setEvent() {},
     setHold() {}, setDig() {}, setEventNow() {}, setUnit() {},
-    setQueenHp() {}, setCastes() {},
+    setQueenHp() {}, setCastes() {}, setMacro() {},
     toggleControls() {}, closeControls() {}, dispose() {},
   };
 }
@@ -63,6 +63,7 @@ const CONTROLS = [
   ['E', 'action — appui court, ou maintenu'],
   ['5 / 6', 'prochaine ponte : ouvrières / fouisseuses'],
   ['C', 'gestion de la reine'],
+  ['M', 'vue d’ensemble du nid (maquette)'],
   ['P', 'graphismes et cadence de test'],
   ['H', 'afficher / masquer cette aide'],
 ];
@@ -241,6 +242,17 @@ export function createHud() {
     return entry;
   }
   let lastQueenHpKey = null;
+
+  /* ---- macro mode (#34): legend + what hides ---------------------------- */
+  const macroLegend = el('macrolegend', 'mm mm-frame');
+  macroLegend.style.cssText = 'display:none;left:50%;bottom:16px;transform:translateX(-50%);'
+    + 'padding:5px 14px;font-size:12px;color:var(--mm-dim);white-space:nowrap;';
+  macroLegend.innerHTML = '<b style="color:var(--mm-gold)">M</b> — revenir · glisser — tourner · '
+    + 'molette — zoom · clic droit / Maj — déplacer · clic — choisir une salle';
+  const macroStyle = document.createElement('style');
+  macroStyle.textContent = 'body.mm-macro #controls, body.mm-macro #promptwrap, body.mm-macro #hold,'
+    + ' body.mm-macro #digdial, body.mm-macro #tracker { display: none !important; }';
+  document.head.appendChild(macroStyle);
 
   let lastSite = null, lastDetail = null, lastPrompt = null;
   let lastObjective = null, lastStock = null, lastEvent = null;
@@ -481,6 +493,15 @@ export function createHud() {
       }
     },
 
+    /* #34 macro mode: the play-only panels step aside (commands, prompt,
+       cast bar, dig ring, objective tracker), the queen's bar and the caste
+       squares stay, and a one-line legend says how to drive the model. One
+       body class + !important, because every setter above writes an inline
+       display and must keep doing so untouched underneath. */
+    setMacro(on) {
+      document.body.classList.toggle('mm-macro', !!on);
+      macroLegend.style.display = on ? 'block' : 'none';
+    },
     toggleControls() {
       controlsOpen = !controlsOpen;
       controls.style.display = controlsOpen ? 'block' : 'none';
@@ -492,7 +513,7 @@ export function createHud() {
       controls.style.display = 'none';
     },
     dispose() {
-      for (const n of [unit, stock, tracker, promptWrap, holdOuter, event, controls, dial, queenhud]) {
+      for (const n of [unit, stock, tracker, promptWrap, holdOuter, event, controls, dial, queenhud, macroLegend, macroStyle]) {
         if (n.parentNode) n.parentNode.removeChild(n);
       }
     },
