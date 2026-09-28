@@ -195,24 +195,50 @@ export function createHud() {
   const casteEls = new Map();     // id -> { root, ring, ico, cap, ...cache }
   const CASTE_RING_R = 15, CASTE_RING_C = 2 * Math.PI * CASTE_RING_R;
 
+  /**
+   * A <button>, not a <div> — round 2 of #75 makes these clickable: picking
+   * the next clutch's caste the same way keys 5/6 do (player/index.js's
+   * selectCaste(), handed in per-frame as `onSelect` since `.mm` panels are
+   * rebuilt by data, not by identity). `entry.onSelect`/`.id`/`.clickable`
+   * are read INSIDE the listener rather than captured at construction time,
+   * because the square is built once (casteEls, above) and reused for the
+   * rest of the session while what it may do changes frame to frame (locked
+   * -> unlocked, or `manages` flipping the day #36 lets the player leave the
+   * queen).
+   *
+   * Both `pointerdown` and `click` stop propagation: the button is not a
+   * descendant of the canvas input.js listens on, so nothing would reach it
+   * either way, but a click meant for a caste square must never fall through
+   * to a camera-orbit drag or a pointer-lock request if that ever changes.
+   */
   function buildCasteSquare() {
-    const root = document.createElement('div');
+    const root = document.createElement('button');
+    root.type = 'button';
     root.className = 'mm-caste-sq';
     root.innerHTML = `<svg class="mm-caste-ring" viewBox="0 0 32 32" width="32" height="32">
         <circle cx="16" cy="16" r="${CASTE_RING_R}" fill="none" stroke="rgba(255,214,150,.16)" stroke-width="2.4"/>
         <circle class="mm-caste-ringfill" cx="16" cy="16" r="${CASTE_RING_R}" fill="none"
                 stroke="#f3cf7a" stroke-width="2.4" stroke-linecap="round" transform="rotate(-90 16 16)"
                 stroke-dasharray="${CASTE_RING_C}" stroke-dashoffset="${CASTE_RING_C}"/>
-      </svg><span class="mm-caste-ico"></span><div class="mm-caste-cap"></div>`;
+      </svg><span class="mm-caste-ico"></span><span class="mm-caste-count"></span>`
+      + `<div class="mm-caste-cap"></div>`;
     root.querySelector('.mm-caste-ring').style.display = 'none';
-    return {
+    const entry = {
       root,
       ring: root.querySelector('.mm-caste-ring'),
       ringFill: root.querySelector('.mm-caste-ringfill'),
       ico: root.querySelector('.mm-caste-ico'),
+      count: root.querySelector('.mm-caste-count'),
       cap: root.querySelector('.mm-caste-cap'),
-      state: null, icoText: null, capText: null,
+      state: null, icoText: null, capText: null, countText: null,
+      selected: null, clickable: null, id: null, onSelect: null,
     };
+    root.addEventListener('pointerdown', (e) => e.stopPropagation());
+    root.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (entry.clickable && entry.onSelect) entry.onSelect(entry.id);
+    });
+    return entry;
   }
   let lastQueenHpKey = null;
 
@@ -396,15 +422,28 @@ export function createHud() {
      * `progress` null/undefined means "not currently incubating" (state
      * "unlocked", plain letter); a number means "in production" (the ring
      * sweeps, the square shows a percentage); `unlocked` false means
-     * "locked" (greyed, the square's own caption becomes `hint` — what
-     * unlocks it — since this HUD has no hover: everything here is
-     * pointer-events:none, keyboard-only, same as the rest of the file).
+     * "locked" (greyed, not clickable, the square's own caption becomes
+     * `hint` — what unlocks it).
+     *
+     * Round 2 of #75: each entry also carries `selected` (is this the caste
+     * the next clutch will be — a gold border/glow, independent of the
+     * in-production ring, since a caste can be both mid-hatch AND picked for
+     * the clutch after it) and `count` (how many of that caste the colony
+     * already has, a small badge). `opts.manages` gates whether the square is
+     * clickable at all: the panel's own rule (queenMenu.js) — never "is this
+     * the player", only "does the controlled profile manage a colony" — a
+     * locked square stays unclickable regardless of `manages`.
      */
-    setCastes(list) {
+    setCastes(list, opts) {
       if (!list) return;
+      const manages = !!(opts && opts.manages);
+      const onSelect = (opts && opts.onSelect) || null;
       for (const c of list) {
         let e = casteEls.get(c.id);
         if (!e) { e = buildCasteSquare(); casterow.appendChild(e.root); casteEls.set(c.id, e); }
+        e.id = c.id;
+        e.onSelect = onSelect;
+        e.root.dataset.caste = c.id; // lets a harness/selector target a square by caste id
         const inProd = c.unlocked && c.progress !== null && c.progress !== undefined;
         const state = !c.unlocked ? 'locked' : (inProd ? 'inprod' : 'active');
         if (e.state !== state) {
@@ -423,6 +462,22 @@ export function createHud() {
         if (e.icoText !== icoText) { e.ico.textContent = icoText; e.icoText = icoText; }
         const capText = state === 'locked' && c.hint ? c.hint : (c.label || '');
         if (e.capText !== capText) { e.cap.textContent = capText; e.capText = capText; }
+        const countText = c.count > 0 ? String(c.count) : '';
+        if (e.countText !== countText) {
+          e.count.textContent = countText;
+          e.count.style.display = countText ? 'flex' : 'none';
+          e.countText = countText;
+        }
+        const selected = state !== 'locked' && !!c.selected;
+        if (e.selected !== selected) {
+          e.root.classList.toggle('mm-caste-selected', selected);
+          e.selected = selected;
+        }
+        const clickable = manages && state !== 'locked';
+        if (e.clickable !== clickable) {
+          e.root.disabled = !clickable;
+          e.clickable = clickable;
+        }
       }
     },
 

@@ -221,13 +221,31 @@ const CSS = `
 
 .mm-casterow { display: flex; align-items: center; gap: 8px; padding: 8px 10px 24px; }
 .mm-caste-sq {
+  /* #75 round 2: a real button, so it needs its own opt-in out of the .mm
+     rule's pointer-events: none (uiTheme.js:46) — the rest of the HUD stays
+     click-through, only these squares (and their :disabled state for a
+     locked caste, or a profile that does not manage a colony) are live. */
   position: relative; width: 32px; height: 32px; border-radius: 4px;
   border: 1px solid rgba(110,79,34,.65); background: rgba(0,0,0,.35);
   display: flex; align-items: center; justify-content: center;
+  padding: 0; margin: 0; font: inherit; color: inherit;
+  appearance: none; -webkit-appearance: none;
+  pointer-events: auto; cursor: pointer;
+  transition: border-color .12s ease, box-shadow .12s ease, background .12s ease;
 }
+.mm-caste-sq:hover:not(:disabled) {
+  border-color: var(--mm-gold-2); background: rgba(50,36,18,.55);
+}
+.mm-caste-sq:disabled { cursor: default; }
 .mm-caste-sq .mm-caste-ring { position: absolute; inset: -2px; }
 .mm-caste-sq .mm-caste-ico {
   font: 700 12px/1 var(--mm-title); color: var(--mm-gold); letter-spacing: 0;
+}
+.mm-caste-sq .mm-caste-count {
+  position: absolute; right: -5px; bottom: -5px; min-width: 14px; height: 14px;
+  padding: 0 3px; border-radius: 7px; background: rgba(10,7,3,.92);
+  border: 1px solid var(--mm-bronze); display: none; align-items: center; justify-content: center;
+  font: 700 9px/1 var(--mm-body); color: var(--mm-gold);
 }
 .mm-caste-sq .mm-caste-cap {
   /* Exactly one square's own column (its width + the row's gap) — a wider
@@ -242,6 +260,13 @@ const CSS = `
 .mm-caste-sq.mm-caste-inprod .mm-caste-ico { color: #fff0cc; }
 .mm-caste-sq.mm-caste-locked { opacity: .5; filter: grayscale(0.9); }
 .mm-caste-sq.mm-caste-locked .mm-caste-ico { color: var(--mm-dim); }
+/* The pick for the NEXT clutch (player/index.js caste variable) — a clear
+   gold glow, independent of the dimmer mm-caste-inprod border: a caste can
+   be both mid-hatch and the one picked for the clutch after it. */
+.mm-caste-sq.mm-caste-selected {
+  border-color: var(--mm-gold);
+  box-shadow: 0 0 0 1px var(--mm-gold), 0 0 9px 2px rgba(243,207,122,.6);
+}
 `;
 
 /** Inject the skin once. Safe to call from every panel's constructor. */

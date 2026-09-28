@@ -150,6 +150,22 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
      overwritten by something the colony did. */
   let casteMsg = null, casteMsgTimer = 0;
   function casteUnlocked(id) { return interaction.laying.brood() >= CASTE_UNLOCK[id]; }
+  /* The one path that picks the next clutch's caste — keys 5/6 (input.js)
+     and the #75 caste-square buttons (hud.js) both end up here, rather than
+     each keeping its own copy of "is it unlocked" and "what does the zone
+     text say". A click passes the same id a keypress would, so the button
+     never needs to duplicate the unlock rule CASTE_UNLOCK already enforces
+     above (casteUnlocked). */
+  function selectCaste(pick) {
+    if (!pick) return;
+    if (casteUnlocked(pick)) {
+      caste = pick;
+      casteMsg = `Prochaine ponte : ${pick === 'digger' ? 'fouisseuses' : 'ouvrières'}`;
+    } else {
+      casteMsg = 'Fouisseuses : à débloquer à la deuxième ponte';
+    }
+    casteMsgTimer = 3.5;
+  }
   const crowd = createCrowd(scene, WORKER);
   const interaction = createInteraction({ profile });
   // Props (carried item, the pile, stand-in resource markers) are built here,
@@ -201,16 +217,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        without `manages` gets nothing from this key, which is what makes the
        flag load-bearing rather than decorative. */
     if (input.consumeMenu()) queenMenu.toggle(profile);
-    const pick = input.consumeCaste();
-    if (pick) {
-      if (casteUnlocked(pick)) {
-        caste = pick;
-        casteMsg = `Prochaine ponte : ${pick === 'digger' ? 'fouisseuses' : 'ouvrières'}`;
-      } else {
-        casteMsg = 'Fouisseuses : à débloquer à la deuxième ponte';
-      }
-      casteMsgTimer = 3.5;
-    }
+    selectCaste(input.consumeCaste());
     // a caste can be locked again by nothing, but the guard costs one line and
     // stops a saved pick from outliving the rule that allowed it
     if (!casteUnlocked(caste)) caste = 'worker';
@@ -281,13 +288,21 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        player's hand right now (design/castes-et-micro-macro.md 3), so this
        does not gate on `profile.manages` the way the panel above does. */
     hud.setQueenHp(colony.state.queenHp);
+    /* The squares are buttons since #75 round 2: clicking one calls
+       selectCaste() exactly like pressing 5/6 does (same function, same
+       unlock rule). `manages` gates clickability the way queenMenu.js gates
+       the whole panel — never "is this the player" (design/castes-et-micro-
+       macro.md 3) — while the roster itself keeps showing regardless, same
+       as the health bar beside it. */
     hud.setCastes(PRODUCED_CASTES.map((id) => ({
       id,
       label: profileById(id).label,
       unlocked: casteUnlocked(id),
       progress: colony.casteProgress(id),
       hint: casteHint(id),
-    })));
+      selected: caste === id,
+      count: colonyView.counts[id] || 0,
+    })), { manages: profile.manages, onSelect: selectCaste });
     /* The dig gauge is NOT drawn here. It is projected against the camera, and
        the camera is not final until cameraRig.update() further down — so main
        .js calls syncDigDial() once the camera is where the frame will be
@@ -423,6 +438,12 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        Safe to call with no input pending: an idle real frame already calls
        this with an empty input state whenever the player stands still. */
     window.__playerUpdate = (dt, elapsed = 0) => update(dt, elapsed);
+    /* #75 round 2: lets a harness prove a click on a caste-square button
+       never reaches the orbit-drag/pointer-lock input the canvas listens
+       for — camYaw only moves inside input.js's own onPointerMove, and only
+       while dragging is true, so an unchanged reading before/after a click
+       is a direct proof, not an inference from camera drift. */
+    window.__inputState = () => ({ dragging: input.state.dragging, camYaw: input.state.camYaw });
   }
 
   function dispose() {
