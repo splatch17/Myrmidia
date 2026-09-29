@@ -61,7 +61,8 @@ const C_CARCASS = scl(C_WALL_B, 0.7);
 
 // charte §1d: blue-violet, not magenta — magenta x a warm-brown wall albedo
 // reinforces the wall's own hue and the lamp stops reading as another light
-const SPORE_LIGHT = [0.72, 0.48, 1.75];
+// #90: the prototype's own spore light, pinker (ambiance §10b.5)
+const SPORE_LIGHT = [1.15, 0.50, 1.45];
 // the queen's chamber is the site's "feerique et epoustouflant" anchor, so its
 // one fantastical note reads brighter than every warm-but-mundane lamp elsewhere
 const GLOW_LIGHT = [1.95, 1.20, 0.52];

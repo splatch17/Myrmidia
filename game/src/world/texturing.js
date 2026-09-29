@@ -99,7 +99,8 @@ function loadAlbedo(url, worldPerTile) {
    design/charte-stylisation.md §7.5. tunnel-dirt moved 3.5 -> 5.0 there: at
    3.5 the clods fall under the readable threshold and the wall goes back to
    being noise. */
-export const DIRT_TILE = 5.0;
+/* #90: 5.0 -> 7.0, with the soft v2 grain (no clods left to size). */
+export const DIRT_TILE = 7.0;
 export const BARK_TILE = 16;
 export const LAWN_TILE = 45;
 export const STONE_TILE = 12;

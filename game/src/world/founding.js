@@ -19,10 +19,11 @@ import {
 } from './excavation.js';
 import {
   openSdf, openCells as volumeOpenCells, clearVolume, setVolumeSurface, wallNoise, volumeLowestY, volumeExtent, MIN_COVER,
+  sampleD,
 } from './nestVolume.js';
 import { createVolumeMesher } from './nestVolumeMesh.js';
 import { texturedSurfaceMaterial, texturedEmissiveMaterial, dirtAlbedo, capAlbedo } from './texturing.js';
-import { addLocalLight, applyNestShading, setNestPit, setNestMouth } from './lighting.js';
+import { addLocalLight, getLocalLights, applyNestShading, setNestPit, setNestMouth } from './lighting.js';
 import { markEmitter } from '../core/bloom.js';
 import { resettleResources } from './resources.js';
 import { stemGeometry, capGeometry } from './gardenDecor.js';
@@ -143,9 +144,10 @@ const DIG_FACE_LIGHT = [1.15, 0.66, 0.24];
    warm light underground is what the colony is FOR (brood, dig face, glow
    bead). Same luminance budget as the amber they replace, plus a little: blue
    reads darker than amber at equal radiance. Values: design/ambiance-prologue.md §9g. */
-const HALL_LAMP_LINK = [0.66, 0.52, 1.45];
-const HALL_LAMP_MID = [0.92, 0.62, 1.90];
-const HALL_LAMP_FAR = [0.58, 0.60, 1.70];
+/* #90: red raised so the cold is violet-pink rather than pure blue (§10b.5). */
+const HALL_LAMP_LINK = [0.85, 0.55, 1.45];
+const HALL_LAMP_MID = [1.05, 0.66, 1.90];
+const HALL_LAMP_FAR = [0.75, 0.62, 1.70];
 /* Where each cold lamp hangs, so world/atmosphere.js can give it a small
    visible body (the bloom needs something to bloom from). Warm lamps are
    deliberately not listed: a clutch lights itself, it does not get an orb. */
@@ -165,13 +167,15 @@ export const LAMP_GLOWS = [];
    for the whole nest, whatever the room count. */
 export const NEST_FUNGUS = [];   // collision footprints {x, z, r, y, room}
 export const FUNGUS_GLOWS = [];  // the clusters' lamps, for world/atmosphere.js
-const FUNGUS_MAX = 64;
+const FUNGUS_MAX = 192;   // #90: 64 -> 192, the corridor clusters (plantCorridorFungus)
 const FUNGUS_KINDS = [
   /* Caps saturated and well under 1: they are lit by their own lamp AND emit,
      and at the first try's pale lavender the sum went white — the queen's
      spot problem again, on a mushroom. */
-  { cap: [0.44, 0.24, 0.90], stem: [0.30, 0.26, 0.42], light: [0.64, 0.46, 1.62] },
-  { cap: [0.14, 0.58, 0.74], stem: [0.20, 0.32, 0.38], light: [0.30, 0.70, 1.42] },
+  /* #90: pastel lilac (#b985ce on screen) and the prototype's SPORE_LIGHT,
+     whose high red is what turns the neighbouring walls pink (§10b.5). */
+  { cap: [0.62, 0.38, 1.00], stem: [0.30, 0.26, 0.42], light: [1.15, 0.52, 1.55] },
+  { cap: [0.14, 0.58, 0.74], stem: [0.20, 0.32, 0.38], light: [0.34, 0.78, 1.55] },
 ];
 /* Three lamps down the bore rather than one at the end. One lamp with the
    1/(1 + 0.017 d^2) falloff this rig uses is at 0.027 of its value 46 units
@@ -872,10 +876,13 @@ const VOL_B = [C_WALL_B.r, C_WALL_B.g, C_WALL_B.b];
 const VOL_S = [C_SOIL_A.r, C_SOIL_A.g, C_SOIL_A.b];
 function volumeColour(x, y, z, ny, ao, out) {
   const n = vnoise3(x * 0.23 + 5.1, y * 0.23 + 1.3, z * 0.23 + 9.7);
-  const proud = clamp(0.28 + 0.58 * ao + 0.5 * (n - 0.5), 0, 1);
+  const proud = clamp(0.22 + 0.70 * ao + 0.5 * (n - 0.5), 0, 1);
   const t1 = clamp(proud * 0.8 + 0.1, 0, 1);
   const t2 = clamp(0.20 + 0.08 * Math.max(0, ny) + proud * 0.14, 0, 1);
-  const shade = 0.88 * (0.6 + 0.4 * ao);
+  /* #90: the prototype's crevice shade, 0.42 + 0.58 x proud. Now that the
+     texture no longer draws contours, this is what gives the wall its volume
+     (design/ambiance-prologue.md §10b.4). */
+  const shade = 0.96 * (0.42 + 0.58 * proud);
   for (let i = 0; i < 3; i++) {
     const a = VOL_B[i] + (VOL_A[i] - VOL_B[i]) * t1;
     out[i] = (a + (VOL_S[i] - a) * t2) * shade;
@@ -1341,7 +1348,7 @@ export function foundNest(x, z) {
   const group = new THREE.Group();
   group.name = 'founded-nest';
   const shellMesh = new THREE.Mesh(shell.geometry, applyNestShading(texturedSurfaceMaterial({
-    map: dirtAlbedo(), strength: 0.62, side: THREE.DoubleSide,
+    map: dirtAlbedo(), strength: 0.30, side: THREE.DoubleSide,
   }), { cool: true }));
   shellMesh.name = 'founded-nest-shell';
   shellMesh.receiveShadow = true;
@@ -1353,6 +1360,9 @@ export function foundNest(x, z) {
      unit under the mound's carved floor on purpose (no slit between the two),
      and there the mound has to win the tie. */
   const volMat = nestMaterial();
+  /* #90: flat facets, like the prototype's tunnel: with the contour texture
+     gone, the facets and the crevice shade are what the wall is made of. */
+  volMat.flatShading = true;
   volMat.polygonOffset = true;
   volMat.polygonOffsetFactor = 1;
   volMat.polygonOffsetUnits = 2;
@@ -2285,7 +2295,7 @@ function rebuildSpoil() {
 
 function nestMaterial() {
   return applyNestShading(texturedSurfaceMaterial({
-    map: dirtAlbedo(), strength: 0.62, side: THREE.DoubleSide,
+    map: dirtAlbedo(), strength: 0.30, side: THREE.DoubleSide,
   }), { cool: true });
 }
 
@@ -2309,10 +2319,10 @@ function fungusField() {
   };
   nest._fungus = {
     stems: make(stemGeometry(), stemMat, 'nest-fungus-stems'),
-    caps: make(capGeometry(), capMat(0.95), 'nest-fungus-caps'),
+    caps: make(capGeometry(), capMat(0.5), 'nest-fungus-caps'),
     // the one cap per cluster that feeds the halo: a few bright points, not a
     // glowing carpet (core/bloom.js takes everything on its layer at full)
-    bright: markEmitter(make(capGeometry(), capMat(0.95), 'nest-fungus-bright')),
+    bright: markEmitter(make(capGeometry(), capMat(0.3), 'nest-fungus-bright')),
   };
   return nest._fungus;
 }
@@ -2367,9 +2377,79 @@ function plantFungus(ex, room, avoid, kind, R) {
   // in front of the cluster and over it, lighting the room from the caps
   // rather than sitting in them
   const lx = room.x + Math.cos(best) * room.r * 0.7, lz = room.z + Math.sin(best) * room.r * 0.7;
-  const lamp = addLocalLight([lx, fy + 4.6, lz], kind.light);
+  /* #90: 4.6 -> 2.6 over the floor, the prototype's height. A low lamp
+     lights the foot of the wall and the floor, where the soft grain and the
+     crevice shade read best; a high one only lit the vault. */
+  const lamp = addLocalLight([lx, fy + 2.6, lz], kind.light);
   FUNGUS_GLOWS.push(lamp);
   return lamp;
+}
+
+/* #90: small clusters at the foot of a corridor's wall, one every ~12 units,
+   alternating sides — the prototype's gallery has one every 10.5 and that
+   string of low lights is most of why it reads as a fairy place rather than
+   a tunnel (design/ambiance-prologue.md §10b.6). A cluster gets its own low
+   lamp only while the lamps already within reach leave the pool room for it
+   (LIGHT_SLOTS, world/lighting.js); otherwise its caps just glow. */
+const CORRIDOR_FUNGUS_STEP = 12;
+const CORRIDOR_LAMP_REACH = 24, CORRIDOR_LAMP_MAX_NEAR = 7;
+function plantCorridorFungus(ex, link, seed) {
+  const F = fungusField();
+  const R = rng(seed);
+  const s0 = link.rs0 ?? 0, s1 = link.rs1 ?? link.len;
+  const n = Math.floor((s1 - s0) / CORRIDOR_FUNGUS_STEP);
+  if (n < 1) return;
+  const side = [-link.hz, link.hx];
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
+  const v = new THREE.Vector3(), sc = new THREE.Vector3(), c = new THREE.Color();
+  for (let k = 0; k < n; k++) {
+    if (F.caps.count + 4 > FUNGUS_MAX) return;
+    const s = s0 + (s1 - s0) * (k + 0.5 + (R() - 0.5) * 0.4) / n;
+    const sg = (k + (R() < 0.2 ? 1 : 0)) % 2 ? 1 : -1;
+    const cx = link.ax + link.hx * s, cz = link.az + link.hz * s;
+    const fy = linkFloorY(ex, link, s);
+    // out from the centre line until the wall, a unit and a half up
+    let w = 0;
+    while (w < link.hw * 1.6 && sampleD(cx + side[0] * sg * w, fy + 1.5, cz + side[1] * sg * w) < -0.9) w += 0.4;
+    if (w < 2) continue;
+    const kind = FUNGUS_KINDS[R() < 0.72 ? 0 : 1];
+    const count = 2 + Math.floor(R() * 3);
+    for (let i = 0; i < count; i++) {
+      const along = (R() - 0.5) * 2.6, inward = 0.3 + R() * 1.2;
+      const x = cx + side[0] * sg * (w - inward) + link.hx * along;
+      const z = cz + side[1] * sg * (w - inward) + link.hz * along;
+      const y = excavationFloorAt(x, z) ?? fy;
+      const capR = 0.8 + R() * 0.8;
+      const H = capR * (1.2 + R() * 0.7), stemR = capR * 0.18;
+      e.set(-side[1] * sg * 0.2 + (R() - 0.5) * 0.15, R() * 6.28, side[0] * sg * 0.2 + (R() - 0.5) * 0.15);
+      q.setFromEuler(e);
+      m4.compose(v.set(x, y - 0.3, z), q, sc.set(stemR, H + 0.3, stemR));
+      F.stems.setMatrixAt(F.stems.count, m4);
+      F.stems.setColorAt(F.stems.count, c.setRGB(kind.stem[0], kind.stem[1], kind.stem[2]));
+      F.stems.count++;
+      const top = new THREE.Vector3(0, H + 0.3, 0).applyQuaternion(q).add(v);
+      m4.compose(top, q, sc.set(capR, capR * 0.8, capR));
+      const shade = 0.8 + R() * 0.3;
+      F.caps.setMatrixAt(F.caps.count, m4);
+      F.caps.setColorAt(F.caps.count, c.setRGB(kind.cap[0] * shade, kind.cap[1] * shade, kind.cap[2] * shade));
+      F.caps.count++;
+      NEST_FUNGUS.push({ x, z, r: capR * 0.65, y, room: link.id });
+    }
+    const lx = cx + side[0] * sg * (w - 2.2), lz = cz + side[1] * sg * (w - 2.2);
+    let near = 0;
+    for (const L of getLocalLights()) {
+      if (L.c[0] + L.c[1] + L.c[2] <= 0) continue;
+      if (Math.hypot(L.p[0] - lx, L.p[2] - lz) < CORRIDOR_LAMP_REACH) near++;
+    }
+    if (near < CORRIDOR_LAMP_MAX_NEAR) {
+      const lamp = addLocalLight([lx, fy + 2.0, lz], kind.light.map((ch) => ch * 0.55));
+      FUNGUS_GLOWS.push(lamp);
+    }
+  }
+  for (const m of [F.stems, F.caps]) {
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+  }
 }
 
 /** Build what a finished face revealed, light it, and return the room. */
@@ -2462,6 +2542,8 @@ function openRoom(spec, face) {
   if (!fungusLamp) {
     coldLamp([room.x + hx * room.r * 0.55, fy + 8.0, room.z + hz * room.r * 0.55], HALL_LAMP_FAR);
   }
+  // after the room's own lamps, so the corridor clusters count them (#90)
+  plantCorridorFungus(ex, link, (seed * 53 + ex.links.length * 7919) % 99991);
 
   openTheMeadow();
   resettleResources((x, z) => excavationFloorAt(x, z) !== null || underSpoil(x, z));

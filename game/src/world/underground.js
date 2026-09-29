@@ -433,7 +433,7 @@ function roomMaterial() {
     // multiplies its own variation on top of them (world/texturing.js), so
     // the granary/brood/midden identity survives being textured by the same
     // dirt — and they stay a single program with a single texture bound.
-    _roomMaterial = texturedSurfaceMaterial({ map: dirtAlbedo(), strength: 0.62, side: THREE.DoubleSide });
+    _roomMaterial = texturedSurfaceMaterial({ map: dirtAlbedo(), strength: 0.30, side: THREE.DoubleSide });
   }
   return _roomMaterial;
 }

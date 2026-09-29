@@ -50,7 +50,11 @@ scene.add(hemi);
    violet, and a little more of it (0.55 -> 0.72) since a cold fill on cold
    earth reads darker than the old brown did at the same number. The warm
    pools (brood, dig face, bead) are local lamps and do not go through this. */
-const HEMI_IN = { sky: new THREE.Color(0x5b50b0), ground: new THREE.Color(0x2b1f4e), intensity: 0.72 };
+/* #90: lifted and warmed from below (sky 0x5b50b0 -> 0xa58ad0, ground
+   0x2b1f4e -> 0x6a4a6a, 0.72 -> 1.6). The prototype's tunnel never goes
+   black: its air is a mid-value mauve and the floor bounce a warm plum, which
+   is what keeps the earth brown-pink under a violet sky (ambiance §10b.2). */
+const HEMI_IN = { sky: new THREE.Color(0xa58ad0), ground: new THREE.Color(0x7a5048), intensity: 3.4 };
 
 /* The outdoor end of every commutation below is itself commuted, by a second
    scalar: `founded`, 0 during the prologue (queen alone, end of dusk) and 1
@@ -114,8 +118,11 @@ function trackSun(camera) {
    exposure in its frame loop): outdoors a warm haze that recedes for 400
    units, indoors a near-black one that closes in at 120 so the far end of the
    gallery falls away into darkness instead of staying a uniform brown wash. */
-const FOG_IN = new THREE.Color(0x1f1a44);   // #78: was 0x191a2e
-const SKY_IN = new THREE.Color(0x0d0a20);   // #78: was 0x0c0b16
+/* #90: depth in the nest reads as a fade INTO a lit violet haze, not a fall
+   to black (§10b.1); the background seen through gaps is darker than the
+   haze but not black. Near/far 6/135 -> 2/110 below. */
+const FOG_IN = new THREE.Color(0x5a4478);   // #78: 0x1f1a44
+const SKY_IN = new THREE.Color(0x2e2444);   // #78: 0x0d0a20
 
 const world = createWorld();
 scene.add(world.group);
@@ -294,10 +301,10 @@ function applyEnvironment() {
 
   const outside = 1 - nestness(camera.position, player.ant);
   scene.fog.color.copy(FOG_IN).lerp(outFog, outside);
-  scene.fog.near = lerp(6, lerp(P.fogNear, F.fogNear, f), outside);
-  scene.fog.far = lerp(135, lerp(P.fogFar, F.fogFar, f), outside);
+  scene.fog.near = lerp(2, lerp(P.fogNear, F.fogNear, f), outside);
+  scene.fog.far = lerp(110, lerp(P.fogFar, F.fogFar, f), outside);
   scene.background.copy(SKY_IN).lerp(outBg, outside);
-  renderer.toneMappingExposure = lerp(1.28, lerp(P.exposure, F.exposure, f), outside);
+  renderer.toneMappingExposure = lerp(1.55, lerp(P.exposure, F.exposure, f), outside);
   hemi.color.copy(HEMI_IN.sky).lerp(outSky, outside);
   hemi.groundColor.copy(HEMI_IN.ground).lerp(outGround, outside);
   hemi.intensity = lerp(HEMI_IN.intensity, lerp(P.hemiIntensity, F.hemiIntensity, f), outside);

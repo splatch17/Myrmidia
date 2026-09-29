@@ -175,7 +175,12 @@ export function createVolumeMesher({ group, material, clip, colour, lawnAt }) {
           /* How much air two and a half units out: ~1 facing open space, less
              in a crease. The probe leaves the local block, so it asks the
              volume itself. */
-          const ao = Math.min(1, Math.max(0, -sampleD(wx + gx * 2.5, wy + gy * 2.5, wz + gz * 2.5) / 2.5));
+          const aoFar = Math.min(1, Math.max(0, -sampleD(wx + gx * 2.5, wy + gy * 2.5, wz + gz * 2.5) / 2.5));
+          /* #90: and a short probe, for the small creases and hollows of the
+             wall itself — the prototype's "shade of the hollows baked per
+             vertex" lives at this scale, the 2.5 probe only sees corners. */
+          const aoNear = Math.min(1, Math.max(0, -sampleD(wx + gx * 1.1, wy + gy * 1.1, wz + gz * 1.1) / 1.1));
+          const ao = aoFar * (0.45 + 0.55 * aoNear);
           colour(wx, wy, wz, gy, ao, rgb);
           col[nv * 3] = rgb[0]; col[nv * 3 + 1] = rgb[1]; col[nv * 3 + 2] = rgb[2];
           lawn[nv] = lawnAt ? wy - lawnAt(wx, wz) : 0;

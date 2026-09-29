@@ -47,7 +47,10 @@ export const LIGHT_SLOTS = 12;
    clutch against near-black (before-03-brood.png). Local lamps are additive
    on top of this floor, not clamped by it, so lowering the floor only
    deepens the black BETWEEN lamps — it does not dim the lamps themselves. */
-const AMBIENT_FLOOR = 0.30;
+/* #90: 0.30 -> 0.50. With the hemisphere at 1.6 the effective ambient is
+   0.80: the gaps between lamps are now separated by saturation and value, no
+   longer by black (design/ambiance-prologue.md §10b.2, amending §9d). */
+const AMBIENT_FLOOR = 0.60;
 
 const ALL_LIGHTS = [];
 
@@ -107,8 +110,11 @@ const sharedUniforms = {
    queen or the bead: those are what must stay warm against it.
    COOL_TINT multiplies the albedo's luminance; COOL_MIX is how much of the
    original colour is replaced at full depth. */
-const COOL_TINT = [0.84, 0.68, 1.15];
-const COOL_MIX = 0.78;
+/* #90: 0.78 -> 0.45 and a warmer tint. At 78 % the earth was an indigo grey
+   with no hue left for the lamps to sing on; now it stays brown-pink at 55 %
+   and turns violet at 45 % (§10b.3). */
+const COOL_TINT = [0.95, 0.72, 1.10];
+const COOL_MIX = 0.45;
 
 /** Declare (or, with r = 0, clear) the run-time nest cavity: a capsule from
  *  (x, z) to (x2, z2), defaulting to a disc round (x, z). */

@@ -33,6 +33,7 @@ const SHAFT_GAIN = 0.1;
 
 const DUST_COOL = new THREE.Color(0.62, 0.58, 1.0);
 const DUST_WARM = new THREE.Color(1.0, 0.72, 0.36);
+const LAMP_CORE = new THREE.Color('#e3c6ff').multiplyScalar(0.9);
 
 function shaftMaterial() {
   const m = new THREE.ShaderMaterial({
@@ -244,12 +245,13 @@ function buildMotes(nest, path, lamps, seed, fungi = []) {
     }
   }
   for (const L of lamps) {
-    const m = Math.max(L.c[0], L.c[1], L.c[2]) || 1;
     // a small bright core: the bloom does the glow, not the sprite
     const S = sets.bright;
     S.pos.push(L.p[0], L.p[1], L.p[2]);
     S.sd.push(0, 0, 0, 1);
-    S.col.push((L.c[0] / m) * 2.6, (L.c[1] / m) * 2.6, (L.c[2] / m) * 2.6);
+    // #90: lavender (#e3c6ff) rather than the lamp's hue x 2.6, which tone-
+    // mapped to a hard white disc: a bulb, not a glow (ambiance §10b.5).
+    S.col.push(LAMP_CORE.r, LAMP_CORE.g, LAMP_CORE.b);
     S.size.push(0.8);
   }
   const material = moteMaterial();
