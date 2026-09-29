@@ -93,6 +93,9 @@ async function main() {
   /* 1. before founding */
   await page.mouse.move(640, 700);
   await M();
+  // the fly-out is timed on frames: on a slow first frame it can still be
+  // 'enter' after 900 ms, so wait for it to land rather than race it
+  await page.waitForFunction(() => window.__macro.mode === 'macro', null, { timeout: 4000 }).catch(() => {});
   check(await mode() === 'macro', 'M opens the macro view before any nest');
   check(await shown(page, 'macronote'), 'the "pas encore de fourmilière" note is up');
   check(await page.evaluate(() => window.__macro.founded() === false), 'macro knows nothing is founded');
