@@ -87,11 +87,13 @@ export function createHud() {
     + '<div class="mm-chips"></div>';
   unit.append(portrait, body);
   const uName = body.querySelector('.mm-unit-name');
-  // #36: under the frame, always: how to leave this ant
+  // #36: under the stock line, always: how to leave this ant (a sibling, so
+  // the unit frame keeps its own height whichever caste it shows)
   const uHint = document.createElement('div');
-  uHint.className = 'mm-unit-sub';
-  uHint.style.cssText = 'font-size:11px;color:var(--mm-dim);margin-top:3px;letter-spacing:.02em;';
-  body.appendChild(uHint);
+  uHint.id = 'controlhint';
+  uHint.className = 'mm';
+  uHint.style.cssText = 'left:20px;top:106px;font-size:11px;color:var(--mm-dim);letter-spacing:.02em;';
+  document.body.appendChild(uHint);
   const uBar = body.querySelector('.mm-bar');
   const uBarFill = uBar.querySelector('i');
   const uBarText = uBar.querySelector('span');
@@ -524,7 +526,7 @@ export function createHud() {
       controls.style.display = 'none';
     },
     dispose() {
-      for (const n of [unit, stock, tracker, promptWrap, holdOuter, event, controls, dial, queenhud, macroLegend, macroStyle]) {
+      for (const n of [unit, uHint, stock, tracker, promptWrap, holdOuter, event, controls, dial, queenhud, macroLegend, macroStyle]) {
         if (n.parentNode) n.parentNode.removeChild(n);
       }
     },
