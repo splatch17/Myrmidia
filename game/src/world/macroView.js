@@ -111,6 +111,11 @@ function interiorMaterial() {
         // ground level, so the entrance reads as a cut in the grid
         if (vLawn > 0.25) discard;
         vec3 n = normalize(vN);
+        /* #90: which side is shown is decided by the smooth normal, not by the
+           triangle's winding: on the volume's creases (the foot of every wall)
+           the quads' facing flips from one to the next, and face culling cut
+           the floor's edge into a staircase of teeth. */
+        if (dot(n, cameraPosition - vW) < 0.0) discard;
         float h = clamp((vW.y - uYRange.x) / max(uYRange.y - uYRange.x, 1.0), 0.0, 1.0);
         vec3 base = mix(uDeep, uHigh, h);
         // floors a shade lighter than walls: the plan of the nest is what the
@@ -129,7 +134,7 @@ function interiorMaterial() {
         #include <colorspace_fragment>
       }
     `,
-    side: THREE.FrontSide,
+    side: THREE.DoubleSide,
   });
 }
 

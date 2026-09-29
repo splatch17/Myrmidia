@@ -722,6 +722,18 @@ const VOLUME_BUDGET_MS = 2.5;
  * from its doorway. `cover`: keep this much earth under the meadow (null:
  * none, the room gets a spoil heap).
  */
+/* #90: where a floor meets a wall the two distances met in a hard max(), a
+   crease sharper than the lattice, and surface nets draw a crease like that as
+   a row of teeth — the staircase round the bottom of every room in the macro
+   view. A polynomial smooth max rounds it into a cove of about a unit (the
+   prototype's walls also curve into their floor); it only ever ADDS earth, by
+   at most FLOOR_COVE / 4, and only within FLOOR_COVE of the junction. */
+const FLOOR_COVE = 1.6;
+function smax(a, b, k) {
+  const h = Math.max(k - Math.abs(a - b), 0) / k;
+  return Math.max(a, b) + h * h * k * 0.25;
+}
+
 function roomSdf(ex, R, grow = null, cover = null, opts = {}) {
   const H = Math.max(0.5, R.roof - R.wall);
   const reach = R.Rw + R.A + 4;
@@ -751,7 +763,7 @@ function roomSdf(ex, R, grow = null, cover = null, opts = {}) {
     if (d > R.A + 3 || R.fy - y > 3) return FAR;   // deep earth: only the sign is read
     // the grain only where the wall is — deep inside, its mean is enough
     d -= d > -(R.A + 3.5) ? R.A * wallNoise(x, y, z) : R.A * 0.5;
-    d = Math.max(d, R.fy + roomFloorAt(ex, ZERO_ROOM, x, z) - y);
+    d = smax(d, R.fy + roomFloorAt(ex, ZERO_ROOM, x, z) - y, FLOOR_COVE);
     if (grow) d = Math.max(d, g - grow.r);
     if (cover !== null) d = Math.max(d, y - (groundCoverAt(x, z) - cover));
     return d;
@@ -811,7 +823,7 @@ function tunnelSdf(ex, G, tip, cover = null, opts = {}) {
     // well inside the earth, nothing is read but the sign
     if (d > G.A + 3 || -h > 3) return FAR;
     d -= d > -(G.A + 3.5) ? G.A * wallNoise(x, y, z) : G.A * 0.5;
-    d = Math.max(d, -h);
+    d = smax(d, -h, FLOOR_COVE);
     if (cover !== null) d = Math.max(d, y - (groundCoverAt(x, z) - cover));
     return d;
   };
