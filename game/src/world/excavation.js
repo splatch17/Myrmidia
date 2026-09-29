@@ -489,13 +489,37 @@ export function archK(k) {
  * chamber's centre along the cut: past it the ground belongs to whatever was
  * dug beyond the chamber, and clipping there would cut a hole in it.
  */
-export function inOpenCutPastDoor(x, z, pad = 0) {
+export function inOpenCutPastDoor(x, z, pad = 0, y) {
   const ex = EX;
   if (!ex) return false;
   if (Math.hypot(x - ex.chamber.x, z - ex.chamber.z) <= chamberDoorR(ex) + pad) return false;
   const o = rampOffset(ex, x, z, 40);
   if (!o || o.u > ex.arc.len - 2) return false;
-  return Math.abs(o.lat) <= o.hw + CUT_JITTER + 7.5;
+  if (Math.abs(o.lat) > o.hw + CUT_JITTER + 7.5) return false;
+  /* #91: with a height, only the cut's own ground is clipped — the doorway's
+     floor, jambs and lintel, all at or above its floor. A room dug under the
+     trench is further down than OPEN_CUT_DEPTH and keeps its walls. */
+  return y === undefined || y > cutFloorAt(ex, x, z, o) - OPEN_CUT_DEPTH;
+}
+
+/** How far under the cut's floor the clip above still bites. The doorway's
+ *  floor quads sit within a cell of rampFloorAt; a planned room has to keep
+ *  its crown more than this under the floor (OPEN_CUT_CLEARANCE). */
+export const OPEN_CUT_DEPTH = 2.5;
+/** Earth a planned room must leave between its crown and the cut's floor. */
+export const OPEN_CUT_CLEARANCE = 4.5;
+
+function cutFloorAt(ex, x, z, o) {
+  const hw = hwAt(ex, o.u);
+  return rampFloorAt(ex, x, z, o.u, clamp(o.lat, -hw, hw));
+}
+
+/** The open cut's floor over (x, z) where the trench's footprint covers it
+ *  (inOpenCutPastDoor), else null — what a plan dug under it must stay under. */
+export function openCutFloorAt(x, z) {
+  const ex = EX;
+  if (!ex || !inOpenCutPastDoor(x, z, 0)) return null;
+  return cutFloorAt(ex, x, z, rampOffset(ex, x, z, 40));
 }
 
 /**

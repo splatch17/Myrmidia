@@ -1402,7 +1402,7 @@ export function foundNest(x, z) {
        underside) stops a unit inside, behind the mound's lintel ring, which
        hangs a hair under it (doorTopAt) and hides the clip; the jambs stop at
        the headwall itself, where the mound's own jambs take over. */
-    clip: (px, py, pz, ny) => inOpenCutPastDoor(px, pz, ny > 0.5 ? DOOR_OVERLAP : ny < -0.5 ? -1.0 : 0),
+    clip: (px, py, pz, ny) => inOpenCutPastDoor(px, pz, ny > 0.5 ? DOOR_OVERLAP : ny < -0.5 ? -1.0 : 0, py),
     colour: volumeColour,
     lawnAt: (px, pz) => bakedLawnAt(ex0, px, pz),
   });

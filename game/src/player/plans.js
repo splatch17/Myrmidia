@@ -1,4 +1,4 @@
-import { brushShape, planCells, removePlan, isOpen, openCells, lawnY, inOpenCutPastDoor } from '../world/index.js';
+import { brushShape, planCells, removePlan, isOpen, openCells, lawnY, openCutFloorAt, OPEN_CUT_CLEARANCE } from '../world/index.js';
 import { paceTime } from '../core/pace.js';
 
 /* ==========================================================================
@@ -108,13 +108,13 @@ export function createPlans({ food } = {}) {
         res.reason = 'Trop près de la surface : descendez le plan (Page ↓)'; return res;
       }
     }
-    /* The entrance trench draws the ground over its whole footprint and the
-       volume's mesher skips every quad there, at ANY depth (founding.js clip,
-       inOpenCutPastDoor): a room dug under the trench would be open air with
-       no walls or floor drawn. Refused until the world's clip learns a depth. */
+    /* Under the entrance trench (#91): the trench's floor is open air, so a
+       chantier there must keep its crown far enough under THAT floor, not
+       just under the meadow — else the diggers would break up into the cut. */
     for (let i = 0; i < res.cells.length; i += 3) {
-      if (inOpenCutPastDoor(res.cells[i], res.cells[i + 2], 0)) {
-        res.reason = 'Sous la tranchée d’entrée : décalez le plan'; return res;
+      const cut = openCutFloorAt(res.cells[i], res.cells[i + 2]);
+      if (cut !== null && cut - res.cells[i + 1] < OPEN_CUT_CLEARANCE) {
+        res.reason = 'Trop près du fond de la tranchée : descendez le plan (Page ↓)'; return res;
       }
     }
     // must touch the nest: open space, or a chantier that will be
