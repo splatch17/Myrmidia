@@ -522,3 +522,186 @@ d'un cran — elles sont ce qui doit rester chaud contre tout le reste.
 
 Captures avant/après : `game/_mood78/` (`before-*` / `after-*`,
 `verify-mood-78.mjs`).
+
+## 10. L'ambiance féerique (#90)
+
+Retour porteur (round 22) : « il manque l'ambiance féerique — colorimétrie et
+texture — qu'on retrouvait dans le prototype, dans le tunnel par exemple ».
+Planches : `design/refs/90/90-proto-vs-game.jpg` (prototype en haut, jeu en
+bas, trois cadrages comparables) et `design/refs/90/90-lift-experiment.jpg`
+(le jeu actuel, puis deux essais de remontée faits *à chaud dans le
+navigateur*, sans toucher au code).
+
+Mise en garde de lecture : les captures du jeu datent d'avant #81. Les
+parois du couloir et de la rampe y sont encore partielles (des pans noirs
+sont des trous de maillage, pas de l'ambiance). Toutes les mesures ci-dessous
+portent sur les zones où la paroi existe ; à refaire après #81.
+
+### 10a. L'écart, en clair
+
+Mesure sur le cœur du cadre (crop 300-980 x 120-680 d'une capture 1280x800),
+luminance L de 0 à 1 :
+
+| cadrage | L 5e centile | L médiane | part de pixels L < 0,06 | saturation moyenne |
+|---|---|---|---|---|
+| prototype, galerie/jardin/chambre | **0,18 - 0,29** | 0,34 - 0,37 | 0 % | 0,32 - 0,46 |
+| jeu, couloir / couvain / nid en jeu | 0,01 - 0,03 | 0,07 - 0,13 | 16 - 45 % | 0,47 - 0,59 |
+
+Le prototype n'a **jamais de noir** : son pixel le plus sombre vaut environ
+`#4c3b39`, et tout le reste flotte entre `#6f6252` (l'air) et `#b985ce` (le
+chapeau). Le jeu descend à `#050209`. Ce qui fait « féerique » là-bas, dans
+l'ordre :
+
+1. **L'air est éclairé.** Une brume chaude-mauve de valeur moyenne
+   (`#705f4b` au fond de la chambre, `#a08e7f` au bout du tunnel) baigne tout ;
+   la profondeur se lit en *fondu vers cette brume*, pas en *chute vers le noir*.
+   Ici `FOG_IN 0x1f1a44` est presque noir et le nid s'éteint à distance.
+2. **Un accent saturé sur un fond de valeur moyenne.** Des chapeaux lilas
+   pastel (`#b985ce`) et des perles de miel (`#ffc46a`) qui ne sont pas
+   beaucoup plus clairs que le décor mais bien plus saturés. Dans le jeu,
+   fond et accent sont tous deux sombres ; l'accent brille par la
+   surexposition, pas par la teinte, et son cœur est blanc pur.
+3. **Les parois gardent leur chaleur.** Terre brun-rose (`#7c513f` au sol,
+   `#735c48` en paroi) éclairée par des lampes rose-violet. Ici `COOL_MIX`
+   remplace 78 % de la couleur par une luminance teintée : la terre devient un
+   gris-indigo et il ne reste aucune teinte à faire chanter.
+4. **Beaucoup de petites sources basses.** Neuf massifs de champignons dans
+   la galerie (un tous les 10,5), huit dans la chambre, 26 perles ; lampe à
+   2,4 au-dessus du sol. Le jeu : un massif par salle, lampe à 4,6.
+5. **Une paroi à facettes, sans contour.** Le prototype n'a *aucune texture* :
+   des facettes plates, une ombre de creux cuite par sommet (`0,42 + 0,58 x
+   saillie`), 520 grains, 150 radicelles, 30 arcs de racine. Le jeu pose par
+   dessus un albédo de terre dont le réseau de **lignes sombres entre
+   cellules** dessine des pavés / une peau de lézard, à force 0,62 : c'est la
+   « texture » que le porteur ressent comme étrangère au féerique.
+
+Ce qui n'est **pas** l'écart (essayé, pour éviter d'y revenir) : la courbe
+de tonalité. ACES 1,28 contre Reinhard 1,55, à éclairage égal, donnent des
+images voisines (`90-lift-experiment.jpg`, colonne du milieu) ; ne pas
+changer `renderer.toneMapping`. Ni le halo (`core/bloom.js`, force 1,6, il
+marche), ni les rais et poussières de `atmosphere.js`, déjà au niveau du
+prototype.
+
+Essai de remontée fait à chaud (deuxième colonne de la planche B, puis
+troisième) : Reinhard 1,55, hémisphère 2,4 x plancher 0,30 (ambiance
+effective 0,72), brume exponentielle 0,0125 en `#6b4a5e`. Résultat : la brume
+et la valeur reviennent, mais tout tourne au **gris-lilas** parce que la terre
+est restée désaturée et la texture à cellules est intacte. La valeur seule ne
+suffit donc pas : les points 3 et 5 sont obligatoires, pas cosmétiques.
+
+### 10b. Spec pour Atta, par ordre d'impact
+
+Règle #78 conservée : jardin en pleine palette, nid indigo/violet, la bouche
+comme seuil. Tout ce qui suit vit dans les branches « nid » de ce qui est
+déjà commuté par `nestness()` / `nestInside()` ; **rien ne change dehors**,
+ni `RIG_PROLOGUE`, ni `RIG_FOUNDED`, ni `WARM_MOUTH_LIGHT`.
+
+**1. Faire de l'air une brume de valeur moyenne** (`game/src/main.js`)
+- `FOG_IN` `0x1f1a44` -> `0x5a4478` (violet moyen ; l'essai à chaud avec
+  `0x6b4a5e`, plus rose, était acceptable mais un peu chaud pour la règle #78).
+- `scene.fog.near` intérieur `6` -> `2`, `far` `135` -> `110`
+  (lignes `scene.fog.near = lerp(6, ...)` / `far = lerp(135, ...)`).
+  Équivalent linéaire de l'exp² 0,0125 du prototype : 10 % à 25 unités,
+  40 % à 50, 70 % à 80.
+- `SKY_IN` `0x0d0a20` -> `0x2e2444` (fond visible par les trous : plus sombre
+  que la brume, pas noir).
+
+**2. Remonter le fond d'ambiance et le réchauffer par en bas**
+(`main.js` `HEMI_IN`, `world/lighting.js` `AMBIENT_FLOOR`)
+- `HEMI_IN.sky` `0x5b50b0` -> `0xa58ad0`, `HEMI_IN.ground` `0x2b1f4e` ->
+  `0x6a4a6a` (le rebond du sol est rose-prune et chaud, comme `BOUNCE` du
+  prototype ; c'est lui qui garde les sols chauds sous un ciel violet).
+- `HEMI_IN.intensity` `0.72` -> `1.6` et `AMBIENT_FLOOR` `0.30` -> `0.50` :
+  ambiance effective (`intensity x plancher`) de `0,22` à `0,80`. Testé à
+  chaud : 0,72 sous Reinhard 1,55 donne la bonne valeur ; sous ACES le départ
+  à 0,80 est à confirmer sur capture (voir 10d).
+- Exposition intérieure `lerp(1.28, ...)` -> `lerp(1.40, ...)`. Garder ACES.
+- **Amendement à §9d (#71)** : « des flaques de lumière séparées de noir »
+  devient « séparées par la *saturation et la valeur* ». Le prototype ne
+  descend jamais sous L 0,18 et ses flaques se lisent quand même, parce
+  qu'une lampe est un accent saturé, pas un trou dans le noir. L'atténuation
+  `0.024` du shader reste (elle garde les flaques distinctes).
+
+**3. Rendre sa teinte à la terre** (`world/lighting.js`, `COOL_MIX`, `COOL_TINT`)
+- `COOL_MIX` `0.78` -> `0.45` ; `COOL_TINT` `(0.84, 0.68, 1.15)` ->
+  `(0.95, 0.72, 1.10)`. La terre creusée reste brun-rose à 55 % et vire violet
+  à 45 % : cible de rendu `#735c48` - `#7c513f` sous lampe, `#4c3b39` dans ses
+  creux les plus profonds. Le seuil (haut ocre / bas indigo) survit, il est
+  juste moins tranché.
+- Les couleurs de base `C_WALL_A #5a4226` / `C_WALL_B #332412`
+  (`world/founding.js`) ne bougent pas.
+
+**4. Remplacer la texture à contours par un grain doux**
+(`world/texturing.js`, `world/founding.js`, `assets/textures/tunnel-dirt/`)
+- Recette de `tunnel-dirt_albedo.png` v2 (128x128, tuilable ; toujours
+  moyennée par `measureMeanLinear`, donc sans effet sur la moyenne) :
+  **supprimer le réseau de lignes sombres** ; base = bruit de valeur tuilable
+  à 2 octaves, fréquences 4 et 9 cellules par tuile, amplitudes ±10 % et
+  ±5 % de luminance ; 4 à 6 % de grains clairs de 1 à 2 pixels
+  (`#7a6040` x 0,7 à 1,4) ; un léger écart de teinte entre `#6d5130` et
+  `#5a4a5a` (la terre vire rose par plaques, sans contour). Quantifier par
+  paliers de 4/255 comme les autres textures.
+- `strength` `0.62` -> `0.30` aux trois appels (`nestMaterial()` deux fois
+  dans `founding.js`, et `underground.js:436`). `DIRT_TILE` `5.0` -> `7.0`.
+- Ce que la paroi doit garder de #81 : l'ombre de creux **cuite par sommet**
+  (`0,42 + 0,58 x saillie`, `founding.js` ~ligne 267) et l'ondulation à trois
+  octaves. C'est elle, pas la texture, qui donne la lecture de volume. Si le
+  nouveau maillage organique ne la porte pas, c'est un défaut de #81 à
+  corriger avant tout réglage de #90.
+- Détails de paroi : viser au moins 1 radicelle pendante par 1,2 unité de
+  couloir et par 6 unités de bord de salle (longueur 1,2 - 3, `#7a5f38`), et
+  des grains de terre `#7a6040` à raison d'un par 0,4 unité de voûte. Le
+  prototype en pose 150 et 520 sur 166 unités de tube.
+
+**5. Accents : rose-violet, pastel, sans coeur blanc**
+(`world/founding.js` `FUNGUS_KINDS`, `world/nestDecor.js`, `world/atmosphere.js`)
+- `FUNGUS_KINDS[0]` : `cap [0.44, 0.24, 0.90]` -> `[0.62, 0.38, 1.00]`
+  (cible d'écran `#b985ce`), `light [0.64, 0.46, 1.62]` -> `[1.15, 0.52, 1.55]`
+  (le `SPORE_LIGHT` du prototype, `[1.15, 0.50, 1.45]`, à peine relevé en bleu :
+  le rouge élevé est ce qui rosit les parois voisines). Émissif des chapeaux
+  `0.95` -> `1.3` (les deux `capMat(0.95)`).
+- `FUNGUS_KINDS[1]` (le cyan) : garder la teinte, monter la lampe à
+  `[0.34, 0.78, 1.55]` pour tenir à côté du nouveau rose.
+- `nestDecor.js` `SPORE_LIGHT [0.72, 0.48, 1.75]` -> `[1.15, 0.50, 1.45]`.
+- `HALL_LAMP_LINK/MID/FAR` : monter le rouge pour que le froid ne soit plus
+  bleu pur : `[0.85, 0.55, 1.45]`, `[1.05, 0.66, 1.90]`, `[0.75, 0.62, 1.70]`.
+- Coeur des corps de lampe et des perles sur la couche du halo : blanc pur
+  -> `#e3c6ff` (lavande) ; le halo, lui, ne change pas (force 1,6). Sur la
+  capture du couloir, les deux lampes sont des disques blancs durs : des
+  ampoules, pas des lueurs.
+
+**6. Répartir les sources** (`world/founding.js` `plantFungus`, couloirs)
+- Hauteur de lampe de champignon `fy + 4.6` -> `fy + 2.6` (le prototype :
+  2,4 au-dessus du sol). Une lampe basse éclaire le pied de paroi et le sol,
+  où la texture douce et l'ombre de creux se lisent le mieux ; une lampe
+  haute n'éclaire que la voûte.
+- Un massif de 2 à 4 petits chapeaux (rayon 0,5 - 1,1) au pied de paroi
+  **tous les ~12 unités de couloir**, en plus du grand massif de salle ; viser
+  au moins quatre lampes allumées dans n'importe quel cadre de couloir
+  (`LIGHT_SLOTS` vaut déjà 12).
+
+### 10c. Critères de recette (mesurables, comme §1d)
+
+Mêmes cadrages que `verify-mood-78.mjs` (couloir, rampe, couvain), crop
+300-980 x 120-680, une fois #81 intégré :
+
+- L au 5e centile **>= 0,10** ; part de pixels L < 0,06 **<= 10 %** ;
+  L médiane **0,22 - 0,34**.
+- Saturation moyenne **0,35 - 0,55**.
+- Sur la vue du massif de champignons : plus de 3 % du cadre entre
+  `#a070c0` et `#d0a0e8` (l'accent pastel), et aucun disque de luminance 1,0
+  plus large que 6 % de la largeur d'image.
+- La terre en pleine lumière de lampe : teinte entre `#6d4a3a` et `#84604a`
+  (brun-rose), **pas** un gris à canal bleu dominant.
+- La rampe reste ocre en haut et violette en bas, la lampe chaude de la
+  bouche reste le seul point chaud vu depuis la pelouse (#78, §9c).
+- FPS inchangé : rien ici n'ajoute une passe ; ce sont des constantes, une
+  texture de 128x128 et quelques instances de champignons.
+
+### 10d. Ce qui reste à trancher sur capture
+
+Le point 2 (ambiance effective 0,80 sous ACES) est le seul chiffre extrapolé
+plutôt que mesuré : l'essai à chaud a tourné sous Reinhard. S'il donne un nid
+trop plat après la mise en place, redescendre `HEMI_IN.intensity` à 1,3
+avant de toucher à quoi que ce soit d'autre : la brume (point 1) porte
+l'essentiel de la profondeur.
