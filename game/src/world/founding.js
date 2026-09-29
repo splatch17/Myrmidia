@@ -2469,6 +2469,7 @@ function plantCorridorFungus(ex, link, seed) {
     }
     if (near < CORRIDOR_LAMP_MAX_NEAR) {
       const lamp = addLocalLight([lx, fy + 2.0, lz], kind.light.map((ch) => ch * 0.55));
+      lamp.corridor = true;   // a harness can tell these from a room's own lamps
       FUNGUS_GLOWS.push(lamp);
     }
   }

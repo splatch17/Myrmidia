@@ -169,13 +169,15 @@ async function main() {
     window.__payDig(f.id, f.needed + 1);
     W.populateNest(5);
     const lamps1 = window.__lights().length;
+    // #90: corridor fungus clusters may bring a small lamp of their own
+    const corridorLamps = window.__lights().filter((L) => L.corridor).length;
     const fp = W.nestFootprint();
     // anything of the garden still standing on the dug ground?
     const onNest = W.garden.sites.mushrooms.concat(W.garden.sites.pebbles)
       .filter((p) => fp.contains(p.x, p.z));
     const nest = W.getFoundedNest();
     const stillNear = W.rocks.filter((k) => Math.hypot(k.x - nest.mouth.x, k.z - nest.mouth.z) < 20).length;
-    return { r, hid0, hid1, hidAfter: W.garden.hiddenCount(), lamps0, lamps1, onNestVisible: onNest.length,
+    return { r, hid0, hid1, hidAfter: W.garden.hiddenCount(), lamps0, lamps1, corridorLamps, onNestVisible: onNest.length,
       stillNear, nest, fungus: W.nestFungus.slice(), rooms: window.__rooms2() };
   }, SITE);
   check(setup.r && setup.r.ok, 'foundNest at the harness site');
@@ -186,7 +188,8 @@ async function main() {
   const inHall = setup.fungus.filter((f) => f.room === 'hall');
   check(inHall.length >= 5, `hall has a fungus cluster (${inHall.length} caps)`);
   // hall adds 2 link lamps + mid + (far OR the cluster's lamp) = 4 either way
-  check(setup.lamps1 - setup.lamps0 === 4, `hall added ${setup.lamps1 - setup.lamps0} lamps (4 expected: the cluster replaces the far lamp)`);
+  const hallLamps = setup.lamps1 - setup.lamps0 - setup.corridorLamps;
+  check(hallLamps === 4, `hall added ${hallLamps} lamps, plus ${setup.corridorLamps} corridor fungus lamp(s) (4 expected: the cluster replaces the far lamp)`);
   if (inHall.length) {
     const fp = await page.evaluate((f) => ({
       same: window.__decorPenetration(f.x, f.z, 0, f.y),
