@@ -74,7 +74,10 @@ export function createBloom(renderer, scene, camera) {
   const rtA1 = new THREE.WebGLRenderTarget(1, 1, opts), rtA2 = new THREE.WebGLRenderTarget(1, 1, opts);
   const rtB1 = new THREE.WebGLRenderTarget(1, 1, opts), rtB2 = new THREE.WebGLRenderTarget(1, 1, opts);
 
-  const black = new THREE.MeshBasicMaterial({ color: 0x000000, fog: false });
+  /* Both sides (#91): the nest's walls face INTO their rooms, so from above a
+     room (standing in the trench over it) its ceiling is a back face, and a
+     front-only occluder let the room's lamps halo through the ground. */
+  const black = new THREE.MeshBasicMaterial({ color: 0x000000, fog: false, side: THREE.DoubleSide });
   const blur = blurMaterial();
   const composite = new THREE.ShaderMaterial({
     uniforms: { tA: { value: rtA1.texture }, tB: { value: rtB1.texture }, uStrength: { value: BLOOM_STRENGTH } },

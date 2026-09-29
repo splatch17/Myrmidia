@@ -19,7 +19,7 @@ import {
 } from './excavation.js';
 import {
   openSdf, openCells as volumeOpenCells, clearVolume, setVolumeSurface, wallNoise, volumeLowestY, volumeExtent, MIN_COVER,
-  sampleD,
+  sampleD, floorAt as volumeFloorAt, onVolumeChange,
 } from './nestVolume.js';
 import { createVolumeMesher } from './nestVolumeMesh.js';
 import { texturedSurfaceMaterial, texturedEmissiveMaterial, dirtAlbedo, capAlbedo } from './texturing.js';
@@ -1449,6 +1449,9 @@ export function foundNest(x, z) {
     _coldLight: coldLight,
     _warmLight: warmLight,
     _coldFade: 1,
+    /* #91: a plan leaving the registry is either finished or cancelled; if
+       its middle is dug, it is lit either way. */
+    _unplan: onVolumeChange((ev) => { if (ev.kind === 'unplan') furnishPlanned(ev.plan); }),
   };
 
   rebuildSpoil();
@@ -2419,7 +2422,7 @@ function plantFungus(ex, room, avoid, kind, R) {
    (LIGHT_SLOTS, world/lighting.js); otherwise its caps just glow. */
 const CORRIDOR_FUNGUS_STEP = 12;
 const CORRIDOR_LAMP_REACH = 24, CORRIDOR_LAMP_MAX_NEAR = 7;
-function plantCorridorFungus(ex, link, seed) {
+function plantCorridorFungus(ex, link, seed, floorAtS = (s) => linkFloorY(ex, link, s)) {
   const F = fungusField();
   const R = rng(seed);
   const s0 = link.rs0 ?? 0, s1 = link.rs1 ?? link.len;
@@ -2433,7 +2436,8 @@ function plantCorridorFungus(ex, link, seed) {
     const s = s0 + (s1 - s0) * (k + 0.5 + (R() - 0.5) * 0.4) / n;
     const sg = (k + (R() < 0.2 ? 1 : 0)) % 2 ? 1 : -1;
     const cx = link.ax + link.hx * s, cz = link.az + link.hz * s;
-    const fy = linkFloorY(ex, link, s);
+    const fy = floorAtS(s);
+    if (fy === null) continue;
     // out from the centre line until the wall, a unit and a half up
     let w = 0;
     while (w < link.hw * 1.6 && sampleD(cx + side[0] * sg * w, fy + 1.5, cz + side[1] * sg * w) < -0.9) w += 0.4;
@@ -2444,7 +2448,7 @@ function plantCorridorFungus(ex, link, seed) {
       const along = (R() - 0.5) * 2.6, inward = 0.3 + R() * 1.2;
       const x = cx + side[0] * sg * (w - inward) + link.hx * along;
       const z = cz + side[1] * sg * (w - inward) + link.hz * along;
-      const y = excavationFloorAt(x, z) ?? fy;
+      const y = volumeFloorAt(x, z, fy + 1.5) ?? fy;
       const capR = 0.8 + R() * 0.8;
       const H = capR * (1.2 + R() * 0.7), stemR = capR * 0.18;
       e.set(-side[1] * sg * 0.2 + (R() - 0.5) * 0.15, R() * 6.28, side[0] * sg * 0.2 + (R() - 0.5) * 0.15);
@@ -2462,12 +2466,7 @@ function plantCorridorFungus(ex, link, seed) {
       NEST_FUNGUS.push({ x, z, r: capR * 0.65, y, room: link.id });
     }
     const lx = cx + side[0] * sg * (w - 2.2), lz = cz + side[1] * sg * (w - 2.2);
-    let near = 0;
-    for (const L of getLocalLights()) {
-      if (L.c[0] + L.c[1] + L.c[2] <= 0) continue;
-      if (Math.hypot(L.p[0] - lx, L.p[2] - lz) < CORRIDOR_LAMP_REACH) near++;
-    }
-    if (near < CORRIDOR_LAMP_MAX_NEAR) {
+    if (litLampsNear(lx, lz, CORRIDOR_LAMP_REACH) < CORRIDOR_LAMP_MAX_NEAR) {
       const lamp = addLocalLight([lx, fy + 2.0, lz], kind.light.map((ch) => ch * 0.55));
       lamp.corridor = true;   // a harness can tell these from a room's own lamps
       FUNGUS_GLOWS.push(lamp);
@@ -2476,6 +2475,135 @@ function plantCorridorFungus(ex, link, seed) {
   for (const m of [F.stems, F.caps]) {
     m.instanceMatrix.needsUpdate = true;
     if (m.instanceColor) m.instanceColor.needsUpdate = true;
+  }
+}
+
+/** Lamps already lit within `reach` of (x, z) — what a new one would share
+ *  the LIGHT_SLOTS pool with. Height-blind on purpose: the pool picks by
+ *  distance to the camera, and a lamp one storey up still takes a slot. */
+function litLampsNear(x, z, reach) {
+  let near = 0;
+  for (const L of getLocalLights()) {
+    if (L.c[0] + L.c[1] + L.c[2] <= 0) continue;
+    if (Math.hypot(L.p[0] - x, L.p[2] - z) < reach) near++;
+  }
+  return near;
+}
+
+/* ---- lighting what a plan dug (#91) ----------------------------------------
+   A chantier painted in the macro model (#82) opens earth and nothing else:
+   no addRoom(), so none of openRoom()'s lamps, and the new room was a black
+   pocket in play view. When a plan leaves the volume's registry with its
+   middle dug, it is furnished in the #90 language (design/ambiance-prologue.md
+   section 10): a room gets a fungus cluster at the foot of its wall, away from
+   every opening, whose low lilac lamp lights it, and a second low lamp over
+   its middle if it is big; a tunnel gets the corridor clusters, one every ~12.
+   Every lamp asks the pool first (litLampsNear): past the budget the caps
+   still glow, they just do not light the walls. */
+const PLAN_ROOM_R = 5.5;            // tunnel brushes are 4..8, rooms 6..18: the planner's own ranges
+const PLAN_LAMP_REACH = 26, PLAN_LAMP_MAX_NEAR = 7;
+const PLAN_MID_LAMP = [0.80, 0.52, 1.35];   // low lilac, the corridor lamps' family
+
+function furnishPlanned(plan) {
+  const ex = getExcavation();
+  if (!ex || !nest) return;
+  const b = plan.brush;
+  const P = (p) => (Array.isArray(p) ? p : [p.x, p.y, p.z]);
+  const c = P(b.center), e = b.end ? P(b.end) : c;
+  const m = [(c[0] + e[0]) / 2, (c[1] + e[1]) / 2, (c[2] + e[2]) / 2];
+  // cancelled before the diggers reached the middle: nothing to light yet
+  if (sampleD(m[0], m[1], m[2]) >= 0) return;
+  const id = `plan-w${plan.id}`;
+  const seed = (ex.seed * 17 + plan.id * 7919) % 99991;
+  const len = Math.hypot(e[0] - c[0], e[2] - c[2]);
+  const r = Math.max(b.radius, b.endRadius ?? 0);
+  if (r > PLAN_ROOM_R) {
+    furnishPlannedRoom(m, r, len, id, rng(seed));
+  } else if (len >= CORRIDOR_FUNGUS_STEP) {
+    const hx = (e[0] - c[0]) / len, hz = (e[2] - c[2]) / len;
+    const link = { id, ax: c[0], az: c[2], hx, hz, len, hw: r, rs0: 0, rs1: len };
+    plantCorridorFungus(ex, link, seed, (sv) => volumeFloorAt(c[0] + hx * sv, c[2] + hz * sv, lerp(c[1], e[1], sv / len)));
+  }
+}
+
+/** One cluster against the wall of a planned room, with its lamp if the pool
+ *  has room, and a low lamp over the middle of a big one. */
+function furnishPlannedRoom(m, r, len, id, R) {
+  const F = fungusField();
+  const fy = volumeFloorAt(m[0], m[2], m[1]);
+  if (fy === null) return;
+  /* Where the wall is, round the middle, a unit and a half over the floor.
+     A direction that runs out of the room without meeting earth is an
+     opening (the doorway, a tunnel, a room beyond): the cluster goes in the
+     direction furthest round from all of them. */
+  const K = 24, reach = r + len * 0.5 + 6;
+  const wall = [];
+  for (let k = 0; k < K; k++) {
+    const a = (k / K) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+    let w = 0;
+    while (w < reach && sampleD(m[0] + ca * w, fy + 1.5, m[2] + sa * w) < -0.9) w += 0.4;
+    wall.push(w < reach ? w : null);
+  }
+  const gaps = [];
+  for (let k = 0; k < K; k++) if (wall[k] === null) gaps.push(k);
+  let best = -1, bestGap = -1;
+  for (let k = 0; k < K; k++) {
+    if (wall[k] === null || wall[k] < 3) continue;
+    const gap = gaps.length ? Math.min(...gaps.map((g) => Math.min(Math.abs(g - k), K - Math.abs(g - k)))) : K;
+    if (gap > bestGap) { bestGap = gap; best = k; }
+  }
+  let a0 = 0;
+  if (best >= 0 && F.caps.count + 8 <= FUNGUS_MAX) {
+    a0 = (best / K) * Math.PI * 2;
+    const w = wall[best];
+    const kind = FUNGUS_KINDS[R() < 0.72 ? 0 : 1];
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), eu = new THREE.Euler();
+    const v = new THREE.Vector3(), sc = new THREE.Vector3(), col = new THREE.Color();
+    const n = 5 + Math.floor(R() * 3);
+    const bigK = Math.min(1, r / 12);
+    for (let i = 0; i < n; i++) {
+      const big = (i === 0 ? 1.3 : 0.5 + R() * 0.7) * (0.5 + 0.5 * bigK);
+      const a = a0 + (i === 0 ? 0 : (R() - 0.5) * (8 / w));
+      const rr = Math.max(1, w - (i === 0 ? 1.6 : 0.8 + R() * 1.6));
+      const x = m[0] + Math.cos(a) * rr, z = m[2] + Math.sin(a) * rr;
+      const y = volumeFloorAt(x, z, fy + 1.5) ?? fy;
+      const sz = 2.1 * big;
+      const H = 1.7 * sz, capR = 1.15 * sz, stemR = 0.2 * sz;
+      eu.set(Math.sin(a) * 0.18 + (R() - 0.5) * 0.12, R() * 6.28, -Math.cos(a) * 0.18 + (R() - 0.5) * 0.12);
+      q.setFromEuler(eu);
+      m4.compose(v.set(x, y - 0.4, z), q, sc.set(stemR, H + 0.4, stemR));
+      F.stems.setMatrixAt(F.stems.count, m4);
+      F.stems.setColorAt(F.stems.count, col.setRGB(kind.stem[0], kind.stem[1], kind.stem[2]));
+      F.stems.count++;
+      const top = new THREE.Vector3(0, H + 0.4, 0).applyQuaternion(q).add(v);
+      m4.compose(top, q, sc.set(capR, capR * 0.8, capR));
+      const into = i === 0 ? F.bright : F.caps;
+      const shade = 0.8 + R() * 0.3;
+      into.setMatrixAt(into.count, m4);
+      into.setColorAt(into.count, col.setRGB(kind.cap[0] * shade, kind.cap[1] * shade, kind.cap[2] * shade));
+      into.count++;
+      NEST_FUNGUS.push({ x, z, r: capR * 0.65, y, room: id });
+    }
+    for (const mm of [F.stems, F.caps, F.bright]) {
+      mm.instanceMatrix.needsUpdate = true;
+      if (mm.instanceColor) mm.instanceColor.needsUpdate = true;
+    }
+    const lx = m[0] + Math.cos(a0) * (w - 3.2), lz = m[2] + Math.sin(a0) * (w - 3.2);
+    if (litLampsNear(lx, lz, PLAN_LAMP_REACH) < PLAN_LAMP_MAX_NEAR) {
+      const lamp = addLocalLight([lx, fy + 2.6, lz], kind.light);
+      lamp.planned = id;
+      FUNGUS_GLOWS.push(lamp);
+    }
+  }
+  /* A big room is more than one cluster can light at this rig's falloff: a
+     second low lamp, off the middle on the side away from the cluster. */
+  if (r >= 8) {
+    const lx = m[0] - Math.cos(a0) * r * 0.3, lz = m[2] - Math.sin(a0) * r * 0.3;
+    if (litLampsNear(lx, lz, PLAN_LAMP_REACH) < PLAN_LAMP_MAX_NEAR) {
+      const lamp = addLocalLight([lx, fy + 3.4, lz], PLAN_MID_LAMP);
+      lamp.planned = id;
+      LAMP_GLOWS.push(lamp);
+    }
   }
 }
 
@@ -2735,6 +2863,7 @@ export function _coverAt(x, z) {
 export function _resetFounding() {
   if (nest && nest.group.parent) nest.group.parent.remove(nest.group);
   if (nest) nest._mesher.dispose();
+  if (nest && nest._unplan) nest._unplan();
   nest = null;
   paintJobs.length = 0;
   coverMemo.clear();

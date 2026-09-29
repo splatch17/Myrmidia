@@ -9,6 +9,7 @@ import {
   digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundSlope, NEST_FUNGUS,
   openCells, flushNestMesh, nestMeshStats, isOpen, floorAt, volumeSpan, walkableAt,
   planCells, plannedCells, removePlan, isPlanned, volumeVersion, groundCoverAt,
+  openCutFloorAt,
 } from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
@@ -198,6 +199,8 @@ window.__world6 = {
      built on, plans, and the mesher's counters (scripts/verify-volume-81.mjs). */
   openCells, flushNestMesh, nestMeshStats, isOpen, floorAt, volumeSpan, walkableAt,
   planCells, plannedCells, removePlan, isPlanned, volumeVersion, groundCoverAt,
+  // #91: the trench floor a plan under it must stay under
+  openCutFloorAt,
 };
 
 renderer.setResizeCallback((aspect) => {
