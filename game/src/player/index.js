@@ -1,7 +1,7 @@
 import { antState } from '../core/antState.js';
 import * as THREE from 'three';
 import { clamp, damp } from '../core/noise.js';
-import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath } from '../world/index.js';
+import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath, createPlanGhost } from '../world/index.js';
 import { PLAYER_AVATAR, PROFILES, collideRadius, profileById, legLengths, PRODUCED_CASTES } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { makeAnt, makeLegState, updateLegs, antMatrix, localToWorld, solveKnee } from './legs.js';
@@ -21,6 +21,8 @@ import { nestOrigin, canFound, found, refusalText } from './founding.js';
 import { createHud } from './hud.js';
 import { createTargetMarker } from './marker.js';
 import { createColony, requiredCrewFor, CONTROL_DIG_MULT } from './colony.js';
+import { createPlans } from './plans.js';
+import { createPlanTool } from './planTool.js';
 import { createEntities } from './entities.js';
 import { createCrowd } from './crowd.js';
 import { nestInfo, nestFootprint } from './nest.js';
@@ -140,7 +142,25 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
      the player's way would be six hundred draw calls, which is precisely the
      cost the spatial index round went to the trouble of removing from the CPU
      side. See crowd.js. */
-  const colony = createColony();
+  /* #82: the colony's food store, as far as one exists. The pile the queen
+     lays from is the only one there is until #85 (full food + spoil economy):
+     no pile yet = chantiers are free ("gratuit (test)"). */
+  const plans = createPlans({
+    food: {
+      available: () => (interaction.harvest.state.cache ? interaction.harvest.stock() : null),
+      spend: (n) => interaction.harvest.spend(n),
+      give: (n) => {
+        const c = interaction.harvest.state.cache;
+        if (!c) return;
+        const k = Object.keys(c.items)[0] || 'seed';
+        c.items[k] = (c.items[k] || 0) + n; c.total += n;
+      },
+    },
+  });
+  const colony = createColony({ plans });
+  const ghost = createPlanGhost();
+  scene.add(ghost.group);
+  const allFaces = () => digFaces().concat(plans.faces());
   const entities = createEntities({ queen, colony });
   /* What the next clutch will be (#38). Held here rather than in colony.js
      because it is a decision the *player* makes and colony.js is the thing
@@ -233,6 +253,8 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
      rather than teaching input.js about modes. The colony keeps living. */
   const IDLE_INTENT = { ix: 0, iy: 0, mag: 0, sprint: false };
   let macroSnap = null;
+  let macroTool = null;
+  let macroMixNow = () => 0;   // macro mode's 0..1 blend, set by attachMacro()
 
   /* ---- control moves between ants (#36) ---------------------------------- */
 
@@ -315,8 +337,8 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     if (profile.id === 'digger') {
       if (cur.atFace) return `Vous creusez au front — ×${CONTROL_DIG_MULT} une fouisseuse de la colonie`;
       let best = null, bestD = Infinity;
-      for (const f of digFaces()) {
-        const d = Math.hypot(f.x + f.nx * 5 - ant.x, f.z + f.nz * 5 - ant.z);
+      for (const f of allFaces()) {
+        const d = Math.hypot(f.x + f.nx * (f.standoff ?? 5) - ant.x, f.z + f.nz * (f.standoff ?? 5) - ant.z);
         if (d < bestD) { bestD = d; best = f; }
       }
       return best ? `Objectif : rejoindre le front de creusement (à ${bestD.toFixed(0)} u)` : 'Aucun front ouvert : rien à creuser pour l\u2019instant';
@@ -406,6 +428,11 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
        is the first thing that turns one into something that hatches. */
     if (interaction.laying.state.justLaid) colony.addEggs(3, caste);
     colony.update(dt);
+    if (macroTool) macroTool.update(dt);
+    if (plans.consumeDirty()) ghost.setPlans(plans.ghostList());
+    ghost.update(dt, elapsed, camera, macroMixNow(), (domElement && domElement.clientHeight) || window.innerHeight);
+    const planDone = plans.state.doneEvent;
+    if (planDone) { plans.state.doneEvent = null; casteMsg = `Chantier terminé : ${planDone.label}`; casteMsgTimer = 5; }
     // the controlled one is drawn by her own rig above, not twice
     crowdList.length = 0;
     for (const w of colony.state.workers) if (!w.controlled) crowdList.push(w);
@@ -436,6 +463,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
         eggs: colony.state.eggs.length,
       },
       rooms: dugRooms(),
+      plans: plans.rows((id) => colony.state.faceWork.get(id) || 0),
       faces: digFaces().map((f) => ({
         ...f, diggers: colony.state.faceWork.get(f.id) || 0, required: requiredCrewFor(f),
       })),
@@ -539,6 +567,8 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     window.__foundNest = (x, z) => found(x, z);
     window.__rooms2 = () => dugRooms();
     window.__faces = () => digFaces();
+    window.__plans = plans;
+    window.__planGhost = ghost;
     // #76: the crew threshold as a pure function of a face, so a harness can
     // check its own numbers against the same formula colony.js pays against
     window.__requiredCrew = requiredCrewFor;
@@ -660,6 +690,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
       }
     },
     faceCrew(face) {
+      if (face.plan) return { diggers: colony.state.faceWork.get(face.id) || 0, required: requiredCrewFor(face) };
       return { diggers: colony.state.faceWork.get(face.id) || 0, required: requiredCrewFor(face) };
     },
   };
@@ -667,7 +698,18 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
   return {
     /** the ant being played right now (the queen until control moves) */
     get ant() { return ant; },
-    group, update, syncDigDial, dispose, hud, macroInfo,
+    group, update, syncDigDial, dispose, hud, macroInfo, plans,
+    /* #82: the macro model's chantier tools (main.js calls this once, with the
+       macro mode it created). Returns the tool bar handle. */
+    attachMacro(macro) {
+      macroMixNow = () => macro.mix();
+      macroTool = createPlanTool({
+        macro, plans, ghost, camera, domElement,
+        diggerCount: () => colony.state.workers.filter((w) => w.profileId === 'digger').length,
+        crewAt: (id) => colony.state.faceWork.get(id) || 0,
+      });
+      return macroTool;
+    },
     /* #36 / #84: the door for "the queen has settled, play the first worker".
        takeControl(id) -> false when refused (unknown id, already that ant, or
        the queen is mid burrow/laying sequence); onControlChange(fn) gets

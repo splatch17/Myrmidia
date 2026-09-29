@@ -361,6 +361,7 @@ const macro = createMacroMode({
     macro.toggle();
   },
 });
+player.attachMacro(macro);   // #82: the chantier tools (player/planTool.js)
 window.__macro = macro;
 
 const quality = createQualityPanel({ renderer, sun, scene });

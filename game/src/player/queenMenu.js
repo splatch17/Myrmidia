@@ -131,7 +131,18 @@ export function createQueenMenu(root = document.body) {
               : `personne (0 / ${req})`;
             return kv(f.id === 'face-hall' ? 'le hall' : f.id, crewLabel) + bar(p);
           }).join('')
-        : '<div class="mm-empty">rien à creuser pour l\'instant</div>';
+        : ((s.plans || []).length ? '' : '<div class="mm-empty">rien à creuser pour l\'instant</div>');
+
+      /* #82: the chantiers painted in the macro model, after the hall's own
+         walls. Same crew reading ("2 / 3 fouisseuses"), a star when the player
+         made it prioritaire, and "en attente" while it only touches a chantier
+         that is not open yet. */
+      const planRows = (s.plans || []).map((p) => {
+        const plural = p.required > 1 ? 's' : '';
+        const crew = p.waiting ? 'en attente du chantier voisin'
+          : p.diggers > 0 ? `${p.diggers} / ${p.required} fouisseuse${plural}` : `personne (0 / ${p.required})`;
+        return kv(`${p.priority ? '★ ' : ''}${p.label} · ${Math.round(p.progress * 100)} %`, crew) + bar(p.progress);
+      }).join('');
 
       const html = `<div class="mm-win-title"><span class="mm-title">LA REINE</span>`
         + `<span class="mm-win-hide">${keycap('C')} masquer</span></div>`
@@ -147,6 +158,7 @@ export function createQueenMenu(root = document.body) {
         + kv('salles creusées', s.rooms.length)
         + heading('CHANTIERS')
         + faceRows
+        + planRows
         + `<div class="mm-win-foot">${keycap('C')} — masquer  ·  ${keycap('E')} — pondre</div>`;
 
       // written only on change: this runs every frame

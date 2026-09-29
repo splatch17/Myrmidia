@@ -236,6 +236,11 @@ export function openSdf(sdf, box) {
      cover?: number | null           -> earth kept under the meadow; default
                                         MIN_COVER, null = none (world-owned
                                         digs that are heaped over)
+     clip?: { center, radius }       -> only the part of the brush inside this
+                                        ball is dug (#82: a chantier grows as
+                                        a ball swept outward from the doorway;
+                                        the last call without `clip` is the
+                                        whole brush, so nothing is lost)
    }
 
    Plain data, so a plan can be stored and sent over a wire (#82). */
@@ -250,6 +255,7 @@ export function brushShape(brush) {
   const r0 = brush.radius, r1 = brush.endRadius ?? r0;
   const A = brush.noise ?? clamp(Math.max(r0, r1) * 0.14, 0.3, 1.6);
   const cover = brush.cover === undefined ? MIN_COVER : brush.cover;
+  const clip = brush.clip ? [...P3(brush.clip.center), brush.clip.radius] : null;
   const ex = e[0] - c[0], ey = e[1] - c[1], ez = e[2] - c[2];
   const ll = ex * ex + ey * ey + ez * ez;
   const fl = brush.floor;
@@ -269,6 +275,7 @@ export function brushShape(brush) {
     if (A > 0) d -= d > -(A + 3.5) ? A * wallNoise(x, y, z) : A * 0.5;
     if (floorAt) d = Math.max(d, fy);
     if (cover !== null && surfaceFn) d = Math.max(d, y - (surfaceFn(x, z) - cover));
+    if (clip) d = Math.max(d, Math.hypot(x - clip[0], y - clip[1], z - clip[2]) - clip[3]);
     return d;
   };
   const R = Math.max(r0, r1) + A + BRUSH_PAD;
@@ -276,6 +283,13 @@ export function brushShape(brush) {
     Math.min(c[0], e[0]) - R, Math.min(c[1], e[1]) - R, Math.min(c[2], e[2]) - R,
     Math.max(c[0], e[0]) + R, Math.max(c[1], e[1]) + R, Math.max(c[2], e[2]) + R,
   ];
+  if (clip) {
+    const q = clip[3] + BRUSH_PAD;
+    for (let k = 0; k < 3; k++) {
+      box[k] = Math.max(box[k], clip[k] - q);
+      box[k + 3] = Math.min(box[k + 3], clip[k] + q);
+    }
+  }
   return { sdf, box };
 }
 

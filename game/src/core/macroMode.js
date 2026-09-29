@@ -148,17 +148,26 @@ export function createMacroMode({ camera, domElement, view, getAnt, forEachAnt, 
   let mouseX = -1, mouseY = -1, mouseIn = false;
 
   function onKey(e) {
+    // #82: the active tool gets the key first (brush shortcuts, Escape to drop a half-drawn plan)
+    if (mode === 'macro' && e.code !== 'KeyM' && tool.key && tool.key(e)) return;
     if (e.code === 'KeyM' && !e.repeat) toggle();
     else if (e.code === 'Escape' && mode !== 'play') exit();
   }
   function onDown(e) {
     if (mode === 'play') return;
+    /* #82: Ctrl + drag paints with a brush tool (a tunnel from A to B, a room
+       stretched into an oval) instead of orbiting; a plain click still places. */
+    if (mode === 'macro' && e.button === 0 && e.ctrlKey && tool.paint) {
+      drag = { kind: 'paint', x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, button: 0 };
+      return;
+    }
     const pan = e.button === 2 || e.shiftKey;
     drag = { kind: pan ? 'pan' : 'orbit', x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, button: e.button };
   }
   function onMove(e) {
     mouseX = e.clientX; mouseY = e.clientY; mouseIn = true;
     if (mode === 'play' || !drag) return;
+    if (drag.kind === 'paint') { if (tool.paintMove) tool.paintMove(drag.sx, drag.sy, e.clientX, e.clientY); return; }
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     drag.x = e.clientX; drag.y = e.clientY;
     if (drag.kind === 'orbit') {
@@ -178,6 +187,11 @@ export function createMacroMode({ camera, domElement, view, getAnt, forEachAnt, 
     if (mode === 'play' || !drag) { drag = null; return; }
     const moved = Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy);
     const wasLeft = drag.button === 0;
+    if (drag.kind === 'paint') {
+      const d = drag; drag = null;
+      if (mode === 'macro') tool.paint(d.sx, d.sy, e.clientX, e.clientY);
+      return;
+    }
     drag = null;
     if (moved < 5 && wasLeft && mode === 'macro') {
       /* #36: a click on an ant pin takes control of that ant, before the room
@@ -189,6 +203,7 @@ export function createMacroMode({ camera, domElement, view, getAnt, forEachAnt, 
   }
   function onWheel(e) {
     if (mode === 'play') return;
+    if (mode === 'macro' && tool.wheel && tool.wheel(e)) return;   // #82: Alt + wheel sizes the brush
     orbit.dist = Math.min(Math.max(orbit.dist * Math.exp(e.deltaY * 0.0012), orbit.minDist), orbit.maxDist);
   }
   function onContext(e) { if (mode !== 'play') e.preventDefault(); }
@@ -293,7 +308,8 @@ export function createMacroMode({ camera, domElement, view, getAnt, forEachAnt, 
 
     if (mode === 'macro' && mouseIn && !drag) {
       const p = pickAt(mouseX, mouseY);
-      if (p.room !== hovered && (!p.room || !hovered || p.room.id !== hovered.id)) setHover(p.room);
+      if (tool.noRoomTip) { if (hovered) setHover(null); }
+      else if (p.room !== hovered && (!p.room || !hovered || p.room.id !== hovered.id)) setHover(p.room);
       else if (p.room) hovered = p.room;    // same room, fresher reading
       tool.hover(p);
     } else if (hovered && mode !== 'macro') setHover(null);
@@ -348,7 +364,14 @@ export function createMacroMode({ camera, domElement, view, getAnt, forEachAnt, 
     /** fn(room | null) on every click that selects or clears */
     onSelect(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     /** replace what the pointer does in the model; null restores 'select' */
-    setTool(next) { tool = next || selectTool; },
+    setTool(next) {
+      if (next !== tool && tool.leave) tool.leave();
+      tool = next || selectTool;
+      if (tool.enter) tool.enter();
+    },
+    /** the default tool (select a room), for a tool that delegates plain clicks to it */
+    selectTool,
+    get tool() { return tool; },
     roomScreen,
     pickAt: (x, y) => { const p = pickAt(x, y); return { room: p.room, point: p.point.toArray() }; },
   };

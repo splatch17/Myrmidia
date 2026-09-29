@@ -88,11 +88,16 @@ const triangular = (n) => (n * (n + 1)) / 2;
 
 /** The minimum crew a face needs before it advances at all. */
 export function requiredCrewFor(face) {
+  if (face.crew) return face.crew;   // #82: a painted chantier carries its own, computed on its volume
   const gen = face.opensGen || 1;
   if (gen <= 1) return 1;
   const k = SIZE_K[face.size] || 1;
   return Math.max(1, Math.ceil(triangular(gen) * k));
 }
+
+const faceSeq = (f) => Number(String(f.id).replace(/\D/g, '')) || 0;
+const standoffOf = (f) => f.standoff ?? FACE_STANDOFF;
+const siteROf = (f) => f.siteR ?? DIG_SITE_R;
 
 /**
  * Which face each fouisseuse works, this frame. Diggers CONCENTRATE on one
@@ -106,8 +111,12 @@ export function requiredCrewFor(face) {
  * never wrong.
  */
 function assignDiggers(diggers, faces) {
+  /* #82: a prioritised chantier is crewed first; between two painted ones the
+     first planned wins; the rest keep the cheapest-first order above. */
   const ordered = faces.slice().sort((a, b) => (
-    requiredCrewFor(a) - requiredCrewFor(b) || a.id.localeCompare(b.id)
+    (b.priority ? 1 : 0) - (a.priority ? 1 : 0)
+    || (a.plan && b.plan ? faceSeq(a) - faceSeq(b) : 0)
+    || requiredCrewFor(a) - requiredCrewFor(b) || a.id.localeCompare(b.id)
   ));
   const pool = diggers.slice();
   const assignment = new Map();
@@ -148,7 +157,9 @@ function nearestLiveNode(x, z) {
   return best;
 }
 
-export function createColony() {
+export function createColony({ plans = null } = {}) {
+  /* the hall's walls (the world's own faces) plus the chantiers painted in the macro model (#82) */
+  const allFaces = () => (plans && plans.count() ? digFaces().concat(plans.faces()) : digFaces());
   const state = {
     eggs: [],          // [{ id, age, profileId }]
     workers: [],       // see spawnWorker()
@@ -226,11 +237,11 @@ export function createColony() {
     w.faceId = face ? face.id : null;
     if (!face) { w.atFace = false; a.speed = 0; return; }
 
-    const stand = { x: face.x + face.nx * FACE_STANDOFF, z: face.z + face.nz * FACE_STANDOFF };
+    const stand = { x: face.x + face.nx * standoffOf(face), z: face.z + face.nz * standoffOf(face) };
     const dx = stand.x - a.x, dz = stand.z - a.z;
     const d = Math.hypot(dx, dz);
 
-    if (d <= DIG_SITE_R) {
+    if (d <= siteROf(face)) {
       a.speed = 0;
       // face the wall and work: yaw at the face, so the crew reads as a crew
       a.yaw = dampAngle(a.yaw, Math.atan2(face.x - a.x, face.z - a.z), 4, dt);
@@ -257,11 +268,11 @@ export function createColony() {
   function stepControlledDigger(w, faces) {
     let face = null, bestD = Infinity;
     for (const f of faces) {
-      const d = Math.hypot(f.x + f.nx * FACE_STANDOFF - w.ant.x, f.z + f.nz * FACE_STANDOFF - w.ant.z);
+      const d = Math.hypot(f.x + f.nx * standoffOf(f) - w.ant.x, f.z + f.nz * standoffOf(f) - w.ant.z);
       if (d < bestD) { bestD = d; face = f; }
     }
     w.faceId = face ? face.id : null;
-    w.atFace = !!face && bestD <= DIG_SITE_R;
+    w.atFace = !!face && bestD <= siteROf(face);
   }
 
   /** Release: the brain restarts from a clean slate (no stale target/path). */
@@ -339,7 +350,8 @@ export function createColony() {
       }
     }
 
-    const faces = digFaces();
+    if (plans) plans.update(dt);
+    const faces = allFaces();
     const diggerWorkers = state.workers.filter((w) => w.profileId === 'digger' && !w.controlled);
     const assignment = faces.length ? assignDiggers(diggerWorkers, faces) : null;
 
@@ -377,7 +389,9 @@ export function createColony() {
          nothing at all, rather than a trickle no one would notice. */
       const f = facesById.get(id);
       if (f && crew < requiredCrewFor(f)) continue;
-      const r = payDigFace(id, state.faceRate.get(id) * dt * paceDigMultiplier());
+      const r = f && f.plan
+        ? plans.pay(id, state.faceRate.get(id) * dt * paceDigMultiplier())
+        : payDigFace(id, state.faceRate.get(id) * dt * paceDigMultiplier());
       if (r && r.opened) {
         state.opened.push(r.opened.id);
         state.lastOpened = r.opened;
@@ -401,7 +415,7 @@ export function createColony() {
    * is the one that picks at most one of these to hand to the HUD.
    */
   function digCandidates() {
-    return digFaces().map((f) => ({
+    return allFaces().map((f) => ({
       id: f.id, x: f.x, y: f.y, z: f.z,
       progress: f.needed > 0 ? f.worked / f.needed : 0,
       diggers: state.faceWork.get(f.id) || 0,
