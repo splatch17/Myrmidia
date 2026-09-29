@@ -13,45 +13,40 @@
 
 ## 0. LA DEMANDE EN COURS — c'est ici qu'on reprend
 
-*État au 2026-09-28 : round 20 publié (`d6bced5`), les quatre harnais passent.
-Le §0 du round 16 (entrée raccourcie, front de taille, hall) est livré ; il
-reste lisible dans l'historique git de ce fichier.*
+*État au 2026-09-29 : round 22 publié (mode macro #34, décors #80, boutons de
+caste #79). Les §0 précédents restent lisibles dans l'historique git.*
 
-### La direction du jeu, telle que je l'ai posée — elle commande tout le reste
+### La direction du jeu — elle commande tout le reste
 
-**La reine s'installe, puis ne bouge plus** ([#77](https://github.com/splatch17/Myrmidia/issues/77)).
-C'est un **renversement du prologue**, pas un ajout :
+**Lire `design/fourmiliere-a-batir.md` en entier.** En bref : l'arrivée dans
+le monde est faite ; l'accent passe au **gameplay**. La **fourmilière est la
+fiche de personnage** du joueur : on la **façonne librement** (plus de salles
+de taille standard), on l'**améliore** palier par palier (confort, défenses,
+salles spéciales à débloquer), puis armée et combats.
 
-- **Avant l'installation : une course.** Creuser le plus loin possible, mais
-  sans tarder : la reine est vulnérable, et tarder tue.
-- **L'installation : le point de bascule.** Elle s'immobilise, définitivement.
-- **Après : elle doit être protégée.** Elle a de vrais points de vie, elle peut
-  être attaquée, et **le joueur passe dans les autres fourmis** (#36 contrôle
-  de n'importe quelle fourmi, #34 mode macro). La protéger devient l'objectif
-  permanent.
-- **L'XP et les niveaux** ([#7](https://github.com/splatch17/Myrmidia/issues/7))
-  sont **la même progression** que #77, pas un chantier à part.
+Tranché avec moi au round 22 (ne pas rouvrir) :
+- **Reine (#77)** : les **réserves** pressent avant l'installation (prédateur
+  plus tard) ; creuser loin rapporte **sécurité + bonus de nid + meilleur
+  site** ; à l'installation on passe **dans la première ouvrière** puis on
+  change librement ; mort de la reine = **fin de partie** (méta-progression à
+  trouver plus tard — lignée/ruines/vol commun **refusés**). XP #7 = même
+  progression.
+- **Macro (#34)** : 3D orbitale, terre transparente. Livré en première tranche.
+- **Creuser** : **plans peints en macro** (chantiers automatiques) **+ creuser
+  à la main** en jouant une fouisseuse (trouvailles, vitesse, forme fine,
+  urgence). Le premier tunnel reste celui de la reine. Coût = **nourriture +
+  déblais** (dôme qui grandit). Limite = **coût croissant + paliers**.
+- **Placement libre** des salles pour l'instant (pas d'humidité/chaleur).
 
-**#77 est un ticket de design : ses quatre questions se tranchent AVEC MOI
-avant d'implémenter** — qu'est-ce qui presse, que rapporte le risque de
-creuser loin, dans quelle fourmi passe le joueur au basculement, et ce que
-veut dire mourir. Ne rien coder de #77 sans ces réponses.
-
-Conséquence déjà valable : tout ce qui s'écrit maintenant doit supposer que
-la reine **ne sera pas toujours la fourmi contrôlée** (déjà la règle du §2 :
-le contrôle est un attribut, le menu tient au drapeau `manages`).
-
-### Ce que je viens de demander (tickets ouverts, round 21)
-
-Ordre arbitré : **#75, puis #78, puis #76.**
-
-**Les trois sont livrés en local au round 21** (`8417c91` → `7facc32`, voir `PROGRESS.md`). Restent à publier (push vers `preview`) et à fermer. Restes signalés : tache blanche de bloom possible sur la reine dans le nid ; `verify-descent` voit un trou d'une cellule hors du nid (antérieur à #78).
+### File du round 23 — dans cet ordre, un agent neuf par ticket
 
 | # | Demande | Agent |
 |---|---|---|
-| [#75](https://github.com/splatch17/Myrmidia/issues/75) | **Interface MMO** : menu de la reine ouvert au lancement, raccourci pour le masquer écrit sur le panneau ; **barre de vie de la reine** en bas (pleine pour l'instant, prête pour de vrais PV) ; rangée de **carrés de castes** à trois états : débloquée / en production / pas encore débloquée | Cataglyphis |
-| [#78](https://github.com/splatch17/Myrmidia/issues/78) | **Ambiance** : le nid bascule vers le bleu/violet (lumière, parois, brume, lampes), le jardin garde toute sa palette, la bouche est un seuil entre deux mondes. Plus les trois recettes qui manquent (reprend #28) : bloom sur les émissifs, rais de lumière dans le puits, poussière en suspension. Spec DA : `design/ambiance-prologue.md` §9 et §9f | Atta (+ Cephalotes) |
-| [#76](https://github.com/splatch17/Myrmidia/issues/76) | **Effectif minimum de fouisseuses par front** : 1 au hall, 3 à la génération suivante, 6 ensuite, davantage pour une grande salle. Sous le seuil le front **n'avance pas du tout**, et le jeu dit « il faut N fouisseuses, il y en a M ». C'est ce qui force à pondre | Cataglyphis |
+| [#81](https://github.com/splatch17/Myrmidia/issues/81) | Nid en volume libre (cellules + maillage organique) — fondation | Atta |
+| [#36](https://github.com/splatch17/Myrmidia/issues/36) | Contrôler n'importe quelle fourmi | Cataglyphis |
+| [#82](https://github.com/splatch17/Myrmidia/issues/82) / [#83](https://github.com/splatch17/Myrmidia/issues/83) | Plans en macro / creuser à la main | Cataglyphis |
+| [#84](https://github.com/splatch17/Myrmidia/issues/84) | Réserves, installation, bascule, fin de partie (#77 jouable) | Cataglyphis |
+| #85 → #89 | Coût et déblais, salles désignées + paliers, trouvailles, défenses, finitions macro | voir tickets |
 
 ### Défauts encore ouverts
 
