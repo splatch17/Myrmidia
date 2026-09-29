@@ -1,4 +1,4 @@
-import { brushShape, planCells, removePlan, isOpen, openCells, lawnY } from '../world/index.js';
+import { brushShape, planCells, removePlan, isOpen, openCells, lawnY, inOpenCutPastDoor } from '../world/index.js';
 import { paceTime } from '../core/pace.js';
 
 /* ==========================================================================
@@ -103,10 +103,18 @@ export function createPlans({ food } = {}) {
     const stock = food ? food.available() : null;
     res.gratis = stock === null;
     if (res.n === 0) { res.reason = 'Rien à creuser ici : déjà ouvert'; return res; }
-    if (res.n < MIN_CELLS) { res.reason = 'Trop petit'; return res; }
     for (const p of [c, e]) {
       if (lawnY(p[0], p[2]) - (p[1] + r) < MIN_CLEARANCE) {
         res.reason = 'Trop près de la surface : descendez le plan (Page ↓)'; return res;
+      }
+    }
+    /* The entrance trench draws the ground over its whole footprint and the
+       volume's mesher skips every quad there, at ANY depth (founding.js clip,
+       inOpenCutPastDoor): a room dug under the trench would be open air with
+       no walls or floor drawn. Refused until the world's clip learns a depth. */
+    for (let i = 0; i < res.cells.length; i += 3) {
+      if (inOpenCutPastDoor(res.cells[i], res.cells[i + 2], 0)) {
+        res.reason = 'Sous la tranchée d’entrée : décalez le plan'; return res;
       }
     }
     // must touch the nest: open space, or a chantier that will be
@@ -120,6 +128,7 @@ export function createPlans({ food } = {}) {
       }
     }
     if (!touches) { res.reason = 'Doit toucher le nid : partez d’une salle ou d’un tunnel'; return res; }
+    if (res.n < MIN_CELLS) { res.reason = 'Trop petit'; return res; }
     if (stock !== null && stock < res.cost) {
       res.short = true;
       res.reason = `Pas assez de nourriture (${stock} / ${res.cost})`;
@@ -145,6 +154,7 @@ export function createPlans({ food } = {}) {
       face: null,
     };
     list.push(plan);
+    dirty = true;
     anchor(plan);
     return { ok: true, plan, eval: ev };
   }
@@ -200,10 +210,17 @@ export function createPlans({ food } = {}) {
     if (!f) return;
     f.worked = plan.worked; f.needed = plan.needed; f.crew = plan.crew; f.priority = plan.priority;
     if (plan.lastDue > 0) {
-      const k = Math.max(0, plan.lastDue - 1 - 5);
+      /* The standing place is the MEAN of the cells opened last: the front of
+         a swept ball is a shell, and any single cell of it jumps from one
+         side of the tunnel to the other between two refreshes (the crew ran
+         after it and never settled). The mean sits on the axis at the front. */
       const c = plan.cells, A = plan.anchor;
-      f.x = c[k * 3]; f.y = c[k * 3 + 1]; f.z = c[k * 3 + 2];
-      const dx = A[0] - f.x, dz = A[2] - f.z, l = Math.hypot(dx, dz);
+      const n = Math.min(plan.lastDue, Math.max(24, Math.round(plan.total / 40)));
+      let sx = 0, sy = 0, sz = 0;
+      for (let k = plan.lastDue - n; k < plan.lastDue; k++) { sx += c[k * 3]; sy += c[k * 3 + 1]; sz += c[k * 3 + 2]; }
+      sx /= n; sy /= n; sz /= n;
+      f.x = sx; f.y = sy; f.z = sz;
+      const dx = A[0] - sx, dz = A[2] - sz, l = Math.hypot(dx, dz);
       if (l > 0.5) { f.nx = dx / l; f.nz = dz / l; }
     }
   }

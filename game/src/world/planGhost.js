@@ -14,8 +14,9 @@ import { latticeD, onVolumeChange } from './nestVolume.js';
 
    Only the surface of the remaining cells is drawn (a cell with a solid-air
    neighbour, or a neighbour outside the plan): a room of 4000 cells is ~1500
-   dots, and a translucent shell reads as a volume. Additive and depth-tested
-   but not depth-writing, so it never hides the model behind it.
+   dots, and a translucent shell reads as a volume. Additive, never depth-writing, and NOT depth-tested: the planned earth is
+   behind the wall the player sees, so a tested ghost would be invisible from
+   inside the nest. Low alpha, and fading with distance in the play view.
 
    kinds: 0 a plan, 1 a preview that can be validated, 2 a preview that is
    refused (red), 3 the plan under the cursor (brighter).
@@ -39,17 +40,20 @@ export function createPlanGhost() {
 
   const mat = new THREE.ShaderMaterial({
     uniforms: {
-      uScale: { value: 800 }, uSize: { value: 1.5 }, uAlpha: { value: 0.3 }, uTime: { value: 0 },
+      uScale: { value: 800 }, uSize: { value: 1.5 }, uAlpha: { value: 0.3 }, uTime: { value: 0 }, uMacro: { value: 0 },
     },
     vertexShader: /* glsl */`
       attribute float aKind;
-      uniform float uScale, uSize, uTime;
+      uniform float uScale, uSize, uTime, uMacro;
       varying float vKind;
       varying float vPulse;
+      varying float vFade;
       void main() {
         vKind = aKind;
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         vPulse = 0.8 + 0.2 * sin(uTime * 3.0 + position.x * 0.3 + position.y * 0.5 + position.z * 0.3);
+        // in the play view the ghost is a hint, not a hologram: it thins out with distance
+        vFade = mix(1.0 - smoothstep(20.0, 75.0, -mv.z), 1.0, uMacro);
         gl_PointSize = clamp(uSize * uScale / max(-mv.z, 1.0), 2.0, 34.0);
         gl_Position = projectionMatrix * mv;
       }`,
@@ -57,6 +61,7 @@ export function createPlanGhost() {
       uniform float uAlpha;
       varying float vKind;
       varying float vPulse;
+      varying float vFade;
       void main() {
         float d = length(gl_PointCoord - 0.5);
         float a = smoothstep(0.5, 0.05, d);
@@ -65,10 +70,10 @@ export function createPlanGhost() {
                  : vKind < 1.5 ? vec3(0.55, 1.0, 0.62)
                  : vKind < 2.5 ? vec3(1.0, 0.28, 0.24)
                  : vec3(1.0, 0.86, 0.45);
-        gl_FragColor = vec4(col * vPulse, a * uAlpha * (vKind > 0.5 ? 1.6 : 1.0));
+        gl_FragColor = vec4(col * vPulse, a * uAlpha * vFade * (vKind > 0.5 ? 1.25 : 1.0));
         #include <colorspace_fragment>
       }`,
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+    transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending, fog: false,
   });
   const points = new THREE.Points(geo, mat);
   points.name = 'plan-ghost-points';
@@ -131,8 +136,9 @@ export function createPlanGhost() {
       if (dirty && rebuildT <= 0) { rebuildT = 0.2; rebuild(); }
       mat.uniforms.uTime.value = elapsed;
       mat.uniforms.uScale.value = viewH / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
-      mat.uniforms.uAlpha.value = THREE.MathUtils.lerp(0.26, 0.8, macroMix);
-      mat.uniforms.uSize.value = THREE.MathUtils.lerp(1.3, 1.6, macroMix);
+      mat.uniforms.uMacro.value = macroMix;
+      mat.uniforms.uAlpha.value = THREE.MathUtils.lerp(0.2, 0.3, macroMix);
+      mat.uniforms.uSize.value = THREE.MathUtils.lerp(1.2, 1.35, macroMix);
       group.visible = count > 0;
     },
     dispose() { unsub(); geo.dispose(); mat.dispose(); },

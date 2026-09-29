@@ -1,7 +1,7 @@
 import { antState } from '../core/antState.js';
 import * as THREE from 'three';
 import { clamp, damp } from '../core/noise.js';
-import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath, createPlanGhost } from '../world/index.js';
+import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath, createPlanGhost, lawnY, inOpenCutPastDoor } from '../world/index.js';
 import { PLAYER_AVATAR, PROFILES, collideRadius, profileById, legLengths, PRODUCED_CASTES } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { makeAnt, makeLegState, updateLegs, antMatrix, localToWorld, solveKnee } from './legs.js';
@@ -568,6 +568,8 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     window.__rooms2 = () => dugRooms();
     window.__faces = () => digFaces();
     window.__plans = plans;
+    window.__lawnY = lawnY;
+    window.__inCut = inOpenCutPastDoor;
     window.__planGhost = ghost;
     // #76: the crew threshold as a pure function of a face, so a harness can
     // check its own numbers against the same formula colony.js pays against
@@ -708,6 +710,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
         diggerCount: () => colony.state.workers.filter((w) => w.profileId === 'digger').length,
         crewAt: (id) => colony.state.faceWork.get(id) || 0,
       });
+      if (typeof window !== 'undefined') window.__planTool = macroTool;   // harness handle, not gameplay
       return macroTool;
     },
     /* #36 / #84: the door for "the queen has settled, play the first worker".

@@ -111,10 +111,12 @@ const siteROf = (f) => f.siteR ?? DIG_SITE_R;
  * never wrong.
  */
 function assignDiggers(diggers, faces) {
-  /* #82: a prioritised chantier is crewed first; between two painted ones the
-     first planned wins; the rest keep the cheapest-first order above. */
+  /* #82: a prioritised chantier is crewed first, then the painted ones (the
+     player's own orders) before the hall's automatic walls, first planned
+     first; the world's faces keep the cheapest-first order above. */
   const ordered = faces.slice().sort((a, b) => (
     (b.priority ? 1 : 0) - (a.priority ? 1 : 0)
+    || (b.plan ? 1 : 0) - (a.plan ? 1 : 0)
     || (a.plan && b.plan ? faceSeq(a) - faceSeq(b) : 0)
     || requiredCrewFor(a) - requiredCrewFor(b) || a.id.localeCompare(b.id)
   ));

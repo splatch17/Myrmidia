@@ -196,7 +196,7 @@ export function createMacroMode({ camera, domElement, view, getAnt, forEachAnt, 
     if (moved < 5 && wasLeft && mode === 'macro') {
       /* #36: a click on an ant pin takes control of that ant, before the room
          tool sees it (a pin is drawn over the room it stands in). */
-      const id = pickAnt ? pickAnt(e.clientX, e.clientY) : null;
+      const id = pickAnt && !tool.noAntPick ? pickAnt(e.clientX, e.clientY) : null;   // #82: a brush click is never a pin click
       if (id !== null && id !== undefined && onAntPick) onAntPick(id);
       else tool.click(pickAt(e.clientX, e.clientY));
     }

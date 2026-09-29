@@ -9,6 +9,7 @@ import {
   LAWN_BOUNDS, TERRAIN_BOUNDS, WATER_Y, RIVER, lawnY,
 } from './terrain.js';
 import { createPlanGhost } from './planGhost.js';
+import { inOpenCutPastDoor } from './excavation.js';
 import { createGrassField } from './grass.js';
 import { buildTree, TREE, treeTrunkRadius, walkBranch as treeWalkBranch } from './tree.js';
 import { buildNestDecor, MUSHROOMS, ROCKS, mushroomCollideR } from './nestDecor.js';
@@ -99,7 +100,7 @@ export {
   NEST_FUNGUS,
   openCells, flushNestMesh, nestMeshStats, groundCoverAt,
   isOpen, floorAt, volumeSpan, walkableAt, planCells, plannedCells, removePlan, isPlanned,
-  onVolumeChange, volumeVersion, brushShape, MIN_COVER, lawnY, createPlanGhost,
+  onVolumeChange, volumeVersion, brushShape, MIN_COVER, lawnY, createPlanGhost, inOpenCutPastDoor,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
 

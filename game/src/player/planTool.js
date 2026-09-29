@@ -26,7 +26,7 @@ import { ensureUiTheme, keycap } from './uiTheme.js';
    cost and crew are shown before anything is spent.
    ========================================================================== */
 
-const TUNNEL_R = { min: 4, max: 8, def: 5 };
+const TUNNEL_R = { min: 4, max: 8, def: 4.5 };
 const ROOM_R = { min: 6, max: 18, def: 10 };
 const DEPTH_STEP = 2;
 const CAVITY = /^(founded-nest-shell|nest-volume-|nest-room-|nest-link-)/;
@@ -56,7 +56,7 @@ export function createPlanTool({ macro, plans, ghost, camera, domElement, digger
   const bar = document.createElement('div');
   bar.id = 'plantools';
   bar.className = 'mm mm-frame';
-  bar.style.cssText = 'display:none;left:50%;top:14px;transform:translateX(-50%);padding:7px 10px 6px;'
+  bar.style.cssText = 'display:none;left:calc(50% + 100px);top:14px;transform:translateX(-50%);padding:7px 10px 6px;'
     + 'text-align:center;white-space:nowrap;';
   const row = document.createElement('div');
   row.style.cssText = 'display:flex;gap:6px;align-items:center;justify-content:center;';
@@ -335,13 +335,14 @@ export function createPlanTool({ macro, plans, ghost, camera, domElement, digger
     },
     paint, paintMove,
     noRoomTip: true,
+    noAntPick: true,
     enter() {},
     leave() { start = null; clearPreview(); },
   };
   const tool = { name: 'plan', ...shared, hover, click };
   /* 'Choisir' keeps macroMode's room selection, and adds the ghost tooltip */
   const selectDelegate = {
-    ...shared, name: 'select', noRoomTip: false, paint: undefined, paintMove: undefined,
+    ...shared, name: 'select', noRoomTip: false, noAntPick: false, paint: undefined, paintMove: undefined,
     hover(p) { macro.selectTool.hover(p); hover(); },
     click(p) { macro.selectTool.click(p); },
   };
@@ -357,7 +358,7 @@ export function createPlanTool({ macro, plans, ghost, camera, domElement, digger
     tool: () => toolId,
     setTool: setToolId,
     /** harness: the last verdict shown under the cursor */
-    lastVerdict: () => (lastEval ? { kind: lastEval.kind, ...lastEval.ev, cells: lastEval.ev.n } : null),
+    lastVerdict: () => (lastEval ? { kind: lastEval.kind, ...lastEval.ev, cells: lastEval.ev.n, brush: lastEval.brush, cur, level } : null),
     depth: () => depthOff,
     sizes: () => ({ ...size }),
     /** once a frame */
