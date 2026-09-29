@@ -51,9 +51,14 @@ scene.add(hemi);
    earth reads darker than the old brown did at the same number. The warm
    pools (brood, dig face, bead) are local lamps and do not go through this. */
 /* #90: lifted and warmed from below (sky 0x5b50b0 -> 0xa58ad0, ground
-   0x2b1f4e -> 0x6a4a6a, 0.72 -> 1.6). The prototype's tunnel never goes
-   black: its air is a mid-value mauve and the floor bounce a warm plum, which
-   is what keeps the earth brown-pink under a violet sky (ambiance §10b.2). */
+   0x2b1f4e -> 0x7a5048, 0.72 -> 3.4). The prototype's tunnel never goes
+   black: its air is a mid-value mauve and the floor bounce warm, which is
+   what keeps the earth brown-pink under a violet sky (ambiance §10b.2).
+   The spec's 1.6 (x floor 0.5 = 0.80) was extrapolated from a Reinhard test;
+   measured here under ACES it left a corridor median of L 0.15 against the
+   0.22 asked — Three divides the hemisphere term by pi and the dug earth is a
+   dark albedo — hence 3.4, a warmer ground side and exposure 1.55 (below).
+   verify-fairy-90.mjs prints the numbers. */
 const HEMI_IN = { sky: new THREE.Color(0xa58ad0), ground: new THREE.Color(0x7a5048), intensity: 3.4 };
 
 /* The outdoor end of every commutation below is itself commuted, by a second

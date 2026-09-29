@@ -326,9 +326,19 @@ const spoilSeed = (ex) => (ex.seed + 613) % 9973;
 
 /** How wide the spoil bank is at `u` — wider at the flared mouth, and see
  *  CUT_BANK_FLARE for why that is arithmetic and not taste. */
-function bankWidthAt(ex, u) {
-  return CUT_BANK + CUT_BANK_FLARE * clamp(hwAt(ex, u) / ex.hw - 1, 0, 2);
+function bankWidthAt(ex, u, side = 0) {
+  const W = CUT_BANK + CUT_BANK_FLARE * clamp(hwAt(ex, u) / ex.hw - 1, 0, 2);
+  if (!side) return W * (1 + BANK_WANDER);   // the widest it can be, for cutSquash
+  /* #90 (porter: "the rim at the lawn still has straight, linear edges"):
+     the line where the bank dives under the meadow ran exactly W off the
+     batter, a ruled curve parallel to the cut for its whole length. Per side,
+     two octaves — a lobe every few units and a bite every two — so the spoil
+     reads as thrown out, like the #81 doorways read as dug. */
+  const o = (ex.seed % 509) + (side > 0 ? 17.1 : 3.9);
+  const n = 0.62 * vnoise(u * 0.21 + o, o * 0.3) + 0.38 * vnoise(u * 0.57 + o * 1.3, o * 0.7 + 4);
+  return W * (1 + BANK_WANDER * (n * 2 - 1));
 }
+const BANK_WANDER = 0.32;
 
 /** Room the section may take on the INSIDE of the turn before it reaches the
  *  centre of the turn itself. */
@@ -375,7 +385,9 @@ function cutBatterAt(ex, u, side) {
  *  the apron's 24 units that band was five units of u down both banks. */
 const RIM_RUN = 11;
 function cutRimY(ex, x, z, u, lw) {
-  const lump = 0.72 + 0.56 * vnoise(x * 0.15 + ex.seed, z * 0.15 + ex.seed);
+  // #90: plus a finer octave, so the crest is lumpy rather than a ruled ridge
+  const lump = 0.66 + 0.46 * vnoise(x * 0.15 + ex.seed, z * 0.15 + ex.seed)
+    + 0.22 * vnoise(x * 0.47 + ex.seed * 0.7, z * 0.47 + 11);
   return lw - MESH_TUCK + (RIM_H * lump + MESH_TUCK) * smoothK(u / RIM_RUN);
 }
 
@@ -394,7 +406,7 @@ function cutSurfaceAt(ex, x, z, u, lat) {
   const side = lat < 0 ? -1 : 1;
   const hw = hwAt(ex, u) + cutJitterAt(ex, u, side);
   const B = cutBatterAt(ex, u, side);
-  const W = bankWidthAt(ex, u);
+  const W = bankWidthAt(ex, u, side);
   const d = lat / cutSquash(ex, u, side);
   const over = Math.abs(d) - hw;
   if (over > B + W + 1e-3) return null;
@@ -580,10 +592,12 @@ function buildShell(x, z, seed) {
   }
 
   const rows = [];
-  for (let u = -CUT_LEAD; u <= ex.arc.len + 1e-4; u += 2.0) {
+  /* #90: rows every unit, not two, so the bank's finer wander (bankWidthAt)
+     is drawn rather than chorded over */
+  for (let u = -CUT_LEAD; u <= ex.arc.len + 1e-4; u += 1.0) {
     const c = rampCentre(ex, u);
     const hw = hwAt(ex, u);
-    const W = bankWidthAt(ex, u);
+    const WS = { [-1]: bankWidthAt(ex, u, -1), 1: bankWidthAt(ex, u, 1) };
     const t = clamp(u / Math.max(ex.arc.len, 1e-3), 0, 1);
     // lateral unit vector: the arc's own outward normal
     const nx = (c.x - ex.arc.ax) / ex.arc.R, nz = (c.z - ex.arc.az) / ex.arc.R;
@@ -598,7 +612,7 @@ function buildShell(x, z, seed) {
     const lats = [];
     for (const side of [-1, 1]) {
       for (const bt of side < 0 ? [...BANK_T].reverse() : BANK_T) {
-        lats.push({ d: side * (hwS[side] + BS[side] + bt * W), k: side, bank: true });
+        lats.push({ d: side * (hwS[side] + BS[side] + bt * WS[side]), k: side, bank: true });
       }
       if (side < 0) {
         lats.push({ d: -(hwS[-1] + BS[-1]), k: -1, rim: true });
@@ -625,7 +639,7 @@ function buildShell(x, z, seed) {
        nothing covered it: two notches of sky beside the entrance. */
     if (u > uCut) {
       const deep = [-1, 1].every((s) => {
-        const lat = s * (hwS[s] + BS[s] + W) * (s < 0 ? sqIn : 1);
+        const lat = s * (hwS[s] + BS[s] + WS[s]) * (s < 0 ? sqIn : 1);
         return Math.hypot(c.x + nx * lat - C.x, c.z + nz * lat - C.z) < MOUND_R - 3;
       });
       if (deep) break;

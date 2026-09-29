@@ -245,6 +245,26 @@ async function main() {
   const dx = p1.x - p0.x, dz = p1.z - p0.z, dl = Math.hypot(dx, dz) || 1;
   await view([p0.x - (dx / dl) * 14, p0.y + 11, p0.z - (dz / dl) * 14], [p1.x, p1.y + 1, p1.z], '02-mouth');
 
+  /* 4a. the trench's rim at the lawn, from high up beside the mouth (porter:
+     "straight, linear edges") */
+  {
+    const q = P[Math.floor(P.length * 0.25)];
+    const nx = -dz / dl, nz = dx / dl;
+    await view([p0.x + nx * 30 - (dx / dl) * 18, p0.y + 34, p0.z + nz * 30 - (dz / dl) * 18], [q.x, q.y, q.z], '02a-rim');
+    await view([p0.x - (dx / dl) * 6, p0.y + 70, p0.z - (dz / dl) * 6], [q.x + (dx / dl) * 10, q.y, q.z + (dz / dl) * 10], '02c-rim-top');
+    // which mesh draws what, on a coarse grid of the rim frame
+    report.picks = await page.evaluate(() => {
+      const T = window.__THREE, rc = new T.Raycaster(), out = {};
+      for (let j = 1; j < 6; j++) for (let i = 1; i < 8; i++) {
+        rc.setFromCamera(new T.Vector2(i / 4 - 1, 1 - j / 3), window.__camera);
+        const hit = rc.intersectObjects(window.__scene.children, true).find((h) => h.object.visible && h.object.isMesh);
+        out[`${i * 160},${j * 133}`] = hit ? `${hit.object.name || hit.object.type}@${hit.distance.toFixed(0)}` : '-';
+      }
+      return out;
+    });
+    console.log('picks', JSON.stringify(report.picks));
+  }
+
   /* 4b. halfway down the ramp, looking on down */
   {
     const k = Math.floor(P.length * 0.45), q = P[k], e = P[P.length - 1];

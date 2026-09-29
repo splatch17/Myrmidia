@@ -47,9 +47,9 @@ export const LIGHT_SLOTS = 12;
    clutch against near-black (before-03-brood.png). Local lamps are additive
    on top of this floor, not clamped by it, so lowering the floor only
    deepens the black BETWEEN lamps — it does not dim the lamps themselves. */
-/* #90: 0.30 -> 0.50. With the hemisphere at 1.6 the effective ambient is
-   0.80: the gaps between lamps are now separated by saturation and value, no
-   longer by black (design/ambiance-prologue.md §10b.2, amending §9d). */
+/* #90: 0.30 -> 0.60 (with HEMI_IN at 3.4, main.js): the gaps between lamps
+   are now separated by saturation and value, no longer by black
+   (design/ambiance-prologue.md §10b.2, amending §9d). */
 const AMBIENT_FLOOR = 0.60;
 
 const ALL_LIGHTS = [];
