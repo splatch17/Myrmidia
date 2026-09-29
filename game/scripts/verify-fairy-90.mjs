@@ -55,6 +55,13 @@ async function measureFps(page, ms = 2500) {
   }, ms);
 }
 
+/* five 2.5 s runs, the median: a single run swung 136-165 on the same build */
+async function fpsMedian(page) {
+  const r = [];
+  for (let i = 0; i < 5; i++) r.push(await measureFps(page));
+  return r.sort((a, b) => a - b)[2];
+}
+
 /* §10c metrics, computed from the PNG in a canvas so the game's and the
    prototype's shots are measured by exactly the same code. */
 async function metricsOf(page, files) {
@@ -156,7 +163,9 @@ async function captureProto(browser) {
 }
 
 async function main() {
-  const server = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort'], {
+  // FAIRY_DIST=dist-base serves another build (the before/after fps comparison)
+  const server = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--strictPort',
+    ...(process.env.FAIRY_DIST ? ['--outDir', process.env.FAIRY_DIST] : [])], {
     cwd: gameDir, shell: true, stdio: 'pipe',
   });
   let log = '';
@@ -205,7 +214,7 @@ async function main() {
     const a = window.__ant; a.x = x; a.z = z; a.yaw = 0; a.y = window.__groundY(x, z);
   }, [40, 60]);
   await page.waitForTimeout(800);
-  report.fps.surface = await measureFps(page);
+  report.fps.surface = await fpsMedian(page);
   await shot('01-lawn');
 
   /* 2. found, dig the hall, populate */
@@ -228,7 +237,7 @@ async function main() {
     const a = window.__ant; a.x = x; a.z = z; a.y = window.__groundY(x, z);
   }, [ch.x + ch.r * 0.2, ch.z]);
   await page.waitForTimeout(1500);
-  report.fps.nest = await measureFps(page);
+  report.fps.nest = await fpsMedian(page);
   await shot('05-nest-ingame');
 
   await page.evaluate(([x, z]) => {
