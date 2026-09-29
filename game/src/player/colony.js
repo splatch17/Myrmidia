@@ -45,6 +45,11 @@ export const WORKER_CARRY = 1;       // units per trip
    face takes is now the world, which carries `needed` on the face itself
    (contract §7). */
 export const DIG_SECONDS = 75;
+/* #36: a digger the player is driving, standing at her face, counts for this
+   many AI diggers on the gauge (design/fourmiliere-a-batir.md 4.3: micro beats
+   macro). Only her rate is multiplied: for the minimum crew (#76) she is still
+   ONE digger, and only while she is really at the face. */
+export const CONTROL_DIG_MULT = 3;
 /* How close to a face counts as working it. A body length: close enough that
    the crew reads as being AT the wall, loose enough that three of them fit
    without shoving each other off the gauge. */
@@ -150,6 +155,7 @@ export function createColony() {
     delivered: 0,      // units the colony has brought home on its own
     digging: 0,        // how many fouisseuses were at a face this frame
     faceWork: new Map(),  // face id -> how many are working it this frame
+    faceRate: new Map(),  // face id -> ant-seconds per second it is paid (#36: a controlled digger weighs CONTROL_DIG_MULT)
     opened: [],        // ids of the rooms the colony has dug open
     lastOpened: null,  // the most recent one, for the HUD to announce
     /* #75: the bottom-of-screen health bar needs somewhere to read from that
@@ -170,6 +176,13 @@ export function createColony() {
       id: _nextId++,
       profileId,
       profile,
+      /* #36: control is an attribute. `controlled` is set by player/entities.js
+         when the player takes this ant; while it is true update() does not run
+         the brain below. `ai` names the brain, kept as a string so the record
+         stays serialisable. */
+      controlled: false,
+      ai: profileId === 'digger' ? 'dig' : 'forage',
+      atFace: false,
       ant,
       legState: makeLegState(profile),
       carrying: null,      // node kind being carried, or null
@@ -236,6 +249,23 @@ export function createColony() {
           * Math.min(1, a.speed / 8);
     updateLegs(a, w.legState, dt, DIGGER);
   }
+
+  /* A controlled digger walks herself (movement.js); all this decides is
+     whether she is at a face — the same test the AI's arrival uses, against
+     the nearest open face's stand-off point — so the crew rule (#76) reads the
+     same way for her as for the others. */
+  function stepControlledDigger(w, faces) {
+    let face = null, bestD = Infinity;
+    for (const f of faces) {
+      const d = Math.hypot(f.x + f.nx * FACE_STANDOFF - w.ant.x, f.z + f.nz * FACE_STANDOFF - w.ant.z);
+      if (d < bestD) { bestD = d; face = f; }
+    }
+    w.faceId = face ? face.id : null;
+    w.atFace = !!face && bestD <= DIG_SITE_R;
+  }
+
+  /** Release: the brain restarts from a clean slate (no stale target/path). */
+  function resetBrain(w) { w.targetId = null; w.repath = 0; w.atFace = false; }
 
   function stepWorker(w, dt) {
     const a = w.ant;
@@ -310,11 +340,15 @@ export function createColony() {
     }
 
     const faces = digFaces();
-    const diggerWorkers = state.workers.filter((w) => w.profileId === 'digger');
+    const diggerWorkers = state.workers.filter((w) => w.profileId === 'digger' && !w.controlled);
     const assignment = faces.length ? assignDiggers(diggerWorkers, faces) : null;
 
     state.digging = 0;
     for (const w of state.workers) {
+      if (w.controlled) {
+        if (w.profileId === 'digger') { stepControlledDigger(w, faces); if (w.atFace) state.digging++; }
+        continue;   // the player steers her; nothing else about her is the AI's
+      }
       if (w.profileId === 'digger') {
         stepDigger(w, dt, faces, assignment && assignment.get(w.id));
         if (w.atFace) state.digging++;
@@ -331,9 +365,11 @@ export function createColony() {
        faces (the hall's own walls, #52) two fouisseuses on different walls do
        not add up into one gauge that finishes both. */
     state.faceWork.clear();
+    state.faceRate.clear();
     for (const w of state.workers) {
       if (w.profileId !== 'digger' || !w.atFace || !w.faceId) continue;
       state.faceWork.set(w.faceId, (state.faceWork.get(w.faceId) || 0) + 1);
+      state.faceRate.set(w.faceId, (state.faceRate.get(w.faceId) || 0) + (w.controlled ? CONTROL_DIG_MULT : 1));
     }
     const facesById = new Map(faces.map((f) => [f.id, f]));
     for (const [id, crew] of state.faceWork) {
@@ -341,7 +377,7 @@ export function createColony() {
          nothing at all, rather than a trickle no one would notice. */
       const f = facesById.get(id);
       if (f && crew < requiredCrewFor(f)) continue;
-      const r = payDigFace(id, crew * dt * paceDigMultiplier());
+      const r = payDigFace(id, state.faceRate.get(id) * dt * paceDigMultiplier());
       if (r && r.opened) {
         state.opened.push(r.opened.id);
         state.lastOpened = r.opened;
@@ -434,7 +470,7 @@ export function createColony() {
 
   return {
     state, addEggs, update, statusText, digCandidates, serialise, casteProgress,
-    spawnAt,
+    spawnAt, resetBrain,
     collideRadius: () => collideRadius(WORKER),
   };
 }

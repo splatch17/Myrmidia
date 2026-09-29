@@ -373,7 +373,7 @@ export function createCameraRig(camera) {
   // frame's eye/aim to build camera-relative input, same ordering as the old
   // prototype's frame(): wish direction uses the *previous* frame's camEye/
   // camAim, camera itself re-targets afterwards, once the ant has moved.
-  const rig = { eye: null, aim: null };
+  const rig = { eye: null, aim: null, glide: 0 };
 
   /* `shot` (optional) is a {eye, aim, cut} the caller has composed itself —
      the founding sequence (player/laying.js), which puts the camera down a
@@ -387,7 +387,12 @@ export function createCameraRig(camera) {
   function update(ant, camYaw, wantPitch, camDist, dt, shot) {
     const want = shot || desiredCamera(ant, camYaw, wantPitch, camDist);
     if (!rig.eye || (shot && shot.cut)) { rig.eye = want.eye.slice(); rig.aim = want.aim.slice(); }
-    const rate = shot ? 5.0 : 6.5;
+    /* #36: after control moves to another ant the boom glides over instead of
+       snapping — the same damping, just slower for about a second and a half,
+       so the player sees where they went. */
+    const glide = rig.glide > 0 ? 0.4 : 1;
+    if (rig.glide > 0) rig.glide = Math.max(0, rig.glide - dt);
+    const rate = (shot ? 5.0 : 6.5) * glide;
     for (let c = 0; c < 3; c++) {
       rig.eye[c] = damp(rig.eye[c], want.eye[c], rate, dt);
       rig.aim[c] = damp(rig.aim[c], want.aim[c], rate * 1.4, dt);

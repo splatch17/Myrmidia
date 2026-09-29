@@ -1,15 +1,16 @@
 import { antState } from '../core/antState.js';
-import { clamp } from '../core/noise.js';
+import * as THREE from 'three';
+import { clamp, damp } from '../core/noise.js';
 import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath } from '../world/index.js';
-import { PLAYER_AVATAR, collideRadius, profileById, legLengths, PRODUCED_CASTES } from './avatar.js';
+import { PLAYER_AVATAR, PROFILES, collideRadius, profileById, legLengths, PRODUCED_CASTES } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
 import { makeAnt, makeLegState, updateLegs, antMatrix, localToWorld, solveKnee } from './legs.js';
 import { buildAntMesh } from './antMesh.js';
 import { createInput } from './input.js';
 import { createQueenMenu } from './queenMenu.js';
-import { createCameraRig } from './camera.js';
+import { createCameraRig, desiredCamera } from './camera.js';
 import { computeWishDir, stepAnt } from './movement.js';
-import { stepClimb, GRASS } from './climb.js';
+import { stepClimb, exitClimb, GRASS } from './climb.js';
 import { pickDigGauge } from './digGauge.js';
 import { deepestPenetration, resolveDecorCollision, mushroomRadii } from './decorCollision.js';
 import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
@@ -19,7 +20,8 @@ import { resourceNodes } from './resources.js';
 import { nestOrigin, canFound, found, refusalText } from './founding.js';
 import { createHud } from './hud.js';
 import { createTargetMarker } from './marker.js';
-import { createColony, requiredCrewFor } from './colony.js';
+import { createColony, requiredCrewFor, CONTROL_DIG_MULT } from './colony.js';
+import { createEntities } from './entities.js';
 import { createCrowd } from './crowd.js';
 import { nestInfo, nestFootprint } from './nest.js';
 import { WORKER } from './avatar.js';
@@ -70,26 +72,46 @@ const SPAWN_YAW = -Math.PI / 2; // facing -X: the meadow, the bowl and the far t
 // frame budget
 const SITE_INTERVAL = 0.25, SITE_MOVE = 3;
 
-export function createPlayerController({ scene, camera, domElement, profile = PLAYER_AVATAR }) {
-  const ant = makeAnt(SURFACE_START[0], 0, SURFACE_START[1], profile);
-  ant.yaw = SPAWN_YAW;
-  ant.y = groundY(ant.x, ant.z);
+export function createPlayerController({ scene, camera, domElement, profile: startProfile = PLAYER_AVATAR }) {
+  const ant0 = makeAnt(SURFACE_START[0], 0, SURFACE_START[1], startProfile);
+  ant0.yaw = SPAWN_YAW;
+  ant0.y = groundY(ant0.x, ant0.z);
   // she is 2.2x a worker: a spawn point that was clear for a worker can still
   // overlap a pebble or a stem for her. Two resolves settle it (see
   // decorCollision.js on why the second pass exists) before the first frame,
   // rather than having her visibly shoved aside on frame one.
-  resolveDecorCollision(ant, 0);
-  resolveDecorCollision(ant, 0);
-  ant.y = groundY(ant.x, ant.z);
+  resolveDecorCollision(ant0, 0);
+  resolveDecorCollision(ant0, 0);
+  ant0.y = groundY(ant0.x, ant0.z);
 
-  const legState = makeLegState(profile);
-  const { group, updatePose } = buildAntMesh(profile);
-  scene.add(group);
-  /* The outline is built from the finished mesh rather than inside
-     antMesh.js, so the rendering trick and the anatomy stay separable: a
-     second creature gets an outline by being passed through here, not by
-     having one baked into how it is modelled. */
-  scene.add(buildOutlineHull(group));
+  /* #36: the queen is one entity among the colony's, and "the ant the player
+     drives" is whichever entity is flagged `controlled` (entities.js). The
+     four names below — cur / ant / legState / profile — always describe that
+     one, and are rebound in bindBody() when control moves. */
+  const queen = {
+    id: 'queen', profileId: startProfile.id, profile: startProfile, ai: 'idle', controlled: true,
+    ant: ant0, legState: makeLegState(startProfile), carrying: null,
+  };
+  let cur = queen;
+  let ant = queen.ant, legState = queen.legState, profile = queen.profile;
+
+  /* One mesh rig per caste, ALL built here at construction: main.js runs its
+     one-shot scene.traverse() (nest shading) right after this returns, so a
+     rig created later would be lit as if it stood in an open field. Only the
+     queen's and the controlled ant's are shown. The outline is built from the
+     finished mesh rather than inside antMesh.js, so the rendering trick and
+     the anatomy stay separable. Ants nobody controls are drawn by the crowd. */
+  const rigs = new Map();
+  for (const p of Object.values(PROFILES)) {
+    const built = buildAntMesh(p);
+    const hull = buildOutlineHull(built.group);
+    built.group.visible = false;
+    hull.visible = false;
+    scene.add(built.group);
+    scene.add(hull);
+    rigs.set(p.id, { group: built.group, hull, updatePose: built.updatePose });
+  }
+  const group = rigs.get(queen.profileId).group;
 
   const input = createInput(domElement, profile);
   // the boom starts behind her, not behind +Z: camYaw defaults to 0 in
@@ -119,6 +141,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
      cost the spatial index round went to the trouble of removing from the CPU
      side. See crowd.js. */
   const colony = createColony();
+  const entities = createEntities({ queen, colony });
   /* What the next clutch will be (#38). Held here rather than in colony.js
      because it is a decision the *player* makes and colony.js is the thing
      that lives without them — the moment the queen has a management panel
@@ -178,6 +201,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   cameraRig.update(ant, input.state.camYaw, input.state.wantPitch, input.state.camDist, 0);
 
   let siteTimer = 0, siteAt = null, site = null, nestCard = null;
+  const crowdList = [];
 
   function refreshSite(dt) {
     siteTimer -= dt;
@@ -210,6 +234,98 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   const IDLE_INTENT = { ix: 0, iy: 0, mag: 0, sprint: false };
   let macroSnap = null;
 
+  /* ---- control moves between ants (#36) ---------------------------------- */
+
+  // never while the burrow beat / the laying sequence is placing the queen:
+  // she is a cutscene then, and whoever took over would inherit it
+  entities.setGuard(() => !interaction.busy());
+
+  function publishRadius() { if (typeof window !== 'undefined') window.__antRadius = collideRadius(profile); }
+  function bindBody(e) {
+    cur = e; ant = e.ant; legState = e.legState; profile = e.profile;
+    publishRadius();
+  }
+
+  /* What the outgoing ant was holding stays with HER (entity.carrying, a kind
+     string like colony.js's own workers use), and the incoming one's load
+     goes back into the one shared harvest state the HUD/props/E-ladder read. */
+  entities.onChange(({ from, to }) => {
+    const h = interaction.harvest.state;
+    from.carrying = h.carrying ? h.carrying.kind : null;
+    h.carrying = to.carrying ? { kind: to.carrying } : null;
+    h.progress = 0; h.activeId = null;
+    // a released ant must not stay hanging off a stem its brain does not know about
+    if (from.ant.climb) exitClimb(from.ant);
+    to.carrying = null;
+    bindBody(to);
+    input.setProfile(profile);
+    // the boom opens behind the new ant, and glides there instead of cutting
+    input.state.camYaw = ant.yaw;
+    cameraRig.glide = 1.6;
+    siteAt = null;
+    if (macroSnap) {
+      // in the model: leaving it must land on THIS ant, not on where the
+      // previous one was - the follow shot is rebuilt and the saved boom reset
+      macroSnap.camYaw = input.state.camYaw;
+      macroSnap.wantPitch = input.state.wantPitch;
+      macroSnap.camDist = input.state.camDist;
+      const want = desiredCamera(ant, input.state.camYaw, input.state.wantPitch, input.state.camDist);
+      cameraRig.eye = want.eye.slice(); cameraRig.aim = want.aim.slice();
+    }
+  });
+
+  /* A click on an ant, in pixels: the nearest projected body within a thumb of
+     the cursor. `lift` puts the sample point where the pin/body reads. */
+  const _pv = new THREE.Vector3();
+  function pickAntAt(px, py, { lift = 1.5, radius = 30, includeCurrent = false } = {}) {
+    const w = domElement.clientWidth || window.innerWidth, h = domElement.clientHeight || window.innerHeight;
+    camera.updateMatrixWorld();
+    let best = null, bestD = radius;
+    const list = entities.all();
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      if (!includeCurrent && e === cur) continue;
+      _pv.set(e.ant.x, e.ant.y + lift * (e.ant.scale || 1), e.ant.z).project(camera);
+      if (_pv.z > 1 || _pv.z < -1) continue;
+      const d = Math.hypot((_pv.x + 1) * 0.5 * w - px, (1 - _pv.y) * 0.5 * h - py);
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    return best ? best.id : null;
+  }
+
+  /* The brain of the queen when nobody plays her: stand where she is and let
+     the legs settle. Kept here (not in colony.js) because she is not one of
+     its workers and the pose needs nothing but her record. */
+  function idleQueen(dt) {
+    queen.ant.speed = damp(queen.ant.speed, 0, 9, dt);
+    updateLegs(queen.ant, queen.legState, dt);
+  }
+
+  // who the HUD says you are: "n° 2" for the second digger, nothing for the queen
+  function unitTag() {
+    if (cur === queen) return '';
+    let n = 0;
+    for (const w of colony.state.workers) { if (w.profileId === cur.profileId) n++; if (w === cur) break; }
+    return `n° ${n}`;
+  }
+
+  // the objective line of a controlled ant that is not the queen
+  function fieldObjective() {
+    const carrying = interaction.harvest.state.carrying;
+    if (profile.id === 'digger') {
+      if (cur.atFace) return `Vous creusez au front — ×${CONTROL_DIG_MULT} une fouisseuse de la colonie`;
+      let best = null, bestD = Infinity;
+      for (const f of digFaces()) {
+        const d = Math.hypot(f.x + f.nx * 5 - ant.x, f.z + f.nz * 5 - ant.z);
+        if (d < bestD) { bestD = d; best = f; }
+      }
+      return best ? `Objectif : rejoindre le front de creusement (à ${bestD.toFixed(0)} u)` : 'Aucun front ouvert : rien à creuser pour l\u2019instant';
+    }
+    return carrying
+      ? 'Objectif : rapporter au dépôt de la reine'
+      : 'Objectif : récolter (E maintenu) et rapporter au dépôt';
+  }
+
   function update(dt, elapsed, opts) {
     const macro = !!(opts && opts.macro);
     if (macro && !macroSnap) {
@@ -222,6 +338,19 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     }
     const intent = macro ? IDLE_INTENT : input.readMoveIntent();
 
+    /* #36: switching. Tab / Shift+Tab walk the roster; a click on an ant in
+       the world takes it. Not in the macro model (its own pins do that, and a
+       click there is the model's), and both are consumed either way so a
+       press made in the model cannot fire on the way out. */
+    const sw = input.consumeSwitch(), click = input.consumeClick();
+    if (!macro) {
+      if (sw) entities.cycle(sw, 'tab');
+      else if (click) {
+        const id = pickAntAt(click.x, click.y);
+        if (id !== null) entities.takeControl(id, 'click');
+      }
+    }
+
     /* E, resolved in context (interaction.js): climb on/off, harvest a node,
        drop what she carries, or dig the first chamber. Both readings of the
        key go down — the consumed edge for the instant verbs, the raw held
@@ -233,13 +362,13 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     /* The panel is offered to the PROFILE, not to the player (#53). A caste
        without `manages` gets nothing from this key, which is what makes the
        flag load-bearing rather than decorative. */
-    if (input.consumeMenu()) queenMenu.toggle(profile);
+    if (input.consumeMenu()) queenMenu.toggle(entities.manager().profile);
     selectCaste(input.consumeCaste());
     // a caste can be locked again by nothing, but the guard costs one line and
     // stops a saved pick from outliving the rule that allowed it
     if (!casteUnlocked(caste)) caste = 'worker';
     const pressedE = input.consumeInteract();
-    const act = interaction.update(ant, macro ? false : pressedE, macro ? false : input.isInteractHeld(), dt);
+    const act = interaction.update(ant, macro ? false : pressedE, macro ? false : input.isInteractHeld(), dt, queen.ant);
 
     if (interaction.busy()) {
       /* The founding sequence (laying.js, #6) is placing her along a path
@@ -256,8 +385,17 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     }
 
     updateLegs(ant, legState, dt);
-    updatePose(ant, legState, elapsed);
-    group.position.set(0, 0, 0); // parts are already placed in world space (see antMesh.js)
+    if (!queen.controlled) idleQueen(dt);   // her brain: stand and settle
+    // the queen's rig always; the controlled ant's own caste rig when it is not her
+    for (const r of rigs.values()) { r.group.visible = false; r.hull.visible = false; }
+    const qr = rigs.get(queen.profileId);
+    qr.updatePose(queen.ant, queen.legState, elapsed);
+    qr.group.visible = qr.hull.visible = true;
+    if (cur !== queen) {
+      const r = rigs.get(cur.profileId);
+      r.updatePose(ant, legState, elapsed);
+      r.group.visible = r.hull.visible = true;
+    }
 
     antState.position.set(ant.x, ant.y, ant.z);
     antState.radius = collideRadius(profile); // footprint half-width, for grass contact bend
@@ -268,11 +406,14 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        is the first thing that turns one into something that hatches. */
     if (interaction.laying.state.justLaid) colony.addEggs(3, caste);
     colony.update(dt);
-    crowd.render(colony.state.workers, elapsed);
+    // the controlled one is drawn by her own rig above, not twice
+    crowdList.length = 0;
+    for (const w of colony.state.workers) if (!w.controlled) crowdList.push(w);
+    crowd.render(crowdList, elapsed);
 
     refreshSite(dt);
     hud.setPrompt(interaction.promptText(ant, act));
-    hud.setObjective(interaction.objectiveText(ant));
+    hud.setObjective(profile.manages ? interaction.objectiveText(ant) : fieldObjective());
     const colonyLine = colony.statusText();
     hud.setStock(colonyLine ? `${interaction.inventoryText()}  |  ${colonyLine}` : interaction.inventoryText());
     if (casteMsgTimer > 0) { casteMsgTimer -= dt; if (casteMsgTimer <= 0) casteMsg = null; }
@@ -299,8 +440,13 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
         ...f, diggers: colony.state.faceWork.get(f.id) || 0, required: requiredCrewFor(f),
       })),
     };
-    queenMenu.render(profile, colonyView);
-    hud.setUnit(profile, colonyView);
+    /* The menu and the caste squares belong to whoever `manages` the colony,
+       wherever the player is standing: reachable at a distance (C), which is
+       what makes a worker a legitimate body to be in (#36). */
+    const manager = entities.manager().profile;
+    queenMenu.render(manager, colonyView);
+    hud.setUnit(profile, colonyView, unitTag());
+    hud.setControlHint('Tab — changer de fourmi');
     /* Bottom-left, always: the queen's own vitals, not the controlled unit's
        (#75). She stays the same ant whether or not she is the one under the
        player's hand right now (design/castes-et-micro-macro.md 3), so this
@@ -320,7 +466,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
       hint: casteHint(id),
       selected: caste === id,
       count: colonyView.counts[id] || 0,
-    })), { manages: profile.manages, onSelect: selectCaste });
+    })), { manages: manager.manages, onSelect: selectCaste });
     /* The dig gauge is NOT drawn here. It is projected against the camera, and
        the camera is not final until cameraRig.update() further down — so main
        .js calls syncDigDial() once the camera is where the frame will be
@@ -359,9 +505,9 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   // reading agrees with where the ant is standing (#32).
   if (typeof window !== 'undefined') {
     window.__decorPenetration = deepestPenetration;
-    window.__antRadius = collideRadius(profile);
+    publishRadius();
     window.__site = (x, z) => evaluateSite(x, z);
-    window.__avatar = profile;
+    Object.defineProperty(window, '__avatar', { get: () => profile, configurable: true });
     window.__mushroomRadii = mushroomRadii;
     window.__grass = GRASS;  // so the harness can walk to a real climbable stem
     // #70: bone-length measurement, so a harness can assert invariance
@@ -420,7 +566,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__descentPath = () => (typeof descentPath === 'function' ? descentPath() : null);
     // ...and needs to be able to start the cutscene in order to prove it can
     // be cut. The cut itself is a real keypress.
-    window.__beginLaying = () => interaction.laying.begin(ant);
+    window.__beginLaying = () => interaction.laying.begin(queen.ant);
     window.__caste = () => ({ caste, msg: casteMsg, unlocked: casteUnlocked('digger') });
     // what a clutch costs right now, pace included (verify-burrow.mjs checks
     // the pile is spent by exactly this much, exactly once, across #68's beat)
@@ -462,6 +608,21 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        for — camYaw only moves inside input.js's own onPointerMove, and only
        while dragging is true, so an unchanged reading before/after a click
        is a direct proof, not an inference from camera drift. */
+    window.__control = {
+      list: () => entities.all().map((e) => ({ id: e.id, profileId: e.profileId, ai: e.ai, controlled: !!e.controlled, x: e.ant.x, z: e.ant.z, atFace: !!e.atFace })),
+      current: () => ({ id: cur.id, profileId: cur.profileId }),
+      take: (id) => entities.takeControl(id, 'harness'),
+      pickScreen: (x, y) => pickAntAt(x, y),
+      screenOf: (id) => {
+        const e = entities.get(id);
+        const w = domElement.clientWidth || window.innerWidth, h = domElement.clientHeight || window.innerHeight;
+        camera.updateMatrixWorld();
+        _pv.set(e.ant.x, e.ant.y + 1.5 * (e.ant.scale || 1), e.ant.z).project(camera);
+        return { x: (_pv.x + 1) * 0.5 * w, y: (1 - _pv.y) * 0.5 * h, front: _pv.z > -1 && _pv.z < 1 };
+      },
+      antOf: (id) => { const e = entities.get(id); return e ? { x: e.ant.x, y: e.ant.y, z: e.ant.z, yaw: e.ant.yaw, speed: e.ant.speed } : null; },
+      queenMenuOpen: () => queenMenu.isOpen(),
+    };
     window.__inputState = () => ({ dragging: input.state.dragging, camYaw: input.state.camYaw });
   }
 
@@ -489,12 +650,13 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
      A callback rather than an array so the per-frame dot pass allocates
      nothing. */
   const macroInfo = {
+    // fn(x, y, z, kind, id): the id is what a click on the pin hands back to takeControl()
     forEachAnt(fn) {
-      fn(ant.x, ant.y, ant.z, 'queen');
+      fn(queen.ant.x, queen.ant.y, queen.ant.z, 'queen', queen.id);
       const ws = colony.state.workers;
       for (let i = 0; i < ws.length; i++) {
         const w = ws[i];
-        fn(w.ant.x, w.ant.y, w.ant.z, w.profileId === 'digger' ? 'digger' : 'worker');
+        fn(w.ant.x, w.ant.y, w.ant.z, w.profileId === 'digger' ? 'digger' : 'worker', w.id);
       }
     },
     faceCrew(face) {
@@ -502,5 +664,20 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     },
   };
 
-  return { ant, group, update, syncDigDial, dispose, hud, macroInfo };
+  return {
+    /** the ant being played right now (the queen until control moves) */
+    get ant() { return ant; },
+    group, update, syncDigDial, dispose, hud, macroInfo,
+    /* #36 / #84: the door for "the queen has settled, play the first worker".
+       takeControl(id) -> false when refused (unknown id, already that ant, or
+       the queen is mid burrow/laying sequence); onControlChange(fn) gets
+       { from, to, reason } on every change, and the same is dispatched on
+       window as a `control-change` CustomEvent. */
+    takeControl: (id, reason = 'api') => entities.takeControl(id, reason),
+    onControlChange: (fn) => entities.onChange(fn),
+    entities,
+    pickAntAt,
+    /** the follow-camera pose play resumes from (macro exit after a pin click) */
+    playCameraPose: () => ({ eye: cameraRig.eye.slice(), aim: cameraRig.aim.slice() }),
+  };
 }

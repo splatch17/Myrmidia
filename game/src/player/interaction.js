@@ -52,7 +52,11 @@ const MOUTH_RADIUS = 15;    // how close to her own entrance counts as "at it"
 
 export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   const harvest = createHarvest();
-  const bodyR = collideRadius(profile);
+  /* #36: the actor of the ladder is whichever ant is controlled, not always
+     the queen, so the body radius and the queen-only verbs are read off the
+     ant passed in. `profile` is only the fallback for a bare record. */
+  const bodyOf = (ant) => collideRadius(ant.profile || profile);
+  const manages = (ant) => !!(ant.profile || profile).manages;
 
   const laying = createLaying();
   const burrow = createBurrow();
@@ -75,6 +79,10 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
    *  descent is a thing to watch only while it is also a thing she cannot do
    *  herself (#40). Once she has walked down, E lays where she stands. */
   function layPlace(ant) {
+    // laying and founding are the colony-manager's verbs (the `manages` flag,
+    // never "is this the player"): a controlled forager walking over the mouth
+    // has nothing to lay
+    if (!manages(ant)) return null;
     if (!isFounded() || foundingProvisional() || !laying.canLayMore()) return null;
     if (harvest.stock() < clutchCost()) return null;
     if (insideNest(ant.x, ant.z)) return 'here';
@@ -128,7 +136,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     }
 
     const cache = harvest.state.cache;
-    if (cache && !isFounded() && harvest.enough() && harvest.cacheDistance(ant) <= CACHE_RADIUS) {
+    if (cache && manages(ant) && !isFounded() && harvest.enough() && harvest.cacheDistance(ant) <= CACHE_RADIUS) {
       const verdict = canFound(ant.x, ant.z);
       return { kind: 'found', ok: verdict.ok, reason: verdict.reason, assumed: verdict.assumed };
     }
@@ -136,7 +144,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     const place = layPlace(ant);
     if (place) return { kind: 'lay', inPlace: place === 'here' };
 
-    const node = harvest.target(ant, bodyR);
+    const node = harvest.target(ant, bodyOf(ant));
     if (node) return { kind: 'harvest', node };
 
     const climbTarget = nearestClimbable(ant);
@@ -150,19 +158,22 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
    * Returns the resolved action so the HUD can describe it without resolving
    * a second time (and possibly differently).
    */
-  function update(ant, pressed, held, dt) {
+  function update(ant, pressed, held, dt, queenAnt = ant) {
     /* The burrow beat moves the ant itself (straight down, on the spot),
        same reason it runs first: whatever else might move her this frame
        has to see her already there. A natural end applies the founding
        exactly once, here — the only other door is the 'burrow' case below,
        and burrow.js guarantees update() and cancel() cannot both fire for
        the same run of the beat. */
-    if (burrow.update(ant, dt)) finalizeFounding(ant);
+    /* The burrow beat and the laying sequence belong to the QUEEN's body,
+       whoever is being played: they keep running on her while the player is
+       in a worker (#36) — and `ant` below is then the worker's. */
+    if (burrow.update(queenAnt, dt)) finalizeFounding(queenAnt);
 
     /* The sequence moves the ant itself, so it runs before anything that
        might also move her, and it is stepped even when it is idle: it owns
        the prologue -> colony crossfade, which outlives the last phase. */
-    laying.update(ant, dt);
+    laying.update(queenAnt, dt);
     const ev = laying.eventText();
     if (ev) say(ev, 6);
 

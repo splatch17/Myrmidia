@@ -10,7 +10,8 @@ import { PLAYER_AVATAR } from './avatar.js';
    camera.js and player/index.js consume it.
    ========================================================================== */
 
-export function createInput(domElement, profile = PLAYER_AVATAR) {
+export function createInput(domElement, initialProfile = PLAYER_AVATAR) {
+  let profile = initialProfile;   // #36: follows whichever ant is controlled (setProfile)
   const keys = {};
   const state = {
     camYaw: 0,
@@ -33,6 +34,10 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
   let helpPressed = false;
   let menuPressed = false;
   let castePressed = null;
+  // #36: Tab / Shift+Tab (+1 / -1) and a click that was not a drag (px)
+  let switchPressed = 0;
+  let clickPending = null;
+  let downAt = null;
 
   function isMoveKey(codes) {
     for (let i = 0; i < codes.length; i++) if (keys[codes[i]]) return true;
@@ -44,6 +49,7 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
     if (e.code === 'KeyE') interactPressed = true;
     if (e.code === 'KeyH') helpPressed = true;
     if (e.code === 'KeyC') menuPressed = true;
+    if (e.code === 'Tab') { if (!e.repeat) switchPressed = e.shiftKey ? -1 : 1; e.preventDefault(); }
     // 5/6 choose the caste of the next clutch. Digits 1-4 belong to the
     // graphics panel (core/quality.js), which owns its own listener.
     if (e.code === 'Digit5') castePressed = 'worker';
@@ -55,6 +61,9 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
 
   function onPointerDown(e) {
     domElement.setPointerCapture(e.pointerId);
+    if (e.pointerType !== 'touch' || e.clientX >= window.innerWidth * 0.5) {
+      downAt = { id: e.pointerId, x: e.clientX, y: e.clientY };
+    }
     if (e.pointerType === 'touch' && e.clientX < window.innerWidth * 0.5) {
       touchMove.active = true; touchMove.id = e.pointerId;
       touchMove.ox = e.clientX; touchMove.oy = e.clientY;
@@ -77,6 +86,13 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
     }
   }
   function endPointer(e) {
+    if (downAt && downAt.id === e.pointerId) {
+      // a press that barely moved is a click on the world, not a camera drag
+      if (e.type === 'pointerup' && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) < 5) {
+        clickPending = { x: e.clientX, y: e.clientY };
+      }
+      downAt = null;
+    }
     if (touchMove.active && e.pointerId === touchMove.id) {
       touchMove.active = false; touchMove.dx = 0; touchMove.dy = 0;
     }
@@ -142,6 +158,13 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
     return v;
   }
 
+  /** +1 (Tab) / -1 (Shift+Tab) / 0, consumed like consumeInteract(). */
+  function consumeSwitch() { const v = switchPressed; switchPressed = 0; return v; }
+  /** {x, y} of a click that was not a drag, or null. */
+  function consumeClick() { const v = clickPending; clickPending = null; return v; }
+  /** The body under the player changed: its zoom limits and framing apply. */
+  function setProfile(p) { profile = p; state.camDist = clamp(p.cam.dist, p.cam.min, p.cam.max); }
+
   /** Is the interact key physically down right now? (held actions) */
   function isInteractHeld() { return !!keys.KeyE; }
 
@@ -156,5 +179,5 @@ export function createInput(domElement, profile = PLAYER_AVATAR) {
     domElement.removeEventListener('wheel', onWheel);
   }
 
-  return { state, readMoveIntent, consumeInteract, consumeHelp, consumeMenu, consumeCaste, isInteractHeld, dispose };
+  return { state, readMoveIntent, consumeInteract, consumeHelp, consumeMenu, consumeCaste, consumeSwitch, consumeClick, setProfile, isInteractHeld, dispose };
 }

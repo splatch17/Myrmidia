@@ -44,7 +44,7 @@ function el(id, cls, parent = document.body) {
 function nullHud() {
   return {
     setSite() {}, setPrompt() {}, setObjective() {}, setStock() {}, setEvent() {},
-    setHold() {}, setDig() {}, setEventNow() {}, setUnit() {},
+    setHold() {}, setDig() {}, setEventNow() {}, setUnit() {}, setControlHint() {},
     setQueenHp() {}, setCastes() {}, setMacro() {},
     toggleControls() {}, closeControls() {}, dispose() {},
   };
@@ -62,7 +62,9 @@ const CONTROLS = [
   ['Molette', 'reculer / rapprocher la vue'],
   ['E', 'action — appui court, ou maintenu'],
   ['5 / 6', 'prochaine ponte : ouvrières / fouisseuses'],
-  ['C', 'gestion de la reine'],
+  ['Tab', 'changer de fourmi (Maj+Tab : la précédente)'],
+  ['Clic', 'prendre le contrôle d’une fourmi'],
+  ['C', 'gestion de la reine (à distance aussi)'],
   ['M', 'vue d’ensemble du nid (maquette)'],
   ['P', 'graphismes et cadence de test'],
   ['H', 'afficher / masquer cette aide'],
@@ -85,6 +87,11 @@ export function createHud() {
     + '<div class="mm-chips"></div>';
   unit.append(portrait, body);
   const uName = body.querySelector('.mm-unit-name');
+  // #36: under the frame, always: how to leave this ant
+  const uHint = document.createElement('div');
+  uHint.className = 'mm-unit-sub';
+  uHint.style.cssText = 'font-size:11px;color:var(--mm-dim);margin-top:3px;letter-spacing:.02em;';
+  body.appendChild(uHint);
   const uBar = body.querySelector('.mm-bar');
   const uBarFill = uBar.querySelector('i');
   const uBarText = uBar.querySelector('span');
@@ -293,17 +300,21 @@ export function createHud() {
      * taken over by #36 gets her own face and no colony bar, with no change
      * here. `s` is the same colony reading the queen's panel is handed.
      */
-    setUnit(profile, s) {
+    setControlHint(text) { if (text !== uHint.textContent) uHint.textContent = text || ''; },
+    setUnit(profile, s, tag = '') {
       if (!profile) {
         if (unit.style.display !== 'none') unit.style.display = 'none';
         return;
       }
       if (unit.style.display !== 'flex') unit.style.display = 'flex';
-      if (profile.id !== lastUnitId) {
-        portrait.innerHTML = portraitSvg(profile);
+      /* `tag` tells two ants of one caste apart ("n° 3"): the key has to
+         carry it, or a Tab between two workers would leave the old name up. */
+      const idKey = `${profile.id}|${tag}`;
+      if (idKey !== lastUnitId) {
+        if (!lastUnitId || lastUnitId.split('|')[0] !== profile.id) portrait.innerHTML = portraitSvg(profile);
         portrait.classList.toggle('mm-elite', !!profile.manages);
-        uName.textContent = cap(profile.label);
-        lastUnitId = profile.id;
+        uName.textContent = cap(profile.label) + (tag ? ` ${tag}` : '');
+        lastUnitId = idKey;
         lastUnitKey = null;
       }
       const colonyShown = !!(s && profile.manages);

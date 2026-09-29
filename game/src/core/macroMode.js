@@ -35,8 +35,10 @@ const SIZE_NAME = { chamber: 'chambre de la reine', small: 'petite salle', mediu
  * @param forEachAnt  (fn) => fn(x, y, z, kind) per ant, for the dots
  * @param faceCrew    (face) => {diggers, required} | null, for the tooltip
  * @param hud         player HUD (setMacro)
+ * @param pickAnt     (px, py) => ant id | null, the ant pin under a click (#36)
+ * @param onAntPick   (id) => void, called instead of the tool when pickAnt hits
  */
-export function createMacroMode({ camera, domElement, view, getAnt, forEachAnt, faceCrew, hud }) {
+export function createMacroMode({ camera, domElement, view, getAnt, forEachAnt, faceCrew, hud, pickAnt, onAntPick }) {
   let mode = 'play', t = 0;
   const playPos = new THREE.Vector3(), playQuat = new THREE.Quaternion();
   const fromPos = new THREE.Vector3(), fromQuat = new THREE.Quaternion();
@@ -177,7 +179,13 @@ export function createMacroMode({ camera, domElement, view, getAnt, forEachAnt, 
     const moved = Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy);
     const wasLeft = drag.button === 0;
     drag = null;
-    if (moved < 5 && wasLeft && mode === 'macro') tool.click(pickAt(e.clientX, e.clientY));
+    if (moved < 5 && wasLeft && mode === 'macro') {
+      /* #36: a click on an ant pin takes control of that ant, before the room
+         tool sees it (a pin is drawn over the room it stands in). */
+      const id = pickAnt ? pickAnt(e.clientX, e.clientY) : null;
+      if (id !== null && id !== undefined && onAntPick) onAntPick(id);
+      else tool.click(pickAt(e.clientX, e.clientY));
+    }
   }
   function onWheel(e) {
     if (mode === 'play') return;
@@ -326,6 +334,13 @@ export function createMacroMode({ camera, domElement, view, getAnt, forEachAnt, 
     founded: () => founded,
     orbit,
     target,
+    /** #36: re-aim the pose play resumes from (after taking another ant) */
+    setPlayPose(eye, aim) {
+      playPos.set(eye[0], eye[1], eye[2]);
+      _v.set(aim[0], aim[1], aim[2]);
+      _m.lookAt(playPos, _v, _up);
+      playQuat.setFromRotationMatrix(_m);
+    },
     /** the camera pose that play will resume from */
     playPose: () => ({ pos: playPos.toArray(), quat: playQuat.toArray() }),
     hovered: () => hovered,

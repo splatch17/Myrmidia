@@ -151,7 +151,8 @@ scene.traverse((obj) => {
 // synthetic bypass of the actual input pipeline. Harmless in production —
 // just two object references on window.
 window.__renderer = renderer;
-window.__ant = player.ant;
+// a getter: the ant being played moves between entities (#36)
+Object.defineProperty(window, '__ant', { get: () => player.ant, configurable: true });
 window.__rooms = world.rooms;
 window.__camera = camera;
 window.__scene = scene;
@@ -350,6 +351,15 @@ const macro = createMacroMode({
   forEachAnt: player.macroInfo.forEachAnt,
   faceCrew: player.macroInfo.faceCrew,
   hud: player.hud,
+  /* #36: a click on an ant pin in the model takes that ant and flies back
+     to it: the pose play resumes from is re-aimed at the new ant first. */
+  pickAnt: (x, y) => player.pickAntAt(x, y, { lift: 5, radius: 26 }),
+  onAntPick: (id) => {
+    if (!player.takeControl(id, 'macro')) return;
+    const p = player.playCameraPose();
+    macro.setPlayPose(p.eye, p.aim);
+    macro.toggle();
+  },
 });
 window.__macro = macro;
 
