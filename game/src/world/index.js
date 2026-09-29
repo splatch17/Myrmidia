@@ -18,8 +18,12 @@ import { RESOURCE_NODES, harvestNode, nodesNear, buildResources } from './resour
 import {
   initFounding, canFoundAt, foundNest, nestOrigin, getFoundedNest,
   populateNest, sealNest, updateFounding, digFaces, payDigFace, dugRooms,
-  nestFootprint, descentPath, _coverAt, NEST_FUNGUS,
+  nestFootprint, descentPath, _coverAt, NEST_FUNGUS, openCells, flushNestMesh, nestMeshStats, groundCoverAt,
 } from './founding.js';
+import {
+  isOpen, floorAt, volumeSpan, walkableAt, planCells, plannedCells, removePlan, isPlanned,
+  onVolumeChange, volumeVersion, brushShape, MIN_COVER,
+} from './nestVolume.js';
 import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
 import { createAtmosphere } from './atmosphere.js';
 import { buildGardenDecor } from './gardenDecor.js';
@@ -92,6 +96,9 @@ export {
   canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
   digFaces, payDigFace, dugRooms, nestFootprint, descentPath, _coverAt,
   NEST_FUNGUS,
+  openCells, flushNestMesh, nestMeshStats, groundCoverAt,
+  isOpen, floorAt, volumeSpan, walkableAt, planCells, plannedCells, removePlan, isPlanned,
+  onVolumeChange, volumeVersion, brushShape, MIN_COVER,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
 
@@ -187,7 +194,7 @@ export function createWorld() {
 
   function update(dt, elapsed, camera) {
     grass.update(dt, elapsed, camera);
-    updateFounding(dt);
+    updateFounding(dt, camera);
     atmosphere.update(elapsed);
     queen.update(elapsed);
     water.update(elapsed);

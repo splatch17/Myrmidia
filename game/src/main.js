@@ -7,6 +7,8 @@ import {
   nestInsideAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
   MUSHROOMS, ROCKS, TERRAIN_BOUNDS,
   digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundSlope, NEST_FUNGUS,
+  openCells, flushNestMesh, nestMeshStats, isOpen, floorAt, volumeSpan, walkableAt,
+  planCells, plannedCells, removePlan, isPlanned, volumeVersion, groundCoverAt,
 } from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
@@ -179,6 +181,10 @@ window.__world6 = {
   // #80: the dug rooms' fungus footprints and the garden's props
   get nestFungus() { return NEST_FUNGUS; }, get rocks() { return ROCKS; },
   get garden() { return world.garden; },
+  /* #81: the nest as a volume — free digging, the column queries the walk is
+     built on, plans, and the mesher's counters (scripts/verify-volume-81.mjs). */
+  openCells, flushNestMesh, nestMeshStats, isOpen, floorAt, volumeSpan, walkableAt,
+  planCells, plannedCells, removePlan, isPlanned, volumeVersion, groundCoverAt,
 };
 
 renderer.setResizeCallback((aspect) => {

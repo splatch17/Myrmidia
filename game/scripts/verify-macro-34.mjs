@@ -149,7 +149,8 @@ async function main() {
     const cav = []; const spoil = [];
     n.group.traverse((o) => {
       if (!o.isMesh || o.userData.macroGhost) return;
-      if (/^(founded-nest-shell|nest-room-|nest-link-)/.test(o.name)) cav.push(o.material.type);
+      // #81: the dug rooms are volume chunks (nest-volume-*) now
+      if (/^(founded-nest-shell|nest-volume-|nest-room-|nest-link-)/.test(o.name)) cav.push(o.material.type);
       if (/^nest-(mound|heap-|berm-|pan)/.test(o.name)) spoil.push(o.visible);
     });
     return {
@@ -249,7 +250,7 @@ async function main() {
     const w = window.__world;
     const n = window.__world6.getFoundedNest();
     let cav = 0;
-    n.group.traverse((o) => { if (o.isMesh && /^nest-room-/.test(o.name) && (o.userData.macroGhost ? o.visible : o.material.type === 'ShaderMaterial')) cav++; });
+    n.group.traverse((o) => { if (o.isMesh && /^(nest-volume-|nest-room-)/.test(o.name) && (o.userData.macroGhost ? o.visible : o.material.type === 'ShaderMaterial')) cav++; });
     return {
       p: window.__camera.position.toArray(), q: window.__camera.quaternion.toArray(),
       lawn: w.surface.lawn.visible, grass: w.surface.grass.visible, cav,

@@ -1,6 +1,17 @@
 import { vnoise, clamp, lerp } from '../core/noise.js';
+import { walkableAt, volumeTopAt, volumeVersion } from './nestVolume.js';
 
 /* ==========================================================================
+   #81 — WHAT CHANGED. Everything ROOFED (the chamber, its doorway, the rooms
+   and corridors the dig faces open, anything dug freely later) is no longer
+   a list of shapes tested one by one: it is the density volume of
+   world/nestVolume.js, and the footprint below (floor, headroom, the top of
+   the built shell) is read from it. What stays analytic here is the OPEN CUT
+   — the ramp down from the meadow, which is open to the sky and so is not
+   earth anyone dug a cavity into — and the rooms/links/faces lists, which are
+   now METADATA: what a room is called, how big it was planned, where its
+   spoil heap goes. They no longer say where the floor is.
+
    What has been dug, as a height field (#41; design/api-monde-gameplay.md §6).
 
    WHY THIS FILE EXISTS AT ALL, rather than living in world/founding.js.
@@ -211,6 +222,25 @@ export const APRON_FLARE = 2.4;
 export function hwAt(ex, u) {
   const t = clamp(1 - u / APRON_LEN, 0, 1);
   return ex.hw * (1 + (APRON_FLARE - 1) * t * t);
+}
+
+/* ---- the cut's ragged edge (#81, porter's note) --------------------------
+   "Les bords de la tranchée sont très droits": the foot of the cut's battered
+   face ran exactly hwAt() off the centre line, so both edges of the trench
+   were two ruled arcs. Each side now has its own low-frequency wander,
+   OUTWARD only (0..CUT_JITTER), so the floor it widens is still floor —
+   rampParam() walks it, founding.js's sheet draws it — and nothing that was
+   walkable becomes wall. Two octaves: a slow bay every dozen units and a
+   bite every few, which is the scale at which a dug bank reads as dug. */
+export const CUT_JITTER = 3.2;
+export function cutJitterAt(ex, u, side) {
+  const s = (ex.seed % 997) + (side > 0 ? 71.3 : 13.7);
+  const n = 0.68 * vnoise(u * 0.085 + s, s * 0.37) + 0.32 * vnoise(u * 0.26 + s * 1.7, s * 0.11 + 5);
+  return CUT_JITTER * clamp((n - 0.18) / 0.64, 0, 1);
+}
+/** Walkable half-width of the cut at `u` on the side of `lat`. */
+export function cutHalfWidth(ex, u, lat) {
+  return hwAt(ex, u) + cutJitterAt(ex, u, lat < 0 ? -1 : 1);
 }
 
 /* ---- the meadow, baked (#69) --------------------------------------------
@@ -450,64 +480,57 @@ export function archK(k) {
   return SPRINGER + (1 - SPRINGER) * Math.sqrt(Math.max(0, 1 - k * k));
 }
 
-/** Published clear height in a room at plan distance d from its centre. */
-function roomCeilAt(room, d) {
-  const Rd = room.r * WALL_OUT;
-  const q = d / Rd;
-  return room.wall + (room.roof - room.wall) * Math.sqrt(Math.max(0, 1 - q * q)) - CEIL_MARGIN;
-}
-
-/** Published clear height in a corridor at lateral offset `lat`. */
-function linkCeilAt(L, lat) {
-  return L.roof * archK(Math.abs(lat) / (L.hw * TUNNEL_BORE)) - CEIL_MARGIN;
+/**
+ * Is (x, z) in the part of the cut that is open to the sky past the chamber's
+ * headwall — where the cut's own sheet and the spoil mound's carved doorway
+ * draw the ground, and the volume must not (#81)? `pad` pushes the boundary
+ * outward from the headwall, so the volume's floor runs a little way under
+ * the mound's instead of stopping short of it. Only up to just short of the
+ * chamber's centre along the cut: past it the ground belongs to whatever was
+ * dug beyond the chamber, and clipping there would cut a hole in it.
+ */
+export function inOpenCutPastDoor(x, z, pad = 0) {
+  const ex = EX;
+  if (!ex) return false;
+  if (Math.hypot(x - ex.chamber.x, z - ex.chamber.z) <= chamberDoorR(ex) + pad) return false;
+  const o = rampOffset(ex, x, z, 40);
+  if (!o || o.u > ex.arc.len - 2) return false;
+  return Math.abs(o.lat) <= o.hw + CUT_JITTER + 7.5;
 }
 
 /**
  * The highest point of any built shell over (x, z), or null where nothing is
  * built. An UPPER bound, which is the direction a cover needs: a mound that
  * clears this clears the mesh. (The published ceiling is the lower bound, the
- * direction a camera needs.)
+ * direction a camera needs.) Read from the volume since #81, so a free dig is
+ * covered by the same arithmetic as a planned room.
  */
 export function excavationShellTopAt(x, z) {
-  const ex = EX;
-  if (!ex) return null;
-  let top = null;
-  const c1 = Math.cos(Math.PI / 2 / DOME_RINGS), s1 = Math.sin(Math.PI / 2 / DOME_RINGS);
-  for (const r of ex.rooms) {
-    const d = Math.hypot(x - r.x, z - r.z);
-    const Rd = r.r * WALL_OUT;
-    if (d > r.r * (WALL_OUT + WALL_WOBBLE) + 0.5) continue;
-    const dh = r.roof - r.wall;
-    /* Past the first dome ring the facet runs from the wobbled wall top to
-       that ring, and never higher than the ring itself. */
-    const y = roomFloorY(ex, r) + (d < Rd * c1 ? r.wall + dh * Math.sqrt(1 - (d / Rd) ** 2) : r.wall + dh * s1);
-    top = top === null ? y : Math.max(top, y);
-  }
-  for (const L of ex.links) {
-    const s = (x - L.ax) * L.hx + (z - L.az) * L.hz;
-    if (s < 0 || s > L.len) continue;
-    const grow = mouthFlareAt(ex, L, s) * (1 + TUNNEL_LUMP);
-    const lat = -(x - L.ax) * L.hz + (z - L.az) * L.hx;
-    const bore = L.hw * TUNNEL_BORE * grow;
-    if (Math.abs(lat) > bore + 0.5) continue;
-    const y = linkFloorY(ex, L, s) + L.roof * grow;
-    top = top === null ? y : Math.max(top, y);
-  }
-  return top;
+  if (!EX) return null;
+  if (inOpenCutPastDoor(x, z, 1.0)) return null;
+  return volumeTopAt(x, z);
 }
 
-/** Where a point sits in a link's frame, or null if it is not in it. */
-function inLink(L, x, z) {
-  const s = (x - L.ax) * L.hx + (z - L.az) * L.hz;
-  if (s < -L.hw || s > L.len + L.hw) return null;
-  const lat = -(x - L.ax) * L.hz + (z - L.az) * L.hx;
-  return Math.abs(lat) <= L.hw ? { s, lat } : null;
+/* The footprint reads the same column three times in a row (contains, floor,
+   headroom) and the controller asks for the same point again next frame, so
+   the last few answers are kept until the volume changes. */
+const standMemo = new Map();
+let standMemoVer = -1;
+function standAt(x, z) {
+  const ver = volumeVersion();
+  if (ver !== standMemoVer) { standMemo.clear(); standMemoVer = ver; }
+  const k = `${x},${z}`;
+  if (standMemo.has(k)) return standMemo.get(k);
+  const s = walkableAt(x, z);
+  if (standMemo.size > 256) standMemo.clear();
+  standMemo.set(k, s);
+  return s;
 }
 
-/** The room containing (x, z), or null. */
-function roomAt(ex, x, z) {
-  for (const r of ex.rooms) if (Math.hypot(x - r.x, z - r.z) <= r.r) return r;
-  return null;
+/** Is (x, z) under the chamber's headwall or inside it — i.e. ground the
+ *  volume answers for even though the cut's own parameters cover it? */
+function underHeadwall(ex, x, z) {
+  return Math.hypot(x - ex.chamber.x, z - ex.chamber.z) <= chamberDoorR(ex);
 }
 
 function pointOnArc(A, R, a0, s, u) {
@@ -548,20 +571,12 @@ export function rampOffset(ex, x, z, uPad = 0) {
   return { u: cu, lat: Math.hypot(vx, vz) - R, hw: hwAt(ex, cu) };
 }
 
-/** (u, lat) of a world point that is actually IN the cut, else null. */
+/** (u, lat) of a world point that is actually IN the cut, else null. The
+ *  width is the ragged one (cutHalfWidth), so the floor the sheet draws past
+ *  the nominal edge is floor she can walk on. */
 export function rampParam(ex, x, z) {
   const o = rampOffset(ex, x, z);
-  return o && Math.abs(o.lat) <= o.hw ? o : null;
-}
-
-/** Ceiling of the chamber's dome at a world point, or null outside it. Shared
- *  with the mesh so the spoil heaped on top can be guaranteed to cover it —
- *  a mound built from its own guess left the dome showing through as a dark
- *  band across the heap. */
-export function chamberRoofAt(ex, x, z) {
-  const d = Math.hypot(x - ex.chamber.x, z - ex.chamber.z);
-  if (d >= ex.chamber.r) return null;
-  return ex.floorY + roomCeilAt(ex.chamber, d);
+  return o && Math.abs(o.lat) <= cutHalfWidth(ex, o.u, o.lat) ? o : null;
 }
 
 /** Floor height in the cut. Split out so the mesh builder can use exactly the
@@ -607,43 +622,29 @@ export function linkFloorAt(ex, L, x, z) {
   return linkFloorY(ex, L, s) + floorGrainAt(ex, x, z);
 }
 
-/** Inside of the chamber's plan disc. */
-export function inChamber(ex, x, z) {
-  return Math.hypot(x - ex.chamber.x, z - ex.chamber.z) <= ex.chamber.r;
-}
-
 /**
  * THE function terrain.js's groundY() defers to: the floor of the excavation
  * at (x, z), or null if nothing has been dug there.
  *
- * The deepest contributor wins. min() of continuous pieces is continuous, so
- * where the cut runs into the chamber there is no step to fall down — which
- * matters, because a step here is a teleport in play, not a stumble.
+ * Two sources, and they never both answer for the same point: the open cut
+ * (analytic, up to the chamber's headwall) and the volume (everything roofed,
+ * the headwall's doorway included). They agree where they meet because the
+ * volume's doorway is carved with rampFloorAt() itself (founding.js
+ * paintChamber) — a step between the two would be a teleport in play, not a
+ * stumble.
+ *
+ * The volume's answer is its LOWEST walkable span, which is the old "deepest
+ * contributor wins" and is right as long as nothing is dug over something
+ * else. A caller that knows its own height and wants the floor it is standing
+ * on in a stacked nest asks world/nestVolume.js floorAt(x, z, y) (#81).
  */
 export function excavationFloorAt(x, z) {
   const ex = EX;
   if (!ex) return null;
-  let y = null;
   const rp = rampParam(ex, x, z);
-  if (rp) y = rampFloorAt(ex, x, z, rp.u, rp.lat);
-  /* The deepest contributor wins, and since #62 they are no longer all at the
-     same level: each generation of rooms is dug a notch lower and its corridor
-     ramps down to it. min() of continuous pieces is still continuous, which is
-     the only property that matters — a step between two dug pieces is a
-     teleport in play, not a stumble. What makes the pieces agree is that a
-     corridor's ramp is flat inside both rooms it joins (linkFloorY): the two
-     always answer the same height where they overlap. */
-  for (const r of ex.rooms) {
-    if (Math.hypot(x - r.x, z - r.z) > r.r) continue;
-    const fy = roomFloorAt(ex, r, x, z);
-    y = y === null ? fy : Math.min(y, fy);
-  }
-  for (const L of ex.links) {
-    if (!inLink(L, x, z)) continue;
-    const fy = linkFloorAt(ex, L, x, z);
-    y = y === null ? fy : Math.min(y, fy);
-  }
-  return y;
+  if (rp && !underHeadwall(ex, x, z)) return rampFloorAt(ex, x, z, rp.u, rp.lat);
+  const s = standAt(x, z);
+  return s ? s.floor : null;
 }
 
 /**
@@ -651,34 +652,16 @@ export function excavationFloorAt(x, z) {
  * the sky. Finite means there is soil overhead — which is exactly the test a
  * caller needs in order to tell "I am in the nest" from "I am standing on the
  * meadow above the nest", the one case a height field cannot answer by itself.
+ * Under the headwall and everywhere roofed, it is the volume's own clear
+ * height over the floor, less CEIL_MARGIN for a camera's near plane.
  */
 export function excavationHeadroomAt(x, z) {
   const ex = EX;
   if (!ex) return 0;
-  const floor = excavationFloorAt(x, z);
-  if (floor === null) return 0;
-  /* The chamber is tested FIRST, before the cut. The cut's last stretch runs
-     into the middle of the chamber, and answering Infinity there would say the
-     chamber is open to the sky along a corridor's width — which is exactly
-     what the mesh did before it was corrected, an open slot straight through
-     the apex of the spoil heap. The chamber is roofed; the doorway is an arch
-     through its wall, and CHAMBER_WALL is what makes that arch tall enough. */
-  const room = roomAt(ex, x, z);
-  if (room) return roomCeilAt(room, Math.hypot(x - room.x, z - room.z));
-  /* The doorway the cut arrives through has a thickness: the wall, and the
-     headwall of the spoil mound standing just outside it. Under that lintel
-     the cut is roofed, and saying Infinity there let a camera rise into it. */
-  if (Math.hypot(x - ex.chamber.x, z - ex.chamber.z) <= chamberDoorR(ex) && rampParam(ex, x, z)) {
-    return ex.chamber.wall - CEIL_MARGIN;
-  }
-  let best = null;
-  for (const L of ex.links) {
-    const p = inLink(L, x, z);
-    if (p) best = Math.max(best ?? -Infinity, linkCeilAt(L, p.lat));
-  }
-  if (best !== null) return best;
-  // open cut: nothing overhead at all
-  return Infinity;
+  const rp = rampParam(ex, x, z);
+  if (rp && !underHeadwall(ex, x, z)) return Infinity;   // open cut
+  const s = standAt(x, z);
+  return s ? s.ceil - s.floor - CEIL_MARGIN : 0;
 }
 
 /* ---- dig faces ---------------------------------------------------------

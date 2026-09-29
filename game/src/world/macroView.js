@@ -159,7 +159,7 @@ function shellMaterial() {
   });
 }
 
-const CAVITY = /^(founded-nest-shell|nest-room-|nest-link-)/;
+const CAVITY = /^(founded-nest-shell|nest-volume-|nest-room-|nest-link-)/;
 const SURFACE_BITS = /^nest-(mound|heap-|berm-|pan)/;
 
 /**

@@ -439,3 +439,106 @@ second mode.
 fourmilière »), puis nid à trois salles, trois angles d'orbite, zoom, survol +
 infobulle, clic → sélection, retour sur la pose de jeu à 0,1 unité près,
 ≥ 60 i/s en maquette à 1280×800, aucune erreur console.
+
+## 11. Le nid en volume libre — round 23 (#81, fondation)
+
+Ajouté par Atta avec le ticket, à la demande de l'intégrateur. Rien de §6–§10
+n'est renommé : ce qui change est **d'où viennent les réponses**.
+
+### Ce qui change de forme
+
+Tout ce qui est **sous un toit** (la chambre, sa porte, les salles et couloirs
+ouverts par les fronts, tout ce qui sera creusé librement) est un **volume** :
+une densité signée sur une grille de 1 unité (négatif = air creusé), en blocs
+de 16³ alloués seulement où l'on a creusé (`world/nestVolume.js`). La paroi est
+le passage par zéro, maillée par *surface nets* bloc par bloc
+(`world/nestVolumeMesh.js`), remaillée seulement là où le volume a changé et
+sous un budget par image. Creuser = `min(densité, pinceau)` : idempotent.
+
+La **tranchée à ciel ouvert** reste analytique (`world/excavation.js`) : elle
+n'est pas une cavité, elle est ouverte sur le ciel. Ses bords sont désormais
+irréguliers (`cutJitterAt`, vers l'extérieur seulement, donc tout ce qui était
+praticable le reste).
+
+`rooms` / `links` / `faces` (§7) restent, comme **métadonnées** : nom, taille,
+tas de déblais, lampes, tests de placement des plans suivants. Ils ne disent
+plus où est le sol.
+
+### Ce que `world/**` livre (réexporté par `world/index.js`)
+
+```
+openCells(brush)        -> number   cellules ouvertes (terre -> air). Creuse
+                                    et remaille (budgété), étire l'obscurité
+                                    du nid jusqu'à ce qui est creusé.
+                                    Idempotent. Rien avant la fondation.
+isOpen(x, y, z)         -> boolean  air creusé ?
+floorAt(x, z, nearY?)   -> number | null
+                                    sol de l'espace ouvert qui contient nearY
+                                    (ou du premier sous lui) ; sans nearY, le
+                                    plus bas. C'est la requête d'un nid
+                                    empilé : groundY(x, z) reste 2D et
+                                    répond le plus bas.
+volumeSpan(x, z, nearY?) -> { floor, ceil } | null
+walkableAt(x, z, nearY?) -> { floor, ceil } | null
+                                    là où la reine tient : hauteur >= 6, et
+                                    corps à >= 1,3 de la paroi à 2,5 du sol.
+planCells(brush)        -> { id, cells }   un plan (fantôme), stocké, PAS
+                                    creusé — la prise pour #82
+plannedCells()          -> [{ id, brush, cells }]
+removePlan(id)          -> boolean
+isPlanned(x, y, z)      -> boolean  dans un plan et pas encore creusé
+onVolumeChange(fn)      -> unsubscribe   fn({ kind: 'open'|'plan'|'unplan'|
+                                    'clear', ... }) ; 'open' porte les blocs
+                                    touchés
+volumeVersion()         -> number   change à chaque creusement
+brushShape(brush)       -> { sdf, box }  la forme exacte que creusera le
+                                    pinceau (aperçu fantôme de #82)
+flushNestMesh()         // remaille tout de suite (harnais, boucle arrêtée)
+nestMeshStats()         -> { meshes, tris, verts, pending, ... }
+MIN_COVER               // 3 : terre gardée sous la pelouse par défaut
+```
+
+`brush` = données pures (sérialisable, pour un plan envoyé au serveur) :
+
+```
+{ center: [x,y,z] | {x,y,z}, radius,
+  end?: [x,y,z],          // capsule center -> end
+  endRadius?,             // capsule effilée
+  floor?: true | y | [a, b],   // sol plat : true = 0,55 r sous l'axe,
+                               // un y absolu, ou une rampe du centre au bout
+  noise?,                 // grain de paroi (vers l'extérieur), défaut 14 % de r
+  cover?: number | null } // terre gardée sous la pelouse, défaut MIN_COVER ;
+                          // null = aucune (réservé au monde : ses salles ont
+                          // un tas de déblais)
+```
+
+**Inchangés, et adossés au volume** : `groundY`, `nestFootprint()` (contains /
+floorY / headroom), `descentPath()`, `digFaces()`, `payDigFace()`,
+`advanceDigFace()`, `dugRooms()`, `NEST_FUNGUS`, `LAMP_GLOWS`. Un front
+**creuse désormais au fil de sa jauge** : le couloir avance du front vers la
+salle prévue sur la première moitié, la salle se creuse depuis sa porte sur la
+seconde. `dugRooms()` ne la nomme qu'une fois le front fini, comme avant
+(`opened` inchangé). `containUnderground` / `profileR` restent ceux du vieux nid
+pré-construit (non affiché) et ne concernent pas le nid fondé.
+
+### Ce que `player/**` livre en face
+
+- **Rien d'obligatoire** : la marche, la caméra, les pattes lisent déjà
+  `groundY` / `nestFootprint()`.
+- **#83 (creuser à la main)** : appeler `openCells({ center, radius, floor })`
+  depuis la fouisseuse contrôlée ; `onVolumeChange` pour réagir (trouvailles
+  #87). Un creusement qui passe **au-dessus** d'une salle existante demande
+  `floorAt(x, z, ant.y)` plutôt que `groundY` : c'est le seul cas où la
+  réponse 2D n'est plus la bonne.
+- **#82 (plans en macro)** : `planCells(brush)` stocke le fantôme ;
+  `brushShape(brush).sdf` le dessine ; le chantier le creuse en appelant
+  `openCells` avec un pinceau qui grandit (min() est idempotent : ré-appliquer
+  un pinceau plus grand ne recreuse que la différence).
+
+### Critère de fin
+
+`scripts/verify-volume-81.mjs` : fondation en volume, tunnel en L et salle
+irrégulière creusés au pinceau, praticables hors ligne médiane, sous toit ; la
+reine y entre au clavier et reste au sol ; ≥ 50 i/s en creusant à chaque
+image ; captures en jeu (dont la porte en gros plan et les bords de la
+tranchée) et en maquette.
