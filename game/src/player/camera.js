@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { clamp, damp, lerp } from '../core/noise.js';
-import { profileR, groundY, getRoomBranches, QUEEN, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R } from '../world/index.js';
+import { isOpen, profileR, groundY, getRoomBranches, QUEEN, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R } from '../world/index.js';
 import { floorUnder } from './legs.js';
 // wallPoint()/riseAt() are exported by world/underground.js but not re-exported
 // by the world barrel; imported directly rather than editing world/* (Atta's
@@ -256,6 +256,90 @@ function clampEyeToNest(eye, fp, ant) {
   return moved;
 }
 
+/* ---- the camera against the nest VOLUME (#91) -----------------------------
+   The nest is no longer rooms and a footprint but a signed-density volume
+   (world/nestVolume.js), and a narrow room dug at run time has walls the 2D
+   footprint cannot see: the old boom shortened itself against "is the eye
+   inside the footprint" and, in a small deep room, collapsed onto the ant's
+   back (a capture showed only the queen's abdomen). So the boom is marched
+   through the volume itself, in small steps, and stops where the eye (plus a
+   margin of clearance) would touch earth. When the boom behind her is short
+   the shot tilts up over her (steeper pitch), then lowers the lift, and only
+   then is the ant faded (see `fade`) so a camera that still ends inside her
+   shows the room, not her abdomen. */
+const EYE_CLEAR = 0.9;
+const BOOM_STEP = 0.7;
+
+function nestHead(ant) {
+  const s = ant.scale || 1;
+  return [ant.x, floorUnder(ant, ant.x, ant.z) + 2.6 * s, ant.z];
+}
+
+/** Open air at a point for the camera: the volume, or the trench open to the sky. */
+function nestOpen(fp, x, y, z, ny) {
+  if (isOpen(x, y, z)) return true;
+  if (!fp.contains(x, z, ny)) return false;
+  return !Number.isFinite(fp.headroom(x, z, ny)) && y > fp.floorY(x, z, ny) + 0.3;
+}
+
+/** Open with clearance all round the eye (centre + above/below + 2 sides). */
+function eyeClear(fp, x, y, z, ny, rx, rz) {
+  const c = EYE_CLEAR;
+  return nestOpen(fp, x, y, z, ny) && nestOpen(fp, x, y + c, z, ny) && nestOpen(fp, x, y - c * 0.6, z, ny)
+    && nestOpen(fp, x + rx * c, y, z + rz * c, ny) && nestOpen(fp, x - rx * c, y, z - rz * c, ny);
+}
+
+/** How far out along the boom (<= dWant) the eye still has clear air. */
+function freeBoom(fp, head, camYaw, pitch, dWant, ant, lift) {
+  const rx = Math.cos(camYaw), rz = -Math.sin(camYaw);
+  const s = ant.scale || 1;
+  let free = 0;
+  for (let d = 0; d <= dWant + 1e-6; d += BOOM_STEP) {
+    const e = eyeAt(head, camYaw, pitch, d, s * lift);
+    if (!eyeClear(fp, e[0], e[1], e[2], ant.y, rx, rz)) break;
+    free = d;
+  }
+  return free;
+}
+
+/** Shot in the nest: longest clear boom at the asked pitch, else tilt up, else
+ *  lower the lift. Returns { pitch, d, lift }. */
+function nestShot(fp, head, camYaw, wantPitch, dWant, ant) {
+  const s = ant.scale || 1;
+  let best = null;
+  for (const lift of [1, 0.45]) {
+    for (let i = 0; i < PITCH_FALLBACKS.length; i++) {
+      const pitch = Math.max(wantPitch - PITCH_FALLBACKS[i], MAX_PITCH_DOWN);
+      const free = freeBoom(fp, head, camYaw, pitch, dWant, ant, lift);
+      if (free >= dWant - 1e-6) return { pitch, d: free, lift };
+      // a little preference for the asked pitch, none for a shorter boom
+      const score = free - i * 0.6 - (lift < 1 ? 1.5 : 0);
+      if (!best || score > best.score) best = { pitch, d: free, lift, score };
+      if (pitch <= MAX_PITCH_DOWN) break;
+    }
+  }
+  best.d = Math.max(best.d, Math.min(MIN_D * 0.5 * s, dWant));
+  return best;
+}
+
+/** Pulls `eye` (mutated) toward the head until it has clear air. Returns how
+ *  far it moved, for callers that judge the fit. */
+function pullEyeIn(eye, head, fp, ant) {
+  const rx = 1, rz = 0;
+  if (eyeClear(fp, eye[0], eye[1], eye[2], ant.y, rx, rz)) return 0;
+  const x0 = eye[0], y0 = eye[1], z0 = eye[2];
+  let lo = 0, hi = 1;   // 0 = at the head, 1 = at the eye
+  for (let i = 0; i < 8; i++) {
+    const m = (lo + hi) * 0.5;
+    const x = head[0] + (x0 - head[0]) * m, y = head[1] + (y0 - head[1]) * m, z = head[2] + (z0 - head[2]) * m;
+    if (eyeClear(fp, x, y, z, ant.y, rx, rz)) lo = m; else hi = m;
+  }
+  eye[0] = head[0] + (x0 - head[0]) * lo;
+  eye[1] = head[1] + (y0 - head[1]) * lo;
+  eye[2] = head[2] + (z0 - head[2]) * lo;
+  return Math.hypot(eye[0] - x0, eye[1] - y0, eye[2] - z0);
+}
+
 function containCameraEye(eye, ant, cav) {
   const fp = nestFootprint();
   /* The whole excavation, roofed end and open cut alike. The cut was tried as
@@ -267,7 +351,10 @@ function containCameraEye(eye, ant, cav) {
      (clampEyeToNest reads headroom, so it does not clamp what has no roof) and
      therefore a camera that can rise out of the trench rather than one pressed
      under a lid that is not there. */
-  if (fp && fp.contains(ant.x, ant.z)) return clampEyeToNest(eye, fp, ant);
+  if (fp && fp.contains(ant.x, ant.z, ant.y)) {
+    if (fp.approx) return clampEyeToNest(eye, fp, ant);
+    return pullEyeIn(eye, nestHead(ant), fp, ant);
+  }
   if (ant.z < TUNNEL_MOUTH - 2) {
     pushEyeOffQueen(eye);
     return clampEyeToCavity(eye, cav || cavityAt(ant));
@@ -354,13 +441,23 @@ export function desiredCamera(ant, camYaw, wantPitch, camDist) {
   // avatar, the room term does not — a gallery is as wide as it is whoever
   // is walking down it
   const dWant = enclosed ? Math.min(camDist, Math.max(13.5 * s, room * 1.5)) : camDist;
-  const shot = enclosed
-    ? fittedShot(head, camYaw, wantPitch, dWant, ant, cav)
-    : { pitch: wantPitch, d: dWant };
-  const eye = eyeAt(head, camYaw, shot.pitch, shot.d, s);
+  const volumeNest = inNest && !fp.approx;
+  const shot = volumeNest
+    ? nestShot(fp, head, camYaw, wantPitch, dWant, ant)
+    : enclosed
+      ? fittedShot(head, camYaw, wantPitch, dWant, ant, cav)
+      : { pitch: wantPitch, d: dWant };
+  const eye = eyeAt(head, camYaw, shot.pitch, shot.d, s * (shot.lift === undefined ? 1 : shot.lift));
   containCameraEye(eye, ant, cav);
-  const aim = [head[0] + Math.sin(ant.yaw) * 3 * s, head[1] + 0.4 * s, head[2] + Math.cos(ant.yaw) * 3 * s];
-  return { eye, aim };
+  /* When the boom had to be cut short the room is in FRONT of her: aim further
+     ahead so the shot reads the room she is walking into, not her back. */
+  const lead = volumeNest ? 3 + 3 * clamp(1 - shot.d / Math.max(1, dWant), 0, 1) : 3;
+  const aim = [head[0] + Math.sin(ant.yaw) * lead * s, head[1] + 0.4 * s, head[2] + Math.cos(ant.yaw) * lead * s];
+  /* 1 = draw her whole; shrinks with the eye's distance so her body spans at most ~70% of the view, so
+     a cramped room shows the room and not her abdomen. */
+  const dEye = Math.hypot(eye[0] - head[0], eye[1] - head[1], eye[2] - head[2]);
+  const fade = clamp(0.7 * dEye / (9 * s), 0.1, 1);
+  return { eye, aim, fade };
 }
 
 /**
@@ -373,7 +470,7 @@ export function createCameraRig(camera) {
   // frame's eye/aim to build camera-relative input, same ordering as the old
   // prototype's frame(): wish direction uses the *previous* frame's camEye/
   // camAim, camera itself re-targets afterwards, once the ant has moved.
-  const rig = { eye: null, aim: null, glide: 0 };
+  const rig = { eye: null, aim: null, glide: 0, fade: 1 };
 
   /* `shot` (optional) is a {eye, aim, cut} the caller has composed itself —
      the founding sequence (player/laying.js), which puts the camera down a
@@ -386,6 +483,8 @@ export function createCameraRig(camera) {
      of damping, for the two places the sequence changes vantage point. */
   function update(ant, camYaw, wantPitch, camDist, dt, shot) {
     const want = shot || desiredCamera(ant, camYaw, wantPitch, camDist);
+    // smoothed so the ant swells back rather than popping when the boom clears
+    rig.fade = damp(rig.fade === undefined ? 1 : rig.fade, shot ? 1 : want.fade, 8, dt || 1);
     if (!rig.eye || (shot && shot.cut)) { rig.eye = want.eye.slice(); rig.aim = want.aim.slice(); }
     /* #36: after control moves to another ant the boom glides over instead of
        snapping — the same damping, just slower for about a second and a half,

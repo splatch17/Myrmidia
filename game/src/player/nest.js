@@ -141,9 +141,10 @@ function build() {
   const real = typeof W.nestFootprint === 'function' ? W.nestFootprint() : null;
   if (real && typeof real.contains === 'function') {
     return {
-      contains: (x, z) => real.contains(x, z),
-      floorY: (x, z) => real.floorY(x, z),
-      headroom: (x, z) => (typeof real.headroom === 'function' ? real.headroom(x, z) : 8),
+      // nearY (#91): the caller's height, which picks the floor in a stacked nest
+      contains: (x, z, y) => real.contains(x, z, y),
+      floorY: (x, z, y) => real.floorY(x, z, y),
+      headroom: (x, z, y) => (typeof real.headroom === 'function' ? real.headroom(x, z, y) : 8),
       approx: false,
       landmarks: landmarksOf(n, g),
     };
@@ -177,7 +178,7 @@ export function insideNest(x, z) {
  * the exact duplication design/api-monde-gameplay.md was written to stop. It
  * also means this works unchanged against the real footprint and the stand-in.
  */
-export function boundaryNormal(fp, bx, bz, probe = 1.2) {
+export function boundaryNormal(fp, bx, bz, probe = 1.2, ny) {
   /* Estimated by sampling contains() on a ring, not by asking the world for a
      wall normal — for the same reason boundaryBetween() bisects: any other way
      means a second copy of the nest's geometry inside player/**, which is the
@@ -190,7 +191,7 @@ export function boundaryNormal(fp, bx, bz, probe = 1.2) {
   for (let i = 0; i < 16; i++) {
     const a = (i / 16) * Math.PI * 2;
     const dx = Math.cos(a), dz = Math.sin(a);
-    if (!fp.contains(bx + dx * probe, bz + dz * probe)) { nx += dx; nz += dz; out++; }
+    if (!fp.contains(bx + dx * probe, bz + dz * probe, ny)) { nx += dx; nz += dz; out++; }
   }
   if (!out) return null;                       // nothing outside: not an edge
   const l = Math.hypot(nx, nz);
@@ -198,11 +199,11 @@ export function boundaryNormal(fp, bx, bz, probe = 1.2) {
   return [nx / l, nz / l];
 }
 
-export function boundaryBetween(fp, ix, iz, ox, oz, steps = 10) {
+export function boundaryBetween(fp, ix, iz, ox, oz, steps = 10, ny) {
   let ax = ix, az = iz, bx = ox, bz = oz;
   for (let i = 0; i < steps; i++) {
     const mx = (ax + bx) * 0.5, mz = (az + bz) * 0.5;
-    if (fp.contains(mx, mz)) { ax = mx; az = mz; } else { bx = mx; bz = mz; }
+    if (fp.contains(mx, mz, ny)) { ax = mx; az = mz; } else { bx = mx; bz = mz; }
   }
   return [ax, az];
 }

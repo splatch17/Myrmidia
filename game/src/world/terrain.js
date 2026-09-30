@@ -272,7 +272,7 @@ function generalRelief(x, z) {
  * mouth it hands over to undergroundFloor(), and the two are cross-faded
  * around the mouth so the seam has no step in it.
  */
-export function groundY(x, z) {
+export function groundY(x, z, nearY) {
   if (z < TUNNEL_MOUTH) return undergroundFloor(x, z);
   /* #41 / contract 6. Inside a nest dug at run time this answers the nest
      floor, and that is the whole of the change the player half needed: the
@@ -280,7 +280,7 @@ export function groundY(x, z) {
      already and all follow it down without knowing anything new.
      world/excavation.js owns the shape; nothing is imported back from
      founding.js, which would be a cycle. */
-  const dug = excavationFloorAt(x, z);
+  const dug = excavationFloorAt(x, z, nearY);
   if (dug !== null) return dug;
   return lawnY(x, z);
 }

@@ -1,3 +1,4 @@
+import { makeNavState, navTarget, tickNav } from './nestPath.js';
 import { groundY, RESOURCE_NODES, harvestNode, nestOrigin, digFaces, payDigFace } from '../world/index.js';
 import { WORKER, DIGGER, profileById, strideOf, collideRadius } from './avatar.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
@@ -240,8 +241,13 @@ export function createColony({ plans = null } = {}) {
     if (!face) { w.atFace = false; a.speed = 0; return; }
 
     const stand = { x: face.x + face.nx * standoffOf(face), z: face.z + face.nz * standoffOf(face) };
-    const dx = stand.x - a.x, dz = stand.z - a.z;
-    const d = Math.hypot(dx, dz);
+    const d = Math.hypot(stand.x - a.x, stand.z - a.z);
+    /* #91: steer at the next waypoint of a path through the open cells, not at
+       the front itself - with a bend in the tunnel the straight line is earth. */
+    if (!w.nav) w.nav = makeNavState();
+    tickNav(w.nav, dt);
+    const wp = d > siteROf(face) ? navTarget(w.nav, a, stand.x, stand.z) : stand;
+    const dx = wp.x - a.x, dz = wp.z - a.z;
 
     if (d <= siteROf(face)) {
       a.speed = 0;
@@ -257,7 +263,7 @@ export function createColony({ plans = null } = {}) {
       a.z += Math.cos(a.yaw) * step;
       a.travel += step;
     }
-    a.y = groundY(a.x, a.z);
+    a.y = groundY(a.x, a.z, a.y);
     a.bob = Math.sin(a.travel * (Math.PI * 2 / strideOf(DIGGER)) * 2) * 0.13
           * Math.min(1, a.speed / 8);
     updateLegs(a, w.legState, dt, DIGGER);
@@ -331,7 +337,7 @@ export function createColony({ plans = null } = {}) {
       a.travel += step;
     }
 
-    a.y = groundY(a.x, a.z);
+    a.y = groundY(a.x, a.z, a.y);
     a.bob = Math.sin(a.travel * (Math.PI * 2 / strideOf(WORKER)) * 2) * 0.13
           * Math.min(1, a.speed / 8);
     updateLegs(a, w.legState, dt, WORKER);

@@ -662,13 +662,27 @@ export function linkFloorAt(ex, L, x, z) {
  * else. A caller that knows its own height and wants the floor it is standing
  * on in a stacked nest asks world/nestVolume.js floorAt(x, z, y) (#81).
  */
-export function excavationFloorAt(x, z) {
+export function excavationFloorAt(x, z, nearY) {
   const ex = EX;
   if (!ex) return null;
   const rp = rampParam(ex, x, z);
-  if (rp && !underHeadwall(ex, x, z)) return rampFloorAt(ex, x, z, rp.u, rp.lat);
+  if (rp && !underHeadwall(ex, x, z)) {
+    const cut = rampFloorAt(ex, x, z, rp.u, rp.lat);
+    const low = nearY === undefined ? undefined : stackedBelowCut(x, z, nearY, cut);
+    return low === undefined ? cut : low ? low.floor : null;
+  }
   const s = standAt(x, z);
   return s ? s.floor : null;
+}
+
+/** #91: a room dug under the trench shares (x, z) with the cut's floor. For a
+ *  caller standing more than 2.5 under the cut's floor this is the span she
+ *  stands in there (null = solid earth at her height: the trench is overhead,
+ *  not underfoot). Undefined when the caller is at the trench's level. */
+function stackedBelowCut(x, z, nearY, cut) {
+  if (nearY >= cut - 2.5) return undefined;
+  const s = walkableAt(x, z, nearY);
+  return s && s.floor < cut - 2.5 && nearY <= s.ceil ? s : null;
 }
 
 /**
@@ -679,12 +693,16 @@ export function excavationFloorAt(x, z) {
  * Under the headwall and everywhere roofed, it is the volume's own clear
  * height over the floor, less CEIL_MARGIN for a camera's near plane.
  */
-export function excavationHeadroomAt(x, z) {
+export function excavationHeadroomAt(x, z, nearY) {
   const ex = EX;
   if (!ex) return 0;
   const rp = rampParam(ex, x, z);
-  if (rp && !underHeadwall(ex, x, z)) return Infinity;   // open cut
-  const s = standAt(x, z);
+  if (rp && !underHeadwall(ex, x, z)) {
+    if (nearY === undefined) return Infinity;   // open cut
+    const low = stackedBelowCut(x, z, nearY, rampFloorAt(ex, x, z, rp.u, rp.lat));
+    return low === undefined ? Infinity : low ? low.ceil - low.floor - CEIL_MARGIN : 0;
+  }
+  const s = nearY === undefined ? standAt(x, z) : walkableAt(x, z, nearY);
   return s ? s.ceil - s.floor - CEIL_MARGIN : 0;
 }
 
@@ -745,9 +763,9 @@ export function advanceDigFace(id, antSeconds) {
 export function excavationFootprint(lawnFallback) {
   if (!EX) return null;
   return {
-    contains: (x, z) => excavationFloorAt(x, z) !== null,
-    floorY: (x, z) => { const y = excavationFloorAt(x, z); return y === null ? lawnFallback(x, z) : y; },
-    headroom: (x, z) => excavationHeadroomAt(x, z),
+    contains: (x, z, nearY) => excavationFloorAt(x, z, nearY) !== null,
+    floorY: (x, z, nearY) => { const y = excavationFloorAt(x, z, nearY); return y === null ? lawnFallback(x, z) : y; },
+    headroom: (x, z, nearY) => excavationHeadroomAt(x, z, nearY),
   };
 }
 

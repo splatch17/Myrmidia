@@ -36,7 +36,7 @@ import { PLAYER_AVATAR, legLengths, strideOf } from './avatar.js';
    than a second pose path: the gait, the IK and the ride height are exactly
    the ones used outdoors. */
 export function floorUnder(a, x, z) {
-  return a.floorY === null || a.floorY === undefined ? groundY(x, z) : a.floorY;
+  return a.floorY === null || a.floorY === undefined ? groundY(x, z, a.y) : a.floorY;
 }
 
 export function makeAnt(x, y, z, profile = PLAYER_AVATAR) {

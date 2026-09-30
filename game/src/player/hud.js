@@ -31,6 +31,47 @@
 
 import { ensureUiTheme, keycap, portraitSvg } from './uiTheme.js';
 
+/* #91: the dig ring is anchored on a dig face, which can sit behind a HUD
+   panel (it covered the queen's menu). The panels are the frame of the screen
+   and the ring is the thing that moves: if its square would touch one, it
+   slides to the nearest free spot (right/left/up/down of the panel), and
+   stays inside the viewport. */
+const PANEL_IDS = ['unitframe', 'stock', 'tracker', 'queenmenu', 'queenhud', 'controls', 'plantools',
+  'macrolegend', 'promptwrap', 'hold'];
+export function visiblePanelRects() {
+  const out = [];
+  for (const id of PANEL_IDS) {
+    const e = document.getElementById(id);
+    if (!e || e.style.display === 'none') continue;
+    const r = e.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) continue;
+    if (getComputedStyle(e).visibility === 'hidden' || getComputedStyle(e).opacity === '0') continue;
+    out.push(r);
+  }
+  return out;
+}
+function hitsAny(cx, cy, h, rects) {
+  for (const r of rects) if (cx + h > r.left && cx - h < r.right && cy + h > r.top && cy - h < r.bottom) return r;
+  return null;
+}
+export function placeClearOfPanels(cx, cy, h) {
+  const W = window.innerWidth, H = window.innerHeight;
+  const rects = visiblePanelRects();
+  const x0 = Math.max(h, Math.min(W - h, cx)), y0 = Math.max(h, Math.min(H - h, cy));
+  if (!hitsAny(x0, y0, h, rects)) return [x0, y0];
+  let best = null, bestD = Infinity;
+  for (const r of rects) {
+    for (const [x, y] of [[r.right + h + 4, y0], [r.left - h - 4, y0], [x0, r.top - h - 4], [x0, r.bottom + h + 4]]) {
+      if (x < h || x > W - h || y < h || y > H - h || hitsAny(x, y, h, rects)) continue;
+      const d = Math.hypot(x - x0, y - y0);
+      if (d < bestD) { bestD = d; best = [x, y]; }
+    }
+  }
+  if (best) return best;
+  // boxed in on every side: bottom centre, above the bar, is always free
+  return [W / 2, H - h - 130];
+}
+
 function el(id, cls, parent = document.body) {
   const d = document.createElement('div');
   d.id = id;
@@ -402,7 +443,8 @@ export function createHud() {
          that fills the screen when she stands on top of the face is worse
          than one that does not. */
       const k = Math.max(0.55, Math.min(1.7, g.scale));
-      dial.style.transform = `translate(${g.sx - 54}px, ${g.sy - 54}px) scale(${k})`;
+      const at = placeClearOfPanels(g.sx, g.sy, DIAL * k * 0.5 + 2);
+      dial.style.transform = `translate(${at[0] - 54}px, ${at[1] - 54}px) scale(${k})`;
     },
 
     /** An event line that replaces whatever is there, for a player action

@@ -419,6 +419,22 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
       r.group.visible = r.hull.visible = true;
     }
 
+    /* #91: a camera squeezed into a small room can end up inside her. She is
+       shrunk toward her own centre (the rig's matrices are world-space, so the
+       group is scaled about her position) until the boom clears again. */
+    {
+      const k = cameraRig.fade === undefined ? 1 : cameraRig.fade;
+      const g = rigs.get(cur.profileId);
+      const qg = rigs.get(queen.profileId);
+      for (const r of (cur === queen ? [qg] : [qg, g])) {
+        const mine = r === g;
+        const kk = mine ? k : 1;
+        r.group.scale.setScalar(kk); r.hull.scale.setScalar(kk);
+        r.group.position.set(ant.x * (1 - kk), (ant.y + 3 * (ant.scale || 1)) * (1 - kk), ant.z * (1 - kk));
+        r.hull.position.copy(r.group.position);
+      }
+    }
+
     antState.position.set(ant.x, ant.y, ant.z);
     antState.radius = collideRadius(profile); // footprint half-width, for grass contact bend
 
@@ -568,6 +584,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     window.__rooms2 = () => dugRooms();
     window.__faces = () => digFaces();
     window.__plans = plans;
+    window.__hud = hud;
     window.__lawnY = lawnY;
     window.__inCut = inOpenCutPastDoor;
     window.__planGhost = ghost;
