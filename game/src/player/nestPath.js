@@ -1,4 +1,4 @@
-import { volumeVersion } from '../world/index.js';
+import { volumeVersion, volumeSpan, isOpen, lawnY } from '../world/index.js';
 import { nestFootprint } from './nest.js';
 
 /* ==========================================================================
@@ -22,17 +22,41 @@ import { nestFootprint } from './nest.js';
 const CELL = 2;
 const STEP_UP = 1.6;           // floor change per cell, about a 40 degree ramp
 const MAX_NODES = 9000;
+/* A front sits at a wall, and the footprint keeps a body's width off every wall,
+   so the standing place of a front is usually just outside what counts as
+   standable: the search ends when it is this close, and the last hop is short. */
+const GOAL_SLACK = 3.5;
 const PAD = 40;                // search box margin around start and goal
 
-function clearHop(fp, x0, z0, y0, x1, z1) {
+/* What a worker needs to stand at (x, z), as opposed to the queen's
+   walkableAt(): a worker is a third of her size, and the queen's clearance
+   leaves a two-unit strip down a tunnel the plan tool digs at its default
+   radius - a strip a two-unit lattice steps right over. So: a span at her
+   height that is tall enough, with open air a body's half-width to each side.
+   The open trench is not in the volume, there the footprint answers. */
+const MIN_HEAD = 3.5, SIDE = 0.9;
+/* shortcuts in the string-pull keep twice the clearance, so the route does not hug
+   a corner that a turning body then cuts into the wall */
+const PULL_SIDE = 1.8;
+function floorFor(fp, x, z, y, side = SIDE) {
+  const s = volumeSpan(x, z, y);
+  if (s && s.ceil - s.floor >= MIN_HEAD && y >= s.floor - 2.5 && y <= s.ceil) {
+    const c = s.floor + 1.4;
+    if (isOpen(x + side, c, z) && isOpen(x - side, c, z) && isOpen(x, c, z + side) && isOpen(x, c, z - side)) return s.floor;
+    return null;
+  }
+  if (fp.contains(x, z, y) && !Number.isFinite(fp.headroom(x, z, y))) return fp.floorY(x, z, y);
+  return null;
+}
+
+function clearHop(fp, x0, z0, y0, x1, z1, side = SIDE) {
   const d = Math.hypot(x1 - x0, z1 - z0);
   const n = Math.max(1, Math.ceil(d / 1.0));
   let y = y0;
   for (let i = 1; i <= n; i++) {
     const x = x0 + (x1 - x0) * (i / n), z = z0 + (z1 - z0) * (i / n);
-    if (!fp.contains(x, z, y)) return false;
-    const f = fp.floorY(x, z, y);
-    if (Math.abs(f - y) > STEP_UP * 0.75) return false;
+    const f = floorFor(fp, x, z, y, side);
+    if (f === null || Math.abs(f - y) > STEP_UP * 0.75) return false;
     y = f;
   }
   return true;
@@ -71,10 +95,10 @@ const DI = [1, -1, 0, 0, 1, 1, -1, -1], DJ = [0, 0, 1, -1, 1, -1, 1, -1];
  * included; or null when there is no way (caller falls back to a straight
  * walk).
  */
-export function findNestPath(sx, sy, sz, gx, gz) {
+export function findNestPath(sx, sy, sz, gx, gz, recenter = false) {
   const fp = nestFootprint();
   if (!fp) return null;
-  if (clearHop(fp, sx, sz, sy, gx, gz)) return [{ x: gx, z: gz }];
+  if (!recenter && clearHop(fp, sx, sz, sy, gx, gz, PULL_SIDE)) return [{ x: gx, z: gz }];
 
   const x0 = Math.min(sx, gx) - PAD, z0 = Math.min(sz, gz) - PAD;
   const W = Math.ceil((Math.abs(sx - gx) + 2 * PAD) / CELL) + 1, H = Math.ceil((Math.abs(sz - gz) + 2 * PAD) / CELL) + 1;
@@ -95,7 +119,7 @@ export function findNestPath(sx, sy, sz, gx, gz) {
     if (done.has(k)) continue;
     done.add(k); expanded++;
     const i = k % W, j = (k / W) | 0;
-    if (Math.hypot(cx(i) - gx, cz(j) - gz) <= CELL * 1.05) { reached = k; break; }
+    if (Math.hypot(cx(i) - gx, cz(j) - gz) <= GOAL_SLACK) { reached = k; break; }
     const y = yAt.get(k);
     for (let d = 0; d < 8; d++) {
       const ni = i + DI[d], nj = j + DJ[d];
@@ -103,9 +127,8 @@ export function findNestPath(sx, sy, sz, gx, gz) {
       const nk = idx(ni, nj);
       if (done.has(nk)) continue;
       const nx = cx(ni), nz = cz(nj);
-      if (!fp.contains(nx, nz, y)) continue;
-      const ny = fp.floorY(nx, nz, y);
-      if (Math.abs(ny - y) > STEP_UP) continue;
+      const ny = floorFor(fp, nx, nz, y);
+      if (ny === null || Math.abs(ny - y) > STEP_UP) continue;
       if (d >= 4 && !clearHop(fp, cx(i), cz(j), y, nx, nz)) continue;
       const g = gScore.get(k) + (d < 4 ? CELL : CELL * 1.414);
       if (g >= (gScore.get(nk) ?? Infinity)) continue;
@@ -122,10 +145,11 @@ export function findNestPath(sx, sy, sz, gx, gz) {
 
   // string-pull: from each anchor, jump to the furthest cell still in clear sight
   const out = [];
+  if (recenter) out.push({ x: cells[0].x, z: cells[0].z });
   let a = 0;
   while (a < cells.length - 1) {
     let b = cells.length - 1;
-    while (b > a + 1 && !clearHop(fp, cells[a].x, cells[a].z, cells[a].y, cells[b].x, cells[b].z)) b--;
+    while (b > a + 1 && !clearHop(fp, cells[a].x, cells[a].z, cells[a].y, cells[b].x, cells[b].z, PULL_SIDE)) b--;
     out.push({ x: cells[b].x, z: cells[b].z });
     a = b;
   }
@@ -147,13 +171,60 @@ export function navTarget(nav, ant, gx, gz) {
     ? Math.hypot(nav.path[nav.i].x - ant.x, nav.path[nav.i].z - ant.z) > 30 : false;
   if (nav.key !== key || nav.ver !== ver || off || (!nav.path && nav.fail <= 0)) {
     nav.key = key; nav.ver = ver;
-    nav.path = findNestPath(ant.x, ant.y, ant.z, gx, gz);
+    nav.path = findNestPath(ant.x, ant.y, ant.z, gx, gz, nav.recenter);
+    nav.recenter = false;
     nav.i = 0;
     nav.fail = nav.path ? 0 : 1.0;   // no path: straight walk, try again in a second
   }
   if (!nav.path) return { x: gx, z: gz };
-  while (nav.i < nav.path.length - 1 && Math.hypot(nav.path[nav.i].x - ant.x, nav.path[nav.i].z - ant.z) < 2.5) nav.i++;
+  /* Move on to the next waypoint when this one is close AND the next is in
+     clear sight from here: skipping round a corner on distance alone aims her
+     at the far side of the wall. */
+  const fp = nestFootprint();
+  while (nav.i < nav.path.length - 1) {
+    const w = nav.path[nav.i], nx = nav.path[nav.i + 1];
+    const near = Math.hypot(w.x - ant.x, w.z - ant.z);
+    if (near < 1.2 || (near < 3.5 && fp && clearHop(fp, ant.x, ant.z, ant.y, nx.x, nx.z))) nav.i++;
+    else break;
+  }
   return nav.path[Math.min(nav.i, nav.path.length - 1)];
 }
 
-export function tickNav(nav, dt) { if (nav.fail > 0) nav.fail -= dt; }
+/* Called each frame she is walking. If she has barely moved for a second she
+   is leaning on a wall the route skirts: the path is dropped so the next
+   request starts from where she really is, at the nearest cell centre (which
+   is always clear of the wall). */
+export function tickNav(nav, dt, ant) {
+  if (nav.fail > 0) nav.fail -= dt;
+  if (!ant || !nav.path) { nav.stuckT = 0; return; }
+  if (nav.px === undefined || Math.hypot(ant.x - nav.px, ant.z - nav.pz) > 0.6) { nav.px = ant.x; nav.pz = ant.z; nav.stuckT = 0; return; }
+  nav.stuckT = (nav.stuckT || 0) + dt;
+  if (nav.stuckT > 1.0) { nav.path = null; nav.fail = 0; nav.stuckT = 0; nav.px = undefined; nav.recenter = true; }
+}
+
+/** Floor under a worker-sized body at (x, z) for an ant at height y, or null
+ *  where that is earth (or there is no nest): the AI's "may I stand here". */
+export function aiFloorAt(x, z, y) {
+  const fp = nestFootprint();
+  return fp ? floorFor(fp, x, z, y) : null;
+}
+
+/**
+ * AI step containment. `a` has just been moved from (fx, fz); when she was
+ * standing in the nest and the step ended in earth, try each axis alone (so
+ * she slides along a wall), else put her back. Returns her floor or null when
+ * she is not in the nest at all (surface walkers are not contained here).
+ */
+export function containAiStep(a, fx, fz) {
+  const before = aiFloorAt(fx, fz, a.y);
+  // within a body of a wall the clearance test says "no" for the spot she is
+  // already on: she is still underground if she is well under the meadow
+  if (before === null && a.y > lawnY(fx, fz) - 3) return null;
+  let f = aiFloorAt(a.x, a.z, a.y);
+  if (f !== null) return f;
+  const tx = a.x, tz = a.z;
+  if ((f = aiFloorAt(tx, fz, a.y)) !== null) { a.x = tx; a.z = fz; return f; }
+  if ((f = aiFloorAt(fx, tz, a.y)) !== null) { a.x = fx; a.z = tz; return f; }
+  a.x = fx; a.z = fz;
+  return before === null ? a.y : before;
+}

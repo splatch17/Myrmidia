@@ -1,4 +1,4 @@
-import { makeNavState, navTarget, tickNav } from './nestPath.js';
+import { makeNavState, navTarget, tickNav, containAiStep, aiFloorAt } from './nestPath.js';
 import { groundY, RESOURCE_NODES, harvestNode, nestOrigin, digFaces, payDigFace } from '../world/index.js';
 import { WORKER, DIGGER, profileById, strideOf, collideRadius } from './avatar.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
@@ -245,7 +245,7 @@ export function createColony({ plans = null } = {}) {
     /* #91: steer at the next waypoint of a path through the open cells, not at
        the front itself - with a bend in the tunnel the straight line is earth. */
     if (!w.nav) w.nav = makeNavState();
-    tickNav(w.nav, dt);
+    tickNav(w.nav, dt, d > siteROf(face) ? a : null);
     const wp = d > siteROf(face) ? navTarget(w.nav, a, stand.x, stand.z) : stand;
     const dx = wp.x - a.x, dz = wp.z - a.z;
 
@@ -259,11 +259,20 @@ export function createColony({ plans = null } = {}) {
       a.yaw = dampAngle(a.yaw, Math.atan2(dx, dz), 6, dt);
       a.speed = WORKER_SPEED * 0.9;
       const step = a.speed * dt;
+      const fx = a.x, fz = a.z;
       a.x += Math.sin(a.yaw) * step;
       a.z += Math.cos(a.yaw) * step;
       a.travel += step;
+      // in the nest she does not walk through earth: slide along the wall or stay (#91)
+      containAiStep(a, fx, fz);
     }
-    a.y = groundY(a.x, a.z, a.y);
+    /* a worker's floor, not the queen's: groundY() answers for a queen-sized
+       body and in a tunnel dug at the plan tool's default radius that is a
+       strip two units wide, off which it says 'meadow' and she would pop up
+       through the roof. floorY also carries her feet (legs.js floorUnder). */
+    const aiFloor = aiFloorAt(a.x, a.z, a.y);
+    a.floorY = aiFloor;
+    a.y = aiFloor !== null ? aiFloor : groundY(a.x, a.z, a.y);
     a.bob = Math.sin(a.travel * (Math.PI * 2 / strideOf(DIGGER)) * 2) * 0.13
           * Math.min(1, a.speed / 8);
     updateLegs(a, w.legState, dt, DIGGER);

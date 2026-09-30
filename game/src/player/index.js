@@ -12,6 +12,7 @@ import { createCameraRig, desiredCamera } from './camera.js';
 import { computeWishDir, stepAnt } from './movement.js';
 import { stepClimb, exitClimb, GRASS } from './climb.js';
 import { pickDigGauge } from './digGauge.js';
+import { findNestPath, aiFloorAt } from './nestPath.js';
 import { deepestPenetration, resolveDecorCollision, mushroomRadii } from './decorCollision.js';
 import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
 import { createInteraction } from './interaction.js';
@@ -585,6 +586,8 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     window.__faces = () => digFaces();
     window.__plans = plans;
     window.__hud = hud;
+    window.__findNestPath = findNestPath;
+    window.__aiFloorAt = aiFloorAt;
     window.__lawnY = lawnY;
     window.__inCut = inOpenCutPastDoor;
     window.__planGhost = ghost;

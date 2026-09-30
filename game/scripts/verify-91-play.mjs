@@ -283,25 +283,30 @@ async function main() {
     /* ---- 4. a digger reaches a front behind two bends ------------------- */
     ({ hall, ch } = await fresh());
     const bend = await page.evaluate(([H, C]) => {
-      const P = window.__plans;
+      const P = window.__plans, reasons = new Set();
       const away = Math.atan2(H.z - C.z, H.x - C.x);
       for (const off of [0, 0.5, -0.5, 1.0, -1.0, 1.6, -1.6, 2.2, -2.2]) {
         for (const turn of [1, -1]) {
-          const a = away + off, y = H.floorY + 2.5, r = 4.2, L = 26;
+          const a = away + off, r = 4.2, L = 26, drop = 5;
+          const y0 = window.__lawnY(H.x, H.z) - 6.4;
+          const y = [y0, y0 - drop, y0 - 2 * drop, y0 - 3 * drop];
           const d1 = [Math.cos(a), Math.sin(a)], d2 = [-Math.sin(a) * turn, Math.cos(a) * turn];
-          const s1 = [H.x + d1[0] * (H.r - 2), y, H.z + d1[1] * (H.r - 2)];
-          const e1 = [s1[0] + d1[0] * L, y, s1[2] + d1[1] * L];
-          const e2 = [e1[0] + d2[0] * L, y, e1[2] + d2[1] * L];
-          const e3 = [e2[0] + d1[0] * L, y, e2[2] + d1[1] * L];
-          const t = [{ center: s1, end: e1, radius: r, floor: true }, { center: e1, end: e2, radius: r, floor: true }, { center: e2, end: e3, radius: r, floor: true }];
-          if (!P.evaluate(t[0], 'tunnel').ok) continue;
+          const s1 = [H.x + d1[0] * (H.r - 2), y[0], H.z + d1[1] * (H.r - 2)];
+          const e1 = [s1[0] + d1[0] * L, y[1], s1[2] + d1[1] * L];
+          const e2 = [e1[0] + d2[0] * L, y[2], e1[2] + d2[1] * L];
+          const e3 = [e2[0] + d1[0] * L, y[3], e2[2] + d1[1] * L];
+          const leg = (p, q, i) => ({ center: p, end: q, radius: r, floor: [i === 0 ? H.floorY : y[i] - 2.3, y[i + 1] - 2.3] });
+          const t = [leg(s1, e1, 0), leg(e1, e2, 1), leg(e2, e3, 2)];
+          const ev = P.evaluate(t[0], 'tunnel');
+          if (!ev.ok) { reasons.add(ev.reason); continue; }
           return { t, e3, a };
         }
       }
-      return null;
+      return { none: [...reasons, 'hall floor ' + H.floorY + ' lawn ' + window.__lawnY(H.x, H.z) + ' r ' + H.r] };
     }, [hall, ch]);
-    check(!!bend, 'an S-shaped tunnel chain (three legs, two bends) is found and legal');
-    if (bend) {
+    if (bend && bend.none) console.log('NO BEND', JSON.stringify(bend.none));
+    check(!!bend && !bend.none, 'an S-shaped tunnel chain (three legs, two bends) is found and legal');
+    if (bend && !bend.none) {
       // dig legs 1 and 2; leg 3 stays a chantier whose front is behind both bends
       await page.evaluate(([t]) => {
         const P = window.__plans;
@@ -335,23 +340,41 @@ async function main() {
         }, [hall, stand, hall.floorY + 2]);
         console.log('STRAIGHT', JSON.stringify(straight));
         check(straight.earth > 10, `the straight line hall -> front crosses earth (${straight.earth}/${straight.n} samples in rock)`);
+        const dbg = await page.evaluate(([H, S]) => {
+          const y = window.__world6.floorAt(H.x, H.z);
+          const p = window.__findNestPath(H.x, y, H.z, S.x, S.z);
+          const fp = (x, z, yy) => window.__nestAt(x, z, yy);
+          return { y, path: p, goal: fp(S.x, S.z, y - 10), goalNear: [0, 1, 2, 3].map((k) => fp(S.x, S.z, y - k * 3).inside), start: fp(H.x, H.z, y) };
+        }, [hall, stand]);
+        const cross = await page.evaluate(([t]) => {
+          const a = t[0].center, b = t[0].end, m = [(a[0] + b[0]) / 2, (a[2] + b[2]) / 2];
+          const dx = b[0] - a[0], dz = b[2] - a[2], l = Math.hypot(dx, dz), px = -dz / l, pz = dx / l;
+          const out = [];
+          for (let o = -5; o <= 5; o += 1) { const r = window.__nestAt(m[0] + px * o, m[1] + pz * o, (a[1] + b[1]) / 2 - 2.3); out.push([o, r.inside, +r.floorY.toFixed(1)]); }
+          return out;
+        }, [bend.t]);
+        console.log('CROSS', JSON.stringify(cross));
+        console.log('NAVDBG', JSON.stringify(dbg));
         const run = await page.evaluate(([H, id, crew]) => {
           const c = window.__colony(), W = window.__world6;
           const ds = [];
           for (let i = 0; i < Math.max(1, crew); i++) ds.push(c.spawnAt(H.x + i * 2, H.z, 'digger'));
           const pl = window.__plans.get(id);
-          let t = 0, bad = 0, samples = 0, atFace = false, maxd = 0;
+          const badAt = [], trace = []; let t = 0, bad = 0, samples = 0, atFace = false, maxd = 0;
           const first = { x: ds[0].ant.x, z: ds[0].ant.z };
           while (t < 160) {
             window.__playerUpdate(0.05, t); t += 0.05;
             for (const w of ds) {
               const a = w.ant; samples++;
-              if (!W.isOpen(a.x, a.y + 3, a.z) && !W.isOpen(a.x, a.y + 1.5, a.z)) bad++;
+              if (!W.isOpen(a.x, a.y + 3, a.z) && !W.isOpen(a.x, a.y + 1.5, a.z)) { bad++; if (badAt.length < 6) badAt.push([+t.toFixed(2), +a.x.toFixed(1), +a.y.toFixed(1), +a.z.toFixed(1)]); }
             }
+            if (Math.abs(t - Math.round(t)) < 0.03 && t > 3 && t < 30) trace.push([+t.toFixed(1), +ds[0].ant.x.toFixed(2), +ds[0].ant.z.toFixed(2), +ds[0].ant.yaw.toFixed(2), ds[0].nav && ds[0].nav.i]);
             if (ds.some((w) => w.atFace)) { atFace = true; break; }
           }
           const w = ds[0].ant;
-          return { t: +t.toFixed(1), bad, samples, atFace, at: [w.x, w.y, w.z].map((v) => +v.toFixed(1)), first };
+          const w0 = ds[0].ant, ring = [];
+          for (let k = 0; k < 8; k++) { const an = k * Math.PI / 4; ring.push(window.__aiFloorAt(w0.x + Math.sin(an) * 1.5, w0.z + Math.cos(an) * 1.5, w0.y)); }
+          return { trace, ring, here: window.__aiFloorAt(w0.x, w0.z, w0.y), nav: ds[0].nav && { i: ds[0].nav.i, path: ds[0].nav.path }, yaw: w0.yaw, badAt, t: +t.toFixed(1), bad, samples, atFace, at: [w.x, w.y, w.z].map((v) => +v.toFixed(1)), first };
         }, [hall, leg3.id, leg3.crew]);
         console.log('DIGGER', JSON.stringify(run));
         check(run.atFace, `a digger reaches the front behind two bends (${run.t}s simulated)`);
