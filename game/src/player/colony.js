@@ -1,4 +1,4 @@
-import { makeNavState, navTarget, tickNav, containAiStep, aiFloorAt } from './nestPath.js';
+import { makeNavState, navTarget, tickNav, containAiStep, aiFloorAt, atClosestApproach } from './nestPath.js';
 import { groundY, RESOURCE_NODES, harvestNode, nestOrigin, digFaces, payDigFace } from '../world/index.js';
 import { WORKER, DIGGER, profileById, strideOf, collideRadius } from './avatar.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
@@ -245,11 +245,12 @@ export function createColony({ plans = null } = {}) {
     /* #91: steer at the next waypoint of a path through the open cells, not at
        the front itself - with a bend in the tunnel the straight line is earth. */
     if (!w.nav) w.nav = makeNavState();
-    tickNav(w.nav, dt, d > siteROf(face) ? a : null);
+    const atEnd = atClosestApproach(w.nav, a, d, siteROf(face));
+    tickNav(w.nav, dt, d > siteROf(face) && !atEnd ? a : null);
     const wp = d > siteROf(face) ? navTarget(w.nav, a, stand.x, stand.z) : stand;
     const dx = wp.x - a.x, dz = wp.z - a.z;
 
-    if (d <= siteROf(face)) {
+    if (d <= siteROf(face) || atEnd) {
       a.speed = 0;
       // face the wall and work: yaw at the face, so the crew reads as a crew
       a.yaw = dampAngle(a.yaw, Math.atan2(face.x - a.x, face.z - a.z), 4, dt);

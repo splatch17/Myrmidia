@@ -20,7 +20,10 @@ import { nestFootprint } from './nest.js';
    ========================================================================== */
 
 const CELL = 2;
-const STEP_UP = 1.6;           // floor change per cell, about a 40 degree ramp
+/* Floor change per step. Generous on purpose: the plan tool digs a room and its
+   tunnel to different floor levels, so the junction is a ledge of several units
+   that a worker scrambles over and the queen's own walk does not allow. */
+const STEP_UP = 4.0;
 const MAX_NODES = 9000;
 /* A front sits at a wall, and the footprint keeps a body's width off every wall,
    so the standing place of a front is usually just outside what counts as
@@ -38,6 +41,9 @@ const MIN_HEAD = 3.5, SIDE = 0.9;
 /* shortcuts in the string-pull keep twice the clearance, so the route does not hug
    a corner that a turning body then cuts into the wall */
 const PULL_SIDE = 1.8;
+/* containment is only "not inside earth": a body may graze a wall, the route is
+   what keeps it off them */
+const GRAZE = 0.15;
 function floorFor(fp, x, z, y, side = SIDE) {
   const s = volumeSpan(x, z, y);
   if (s && s.ceil - s.floor >= MIN_HEAD && y >= s.floor - 2.5 && y <= s.ceil) {
@@ -56,7 +62,7 @@ function clearHop(fp, x0, z0, y0, x1, z1, side = SIDE) {
   for (let i = 1; i <= n; i++) {
     const x = x0 + (x1 - x0) * (i / n), z = z0 + (z1 - z0) * (i / n);
     const f = floorFor(fp, x, z, y, side);
-    if (f === null || Math.abs(f - y) > STEP_UP * 0.75) return false;
+    if (f === null || Math.abs(f - y) > STEP_UP) return false;
     y = f;
   }
   return true;
@@ -112,7 +118,7 @@ export function findNestPath(sx, sy, sz, gx, gz, recenter = false) {
   const open = new Heap();
   const s0 = idx(si, sj);
   gScore.set(s0, 0); yAt.set(s0, sy); open.push(h(si, sj), s0);
-  let expanded = 0, reached = -1;
+  let expanded = 0, reached = -1, best = s0, bestH = h(si, sj);
   const done = new Set();
   while (open.size && expanded < MAX_NODES) {
     const [, k] = open.pop();
@@ -121,6 +127,8 @@ export function findNestPath(sx, sy, sz, gx, gz, recenter = false) {
     const i = k % W, j = (k / W) | 0;
     if (Math.hypot(cx(i) - gx, cz(j) - gz) <= GOAL_SLACK) { reached = k; break; }
     const y = yAt.get(k);
+    const hk = Math.hypot(cx(i) - gx, cz(j) - gz);
+    if (hk < bestH) { bestH = hk; best = k; }
     for (let d = 0; d < 8; d++) {
       const ni = i + DI[d], nj = j + DJ[d];
       if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue;
@@ -136,12 +144,18 @@ export function findNestPath(sx, sy, sz, gx, gz, recenter = false) {
       open.push(g + h(ni, nj), nk);
     }
   }
-  if (reached < 0) return null;
+  /* The front's standing place can lie in the tapering end of a tunnel where
+     nothing is standable: go to the nearest cell that is, and say so. */
+  const closest = reached < 0;
+  if (closest) {
+    if (bestH > 14) return null;
+    reached = best;
+  }
 
   const cells = [];
   for (let k = reached; k !== undefined; k = from.get(k)) cells.push({ x: cx(k % W), z: cz((k / W) | 0), y: yAt.get(k) });
   cells.reverse();
-  cells.push({ x: gx, z: gz, y: yAt.get(reached) });
+  if (!closest) cells.push({ x: gx, z: gz, y: yAt.get(reached) });
 
   // string-pull: from each anchor, jump to the furthest cell still in clear sight
   const out = [];
@@ -153,6 +167,8 @@ export function findNestPath(sx, sy, sz, gx, gz, recenter = false) {
     out.push({ x: cells[b].x, z: cells[b].z });
     a = b;
   }
+  if (!out.length) out.push({ x: cells[0].x, z: cells[0].z });
+  out.closest = closest;
   return out;
 }
 
@@ -206,7 +222,7 @@ export function tickNav(nav, dt, ant) {
  *  where that is earth (or there is no nest): the AI's "may I stand here". */
 export function aiFloorAt(x, z, y) {
   const fp = nestFootprint();
-  return fp ? floorFor(fp, x, z, y) : null;
+  return fp ? floorFor(fp, x, z, y, GRAZE) : null;
 }
 
 /**
@@ -227,4 +243,13 @@ export function containAiStep(a, fx, fz) {
   if ((f = aiFloorAt(fx, tz, a.y)) !== null) { a.x = fx; a.z = tz; return f; }
   a.x = fx; a.z = fz;
   return before === null ? a.y : before;
+}
+
+/** She has gone as far as the nest lets her toward a front whose standing
+ *  place is in earth: near enough to the wall to work it. */
+export function atClosestApproach(nav, ant, d, siteR) {
+  const p = nav.path;
+  if (!p || !p.closest || d > siteR * 2.2) return false;
+  const last = p[p.length - 1];
+  return Math.hypot(last.x - ant.x, last.z - ant.z) < 1.8;
 }
