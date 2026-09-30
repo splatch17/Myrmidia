@@ -13,8 +13,10 @@
 
 ## 0. LA DEMANDE EN COURS — c'est ici qu'on reprend
 
-*État au 2026-09-29 : round 22 publié (mode macro #34, décors #80, boutons de
-caste #79). Les §0 précédents restent lisibles dans l'historique git.*
+*État au 2026-09-30 : round 22 publié — macro #34, décors #80, boutons #79,
+volume libre #81, ambiance féerique #90, contrôle #36, plans #82, #91 moitié
+monde. Prochain : #91 moitié gameplay (caméra, trajet des fouisseuses, sols
+empilés), puis #83, #84. Les §0 précédents restent dans l'historique git.*
 
 ### La direction du jeu — elle commande tout le reste
 
