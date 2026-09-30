@@ -598,9 +598,9 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
        report the feature working on a guess. */
     window.__nest = () => nestInfo(ant);
     // point probe, so a harness can ask about ground it has not walked to yet
-    window.__nestAt = (x, z) => {
+    window.__nestAt = (x, z, y) => {
       const fp = nestFootprint();
-      return fp ? { inside: fp.contains(x, z), floorY: fp.floorY(x, z), ground: groundY(x, z), approx: fp.approx } : null;
+      return fp ? { inside: fp.contains(x, z, y), floorY: fp.floorY(x, z, y), ground: groundY(x, z, y), headroom: fp.headroom(x, z, y), approx: fp.approx } : null;
     };
     // the gallery normally opens when the diggers finish (colony.js); the
     // harness needs it open without replaying twenty minutes of colony

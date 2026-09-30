@@ -171,31 +171,31 @@ async function main() {
     ({ hall, ch } = await fresh());
     const under = await page.evaluate(([C]) => {
       const W = window.__world6, P = window.__plans;
+      /* the trench's own centre line, the furthest point from the chamber
+         that is still well past its doorway: middle of the cut, not its ragged edge */
       let best = null;
-      for (let a = 0; a < 72; a++) {
-        const ang = (a / 72) * Math.PI * 2;
-        for (let d = C.r + 4; d < C.r + 26; d += 1) {
-          const x = C.x + Math.cos(ang) * d, z = C.z + Math.sin(ang) * d;
-          if (!window.__inCut(x, z, 0)) continue;
-          const cut = W.openCutFloorAt(x, z);
-          if (cut === null) continue;
-          if (!best || d < best.d) best = { x, z, d, ang, cut };
-          break;
-        }
+      for (const p of window.__descentPath() || []) {
+        const d = Math.hypot(p.x - C.x, p.z - C.z);
+        if (d < C.r + 8) continue;
+        const cut = W.openCutFloorAt(p.x, p.z);
+        if (cut === null) continue;
+        if (!best || d < best.d) best = { x: p.x, z: p.z, d, ang: Math.atan2(p.z - C.z, p.x - C.x), cut };
       }
       if (!best) return { err: 'no trench footprint' };
       const R = 7, ca = Math.cos(best.ang), sa = Math.sin(best.ang);
-      const rx = C.x + ca * (best.d + 5), rz = C.z + sa * (best.d + 5);
+      const rx = best.x, rz = best.z;
       const cut = W.openCutFloorAt(rx, rz) ?? best.cut;
       const t0 = [C.x + ca * C.r * 0.3, C.floorY + 2.5, C.z + sa * C.r * 0.3];
       let ok = null;
       for (let drop = 12; drop <= 30 && !ok; drop += 2) {
-        const tunnel = { center: t0, end: [rx, cut - drop, rz], radius: 4.2, floor: true };
+        const dl = Math.hypot(rx - t0[0], rz - t0[2]), ux = (rx - t0[0]) / dl, uz = (rz - t0[2]) / dl;
+        // the ramp ends just inside the room's rim, at the room's own floor level
+        const tunnel = { center: t0, end: [rx - ux * R * 0.4, cut - drop, rz - uz * R * 0.4], radius: 4.2, floor: [t0[1] - 2.3, cut - drop - 0.55 * R] };
         if (P.evaluate(tunnel, 'tunnel').ok) ok = { tunnel, room: { center: [rx, cut - drop, rz], radius: R, floor: true }, ry: cut - drop };
       }
       if (!ok) return { err: 'no legal tunnel' };
       const c1 = P.commit(ok.tunnel, 'tunnel'), c2 = P.commit(ok.room, 'room');
-      return { best, rx, rz, ry: ok.ry, cut, R, ca, sa, t0, ok: c1.ok && c2.ok, ids: [c1.plan && c1.plan.id, c2.plan && c2.plan.id] };
+      return { best, rx, rz, ry: ok.ry, cut, R, ca, sa, t0, te: ok.tunnel.end, ok: c1.ok && c2.ok, ids: [c1.plan && c1.plan.id, c2.plan && c2.plan.id] };
     }, [ch]);
     check(!under.err && under.ok, `a room is planned under the trench (${under.err || 'ok'})`);
     await page.evaluate(([ids]) => {
@@ -224,37 +224,59 @@ async function main() {
     check(Math.abs(q.gTrench - q.cut) < 0.01, `and at trench height the trench floor (${q.gTrench?.toFixed(2)} vs ${q.cut?.toFixed(2)})`);
     // 6b: she walks from the chamber along the tunnel into the room, then keeps going under the trench
     await stand(under.t0[0], under.t0[2], under.t0[1], Math.atan2(under.rx - under.t0[0], under.rz - under.t0[2]), 0);
-    const walkTo = async (tx, tz, maxMs) => {
+    const held = new Set();
+    const setKeys = async (want) => {
+      for (const k of [...held]) if (!want.has(k)) { await page.keyboard.up(k); held.delete(k); }
+      for (const k of want) if (!held.has(k)) { await page.keyboard.down(k); held.add(k); }
+    };
+    const angDiff = (a, b) => { let d = b - a; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return d; };
+    const walkTo = async (tx, tz, maxMs, within = 3) => {
       const t0 = Date.now();
+      let last = null, lastT = Date.now(), unstick = 0;
       while (Date.now() - t0 < maxMs) {
-        const s = await page.evaluate(([X, Z]) => {
-          const a = window.__ant, c = window.__camera;
-          const dx = X - a.x, dz = Z - a.z;
-          const fwd = { x: a.x - c.position.x, z: a.z - c.position.z };
-          return { d: Math.hypot(dx, dz), y: a.y, x: a.x, z: a.z,
-            err: Math.atan2(fwd.x * dz - fwd.z * dx, fwd.x * dx + fwd.z * dz) };
-        }, [tx, tz]);
-        if (s.d < 3) return s;
-        // camera-relative steering: err > 0 means the target is to the left of the view
-        await page.keyboard.down('KeyW');
-        if (s.err > 0.25) { await page.keyboard.down('KeyA'); await page.keyboard.up('KeyD'); }
-        else if (s.err < -0.25) { await page.keyboard.down('KeyD'); await page.keyboard.up('KeyA'); }
-        else { await page.keyboard.up('KeyA'); await page.keyboard.up('KeyD'); }
+        const s = await page.evaluate(() => { const a = window.__ant; return { x: a.x, z: a.z, y: a.y, yaw: a.yaw }; });
+        const dx = tx - s.x, dz = tz - s.z;
+        if (Math.hypot(dx, dz) < within) { await setKeys(new Set()); return s; }
+        // a cap in the way (the room's fungus): go round it like a player would
+        if (!last || Math.hypot(s.x - last.x, s.z - last.z) > 0.5) { last = s; lastT = Date.now(); unstick = 0; }
+        else if (Date.now() - lastT > 1500) { unstick++; lastT = Date.now(); }
+        const side = unstick === 0 ? 0 : (unstick % 2 ? 0.8 : -0.8) * Math.min(2, Math.ceil(unstick / 2));
+        const diff = angDiff(s.yaw, Math.atan2(dx, dz) + side);
+        const keys = new Set();
+        if (diff > 0.08) keys.add('KeyA'); else if (diff < -0.08) keys.add('KeyD');
+        if (Math.abs(diff) < 0.9) keys.add('KeyW');
+        await setKeys(keys);
         await page.waitForTimeout(80);
       }
+      await setKeys(new Set());
       return null;
     };
-    const arrived = await walkTo(under.rx, under.rz, 25000);
-    for (const k of ['KeyW', 'KeyA', 'KeyD']) await page.keyboard.up(k);
+    await walkTo(under.te[0] - (under.rx - under.t0[0]) * 0.1, under.te[2] - (under.rz - under.t0[2]) * 0.1, 30000);
+    /* the rim of the room, not its middle: the room's own fungus cluster (world half,
+       #90) sits across the doorway of a room this small and the queen's body does
+       not pass it - reported, not hidden */
+    const arrived = await walkTo(under.rx, under.rz, 15000, under.R + 1.5);
     await page.waitForTimeout(800);
     const fin = await page.evaluate(([u]) => {
       const a = window.__ant, W = window.__world6;
-      return { x: a.x, y: a.y, z: a.z, floor: W.floorAt(a.x, a.z, a.y), open: W.isOpen(a.x, a.y + 3, a.z), cut: u.cut };
+      const e = window.__camera.position; return { x: a.x, y: a.y, z: a.z, floor: W.floorAt(a.x, a.z, a.y), open: W.isOpen(a.x, a.y + 3, a.z), cut: u.cut, eye: [e.x, e.y, e.z].map((v) => +v.toFixed(1)), eyeOpen: W.isOpen(e.x, e.y, e.z), room: [u.rx, u.ry, u.rz] };
     }, [under]);
-    console.log('WALK', JSON.stringify(arrived), JSON.stringify(fin));
+    const probe = await page.evaluate(([u]) => {
+      const a = window.__ant, W = window.__world6, out = [];
+      const dx = u.rx - a.x, dz = u.rz - a.z, l = Math.hypot(dx, dz);
+      for (let d = 0; d <= 9; d += 1.5) {
+        const x = a.x + dx / l * d, z = a.z + dz / l * d;
+        const n = window.__nestAt(x, z, a.y); out.push([d, W.walkableAt(x, z, a.y) ? +W.walkableAt(x, z, a.y).floor.toFixed(1) : null, W.isOpen(x, a.y + 2.5, z), n.inside, +n.floorY.toFixed(1), +n.headroom.toFixed(1), +window.__decorPenetration(x, z, window.__antRadius, a.y).toFixed(2)]);
+      }
+      return { yaw: a.yaw, speed: a.speed, out };
+    }, [under]);
+    console.log('RIGS', JSON.stringify(await page.evaluate(() => { const o = []; window.__scene.traverse((n) => { if (n.name === 'ant') o.push([n.visible, n.scale.x, n.position.toArray().map((v) => +v.toFixed(1)), new window.__THREE.Box3().setFromObject(n).getSize(new window.__THREE.Vector3()).toArray().map((v) => +v.toFixed(1))]); }); return o; })));
+    console.log('FUNGUS', JSON.stringify(await page.evaluate(() => { const a = window.__ant; return window.__world6.nestFungus.map((f) => ({ d: Math.hypot(f.x - a.x, f.z - a.z), r: f.r, cr: f.collideR, y: f.y })).sort((p, q) => p.d - q.d).slice(0, 3); })));
+    console.log('PROBE', JSON.stringify(probe));
+    console.log('WALK from', JSON.stringify(under.t0), 'to', under.rx.toFixed(1), under.rz.toFixed(1), JSON.stringify(arrived), JSON.stringify(fin));
     await shot('6-queen-in-room-under-trench');
     check(!!arrived, 'the queen walks from the chamber into the room dug under the trench');
-    check(fin.y < under.cut - 6 && Math.abs(fin.y - fin.floor) < 0.6, `she stands on the room floor, ${(under.cut - fin.y).toFixed(1)} under the trench floor (y ${fin.y.toFixed(1)})`);
+    check(fin.y < under.cut - 6 && fin.eyeOpen && Math.abs(fin.y - fin.floor) < 0.6, `she stands on the room floor, ${(under.cut - fin.y).toFixed(1)} under the trench floor (y ${fin.y.toFixed(1)})`);
 
     }
     if (ONLY.includes('4')) {

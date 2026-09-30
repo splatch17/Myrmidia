@@ -115,7 +115,7 @@ function containNest(ant, fromX, fromZ) {
   ux /= ul; uz /= ul;
   const ox = bx + ux * NEST_DOOR_PROBE, oz = bz + uz * NEST_DOOR_PROBE;
   if (fp.contains(ox, oz, ant.y)) return true; // the edge doubles back: still inside
-  if (Math.abs(groundY(ox, oz) - fp.floorY(bx, bz)) > NEST_LEDGE) return true;
+  if (Math.abs(groundY(ox, oz) - fp.floorY(bx, bz, ant.y)) > NEST_LEDGE) return true;
 
   ant.x = toX; ant.z = toZ; // a door: she keeps the step she took
   return false;

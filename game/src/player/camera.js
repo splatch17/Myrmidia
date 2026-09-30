@@ -429,10 +429,10 @@ export function desiredCamera(ant, camYaw, wantPitch, camDist) {
   const fp = nestFootprint();
   // "in the nest" for framing purposes means under its roof: the open cut is
   // shot like the meadow it is carved into (see containCameraEye)
-  const inNest = !!fp && fp.contains(ant.x, ant.z);
+  const inNest = !!fp && fp.contains(ant.x, ant.z, ant.y);
   // Infinity in the open cut, which makes dWant fall through to camDist: a
   // trench open to the sky has no reason to pull the boom in
-  const nestHead = inNest ? fp.headroom(ant.x, ant.z) : 0;
+  const nestHead = inNest ? fp.headroom(ant.x, ant.z, ant.y) : 0;
   const inTunnel = !inNest && ant.z < TUNNEL_MOUTH - 2;
   const enclosed = inNest || inTunnel;
   const cav = inTunnel ? cavityAt(ant) : null;
@@ -456,7 +456,7 @@ export function desiredCamera(ant, camYaw, wantPitch, camDist) {
   /* 1 = draw her whole; shrinks with the eye's distance so her body spans at most ~70% of the view, so
      a cramped room shows the room and not her abdomen. */
   const dEye = Math.hypot(eye[0] - head[0], eye[1] - head[1], eye[2] - head[2]);
-  const fade = clamp(0.7 * dEye / (9 * s), 0.1, 1);
+  const fade = clamp(0.7 * dEye / (13 * s), 0.1, 1);
   return { eye, aim, fade };
 }
 
