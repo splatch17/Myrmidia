@@ -61,6 +61,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   const laying = createLaying();
   const burrow = createBurrow();
   let foundProgress = 0, layProgress = 0;
+  let layRate = 1;   // #84: a settled queen lays faster (settle.js bonuses)
   let lastMessage = null, messageTimer = 0;
 
   /** Distance from the ant to the mouth of her own nest, or Infinity. */
@@ -218,7 +219,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
         break;
       case 'lay': {
         if (held) {
-          layProgress += dt / LAY_SECONDS;
+          layProgress += dt * layRate / LAY_SECONDS;
           if (layProgress >= 1) {
             layProgress = 0;
             const laid = act.inPlace ? laying.layInPlace() : laying.begin(ant);
@@ -316,6 +317,19 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     return `Objectif : récolter ${missing} unité${missing > 1 ? 's' : ''} de plus${tail}`;
   }
 
+  const busy = () => burrow.active() || laying.active();
+  /** #84: lay from the queen's menu, wherever the player is standing. The
+   *  same clutch, the same price as the E hold - without the hold. */
+  function layNow() {
+    if (busy()) return false;
+    if (!isFounded() || foundingProvisional() || !laying.canLayMore()) return false;
+    if (harvest.stock() < clutchCost()) return false;
+    if (!laying.layInPlace()) return false;
+    harvest.spend(clutchCost());
+    say(laying.eventText() || 'Elle pond.', 6);
+    return true;
+  }
+
   function inventoryText() { return harvest.inventoryLine(); }
   function message() { return lastMessage; }
 
@@ -378,7 +392,9 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     clutchCost,
     /** True while the burrow beat or the founding sequence, not the player,
      *  is driving the ant. */
-    busy: () => burrow.active() || laying.active(),
+    busy,
+    layNow,
+    setLayRate: (k) => { layRate = k; },
     /** The scripted camera shot for this frame, or null (camera.js). */
     shot: (ant) => (burrow.active() ? burrow.shot(ant) : laying.shot(ant)),
     isHold: (act) => !!HOLD_KINDS[act.kind],

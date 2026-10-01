@@ -4,6 +4,7 @@ import { WORKER, DIGGER, profileById, strideOf, collideRadius } from './avatar.j
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
 import { dampAngle } from './mathUtil.js';
 import { paceTime } from '../core/pace.js';
+import { initialSettleState } from './settle.js';
 
 /* ==========================================================================
    The colony: eggs that hatch, and workers that forage.
@@ -179,6 +180,8 @@ export function createColony({ plans = null } = {}) {
        screen reads as an MMO from frame one, and a real hit just has to
        lower `cur`. */
     queenHp: { max: 100, cur: 100 },
+    /* #84: reserves, settled bonuses, death, run clock (settle.js owns the rules) */
+    ...initialSettleState(),
   };
 
   function spawnWorker(x, z, profileId = 'worker') {
@@ -211,6 +214,7 @@ export function createColony({ plans = null } = {}) {
    *  than "2 œufs" and a surprise. */
   function addEggs(count, profileId = 'worker') {
     for (let i = 0; i < count; i++) state.eggs.push({ id: _nextId++, age: 0, profileId });
+    state.laid += count;
   }
 
   /* A fouisseuse walks to the nearest open dig face and works it. Progress is
@@ -359,7 +363,8 @@ export function createColony({ plans = null } = {}) {
 
     for (let i = state.eggs.length - 1; i >= 0; i--) {
       const e = state.eggs[i];
-      e.age += dt;
+      // #84: a settled queen's site bonus: her eggs hatch that much faster
+      e.age += dt * (1 + (state.settled ? state.settled.layBonus : 0));
       if (e.age >= paceTime(HATCH_SECONDS)) {
         state.eggs.splice(i, 1);
         // she comes out of the nest mouth, not out of the ground beside it
@@ -481,6 +486,8 @@ export function createColony({ plans = null } = {}) {
     return {
       delivered: state.delivered,
       queenHp: { ...state.queenHp },
+      queenReserve: { ...state.queenReserve },
+      settled: state.settled ? { ...state.settled } : null,
       eggs: state.eggs.map((e) => ({ id: e.id, age: e.age })),
       opened: state.opened.slice(),
       workers: state.workers.map((w) => ({

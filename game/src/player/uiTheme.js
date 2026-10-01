@@ -219,6 +219,13 @@ const CSS = `
 .mm-qhp-bar { height: 17px; }
 .mm-qhp-bar > span { font: 700 11px/17px var(--mm-body); }
 
+.mm-qres-name { margin-top: 6px; }
+.mm-qres-bar > i { background: linear-gradient(180deg, #cfe9a0, #7fae45 50%, #43701f); }
+.mm-qres-bar.mm-low > i { background: linear-gradient(180deg, #ff9a7a, #d8452a 50%, #8a1d10); }
+.mm-qres-bar.mm-low { animation: mm-qpulse .9s ease-in-out infinite; }
+.mm-qres-bar.mm-settled > i { background: linear-gradient(180deg, #b9c2c9, #7d8a94 50%, #4b565f); }
+@keyframes mm-qpulse { 50% { box-shadow: 0 0 0 1px #ff6a4a, 0 0 10px 2px rgba(255,90,60,.8); } }
+
 .mm-casterow { display: flex; align-items: center; gap: 8px; padding: 8px 10px 24px; }
 .mm-caste-sq {
   /* #75 round 2: a real button, so it needs its own opt-in out of the .mm

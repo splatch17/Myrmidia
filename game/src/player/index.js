@@ -18,7 +18,11 @@ import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
 import { createInteraction } from './interaction.js';
 import { createProps } from './props.js';
 import { resourceNodes } from './resources.js';
-import { nestOrigin, canFound, found, refusalText } from './founding.js';
+import { nestOrigin, canFound, found, refusalText, isFounded } from './founding.js';
+import {
+  settleVerdict, settleBonuses, settleToastText, tickReserve, activityOf, reserveLow, depthOf, MIN_DEPTH,
+} from './settle.js';
+import { createSettleUi } from './settleUi.js';
 import { createHud } from './hud.js';
 import { createTargetMarker } from './marker.js';
 import { createColony, requiredCrewFor, CONTROL_DIG_MULT } from './colony.js';
@@ -122,7 +126,9 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
   // input.js, which with a spawn facing west would open the game on a side
   // view of the queen instead of on the meadow she is looking at
   input.state.camYaw = SPAWN_YAW;
-  const queenMenu = createQueenMenu();
+  // #84: both buttons of the queen's panel (functions below, hoisted)
+  const queenMenu = createQueenMenu(document.body, { settle: () => requestSettle(), lay: () => layFromMenu() });
+  const settleUi = createSettleUi();
   const cameraRig = createCameraRig(camera);
 
   /* Screen position of the dig gauge (#51), and which face gets it when
@@ -327,6 +333,77 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     updateLegs(queen.ant, queen.legState, dt);
   }
 
+  /* ---- the queen settles (#84, rules and numbers in settle.js) ------------- */
+
+  function settleBonusesNow(depth) {
+    const o = nestOrigin();
+    return settleBonuses(depth, o ? evaluateSite(o.x, o.z).score : 0);
+  }
+  function refuse(text) { casteMsg = text; casteMsgTimer = 5; }
+
+  /** Ask: refused with the reason, or the confirmation (settling is permanent). */
+  function requestSettle() {
+    if (colony.state.dead || colony.state.settled || settleUi.isConfirming()) return;
+    const v = settleVerdict(queen.ant, colony.state, interaction.busy());
+    if (!v.ok) { refuse(v.reason); return; }
+    settleUi.confirm(settleBonusesNow(v.depth), { yes: confirmSettle, no: () => settleUi.cancel() });
+  }
+
+  function confirmSettle() {
+    settleUi.cancel();
+    const v = settleVerdict(queen.ant, colony.state, interaction.busy());
+    if (!v.ok) { refuse(v.reason); return; }
+    const b = settleBonusesNow(v.depth);
+    casteMsg = null; casteMsgTimer = 0;
+    colony.state.settled = { ...b, at: colony.state.age };
+    interaction.setLayRate(1 + b.layBonus);
+    queen.ant.speed = 0;
+    settleUi.toast(settleToastText(b));
+    // the player's body passes to the first worker; with none yet she stays
+    // on the (now immobile) queen and the hint says what to do about it
+    const first = colony.state.workers[0];
+    if (first && cur === queen) entities.takeControl(first.id, 'settle');
+  }
+
+  function layFromMenu() {
+    if (colony.state.dead) return;
+    if (interaction.layNow()) colony.addEggs(3, caste);
+  }
+
+  function showEnd() {
+    settleUi.cancel();
+    const s = colony.state;
+    settleUi.endScreen({
+      time: s.age, depth: s.maxDepth, rooms: dugRooms().length, laid: s.laid,
+      cause: 'Affamée : ses réserves se sont épuisées, puis sa vie.',
+    }, () => window.location.reload());
+  }
+
+  /* The objective chain's new last step: after the hall, settling. And a
+     warning in front of whatever the objective is once the reserves run low. */
+  function settleObjective(base) {
+    const s = colony.state;
+    if (s.dead) return 'La reine est morte.';
+    if (s.settled) {
+      if (!profile.manages) return base;
+      const missing = interaction.clutchCost() - interaction.harvest.stock();
+      if (!interaction.laying.canLayMore()) return 'Installée — la chambre est pleine. Tab : jouer une ouvrière.';
+      return missing > 0
+        ? `Installée — il manque ${missing} unité${missing > 1 ? 's' : ''} au dépôt pour pondre (Tab : jouer une ouvrière)`
+        : 'Installée — pondez : E, ou le bouton Pondre du panneau (C)';
+    }
+    let text = base;
+    if (profile.manages && isFounded() && dugRooms().length > 1 && !interaction.busy()) {
+      const v = settleVerdict(queen.ant, s, false);
+      text = v.ok
+        ? 'Objectif : s\u2019installer ici — touche I (la reine ne bougera plus)'
+        : `Objectif : descendre à ${MIN_DEPTH} u dans le nid pour s\u2019y installer (${v.depth.toFixed(0)} u)`;
+    }
+    if (s.queenReserve.cur <= 0) return `RÉSERVES ÉPUISÉES — la reine perd de la vie ! ${text}`;
+    if (reserveLow(s)) return `Réserves basses (${Math.round(s.queenReserve.cur)}) ! ${text}`;
+    return text;
+  }
+
   // who the HUD says you are: "n° 2" for the second digger, nothing for the queen
   function unitTag() {
     if (cur === queen) return '';
@@ -362,7 +439,17 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
       input.state.camDist = macroSnap.camDist;
       macroSnap = null;
     }
-    const intent = macro ? IDLE_INTENT : input.readMoveIntent();
+    const settled = !!colony.state.settled, dead = colony.state.dead;
+    // #84: a settled queen never walks again; the dead do not play
+    const intent = (macro || dead || (settled && cur === queen)) ? IDLE_INTENT : input.readMoveIntent();
+    const pressSettle = input.consumeSettle(), pressEsc = input.consumeEscape();
+    if (!dead) {
+      if (settleUi.isConfirming()) {
+        if (pressEsc) settleUi.cancel();
+        else if (pressSettle) confirmSettle();
+        else if (!settleVerdict(queen.ant, colony.state, interaction.busy()).ok) settleUi.cancel();
+      } else if (pressSettle && !macro) requestSettle();
+    }
 
     /* #36: switching. Tab / Shift+Tab walk the roster; a click on an ant in
        the world takes it. Not in the macro model (its own pins do that, and a
@@ -394,7 +481,8 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     // stops a saved pick from outliving the rule that allowed it
     if (!casteUnlocked(caste)) caste = 'worker';
     const pressedE = input.consumeInteract();
-    const act = interaction.update(ant, macro ? false : pressedE, macro ? false : input.isInteractHeld(), dt, queen.ant);
+    const still = macro || dead;
+    const act = interaction.update(ant, still ? false : pressedE, still ? false : input.isInteractHeld(), dt, queen.ant);
 
     if (interaction.busy()) {
       /* The founding sequence (laying.js, #6) is placing her along a path
@@ -456,6 +544,8 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
        is the first thing that turns one into something that hatches. */
     if (interaction.laying.state.justLaid) colony.addEggs(3, caste);
     colony.update(dt);
+    if (tickReserve(colony.state, dt, activityOf(queen.ant, queen.profile,
+      colony.state.digging > 0 || interaction.busy()), queen.ant)) showEnd();
     if (macroTool) macroTool.update(dt);
     if (plans.consumeDirty()) ghost.setPlans(plans.ghostList());
     ghost.update(dt, elapsed, camera, macroMixNow(), (domElement && domElement.clientHeight) || window.innerHeight);
@@ -468,7 +558,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
 
     refreshSite(dt);
     hud.setPrompt(handDig.promptText() || interaction.promptText(ant, act));
-    hud.setObjective(profile.manages ? interaction.objectiveText(ant) : fieldObjective());
+    hud.setObjective(settleObjective(profile.manages ? interaction.objectiveText(ant) : fieldObjective()));
     const colonyLine = colony.statusText();
     hud.setStock(colonyLine ? `${interaction.inventoryText()}  |  ${colonyLine}` : interaction.inventoryText());
     if (casteMsgTimer > 0) { casteMsgTimer -= dt; if (casteMsgTimer <= 0) casteMsg = null; }
@@ -491,6 +581,14 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
         eggs: colony.state.eggs.length,
       },
       rooms: dugRooms(),
+      settle: (() => {
+        const st = colony.state;
+        if (st.settled) {
+          return { settled: st.settled, canLay: interaction.laying.canLayMore() && interaction.harvest.stock() >= interaction.clutchCost() };
+        }
+        const v = settleVerdict(queen.ant, st, interaction.busy());
+        return { ok: v.ok, reason: v.reason, depth: v.depth, minDepth: MIN_DEPTH };
+      })(),
       plans: plans.rows((id) => colony.state.faceWork.get(id) || 0),
       faces: digFaces().map((f) => ({
         ...f, diggers: colony.state.faceWork.get(f.id) || 0, required: requiredCrewFor(f),
@@ -502,12 +600,15 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     const manager = entities.manager().profile;
     queenMenu.render(manager, colonyView);
     hud.setUnit(profile, colonyView, unitTag());
-    hud.setControlHint('Tab — changer de fourmi');
+    hud.setControlHint(colony.state.settled && !colony.state.workers.length
+      ? 'pondez une ouvrière — Tab pour changer de fourmi'
+      : 'Tab — changer de fourmi');
     /* Bottom-left, always: the queen's own vitals, not the controlled unit's
        (#75). She stays the same ant whether or not she is the one under the
        player's hand right now (design/castes-et-micro-macro.md 3), so this
        does not gate on `profile.manages` the way the panel above does. */
     hud.setQueenHp(colony.state.queenHp);
+    hud.setQueenReserve(colony.state.queenReserve, settled);
     /* The squares are buttons since #75 round 2: clicking one calls
        selectCaste() exactly like pressing 5/6 does (same function, same
        unlock rule). `manages` gates clickability the way queenMenu.js gates
@@ -612,6 +713,15 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
        #41 lands — a harness that cannot tell those apart would happily
        report the feature working on a guess. */
     window.__nest = () => nestInfo(ant);
+    // #84: the settle hooks - the harness presses the real keys/buttons, these only read and reach ground it cannot walk to quickly
+    window.__settle = {
+      verdict: () => settleVerdict(queen.ant, colony.state, interaction.busy()),
+      depth: () => depthOf(queen.ant),
+      queenAnt: () => queen.ant,
+      request: requestSettle,
+      confirm: confirmSettle,
+      confirming: () => settleUi.isConfirming(),
+    };
     // point probe, so a harness can ask about ground it has not walked to yet
     window.__nestAt = (x, z, y) => {
       const fp = nestFootprint();
@@ -695,6 +805,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     input.dispose();
     hud.dispose();
     queenMenu.dispose();
+    settleUi.dispose();
     marker.dispose();
     crowd.dispose();
     props.dispose();

@@ -47,7 +47,7 @@ import { ensureUiTheme, keycap } from './uiTheme.js';
 
 const PANEL_ID = 'queenmenu';
 
-export function createQueenMenu(root = document.body) {
+export function createQueenMenu(root = document.body, handlers = {}) {
   ensureUiTheme();
   const el = document.createElement('div');
   el.id = PANEL_ID;
@@ -56,6 +56,16 @@ export function createQueenMenu(root = document.body) {
   el.className = 'mm mm-frame';
   el.style.display = 'none';
   root.appendChild(el);
+  /* #84: the panel's two buttons (settle, lay at a distance). Delegated: the
+     markup is rewritten on change, the listener is not. */
+  el.addEventListener('pointerdown', (e) => e.stopPropagation());
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const b = e.target.closest && e.target.closest('[data-act]');
+    if (!b || b.disabled) return;
+    const fn = handlers[b.dataset.act];
+    if (fn) fn();
+  });
 
   let open = true;
   let lastHtml = null;
@@ -144,6 +154,24 @@ export function createQueenMenu(root = document.body) {
         return kv(`${p.priority ? '★ ' : ''}${p.label} · ${Math.round(p.progress * 100)} %`, crew) + bar(p.progress);
       }).join('');
 
+      /* #84: settling, then what it paid. The button is live even when she
+         cannot settle yet: it answers with the reason instead of being a
+         grey box nobody can read. */
+      const st = s.settle;
+      let settleBlock = '';
+      if (st && st.settled) {
+        settleBlock = heading('INSTALLATION')
+          + kv('profondeur', `${st.settled.depth.toFixed(0)} u`)
+          + kv('ponte', `+${Math.round(st.settled.layBonus * 100)} %`)
+          + kv('défense', `+${Math.round((st.settled.defense - 1) * 100)} %`)
+          + `<div style="text-align:center"><button class="mm-btn" data-act="lay"${st.canLay ? '' : ' disabled'}>Pondre</button></div>`;
+      } else if (st) {
+        settleBlock = heading('INSTALLATION')
+          + kv('profondeur', `${st.depth.toFixed(0)} / ${st.minDepth} u`)
+          + (st.reason ? `<div class="mm-empty">${st.reason}</div>` : '')
+          + `<div style="text-align:center"><button class="mm-btn" data-act="settle"${st.ok ? '' : ' style="opacity:.55"'}>S\u2019installer ici ${keycap('I')}</button></div>`;
+      }
+
       const html = `<div class="mm-win-title"><span class="mm-title">LA REINE</span>`
         + `<span class="mm-win-hide">${keycap('C')} masquer</span></div>`
         + `<div class="mm-win-sub">${profile.label}</div>`
@@ -159,6 +187,7 @@ export function createQueenMenu(root = document.body) {
         + heading('CHANTIERS')
         + faceRows
         + planRows
+        + settleBlock
         + `<div class="mm-win-foot">${keycap('C')} — masquer  ·  ${keycap('E')} — pondre</div>`;
 
       // written only on change: this runs every frame

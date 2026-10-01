@@ -86,7 +86,7 @@ function nullHud() {
   return {
     setSite() {}, setPrompt() {}, setObjective() {}, setStock() {}, setEvent() {},
     setHold() {}, setDig() {}, setEventNow() {}, setUnit() {}, setControlHint() {},
-    setQueenHp() {}, setCastes() {}, setMacro() {},
+    setQueenHp() {}, setQueenReserve() {}, setCastes() {}, setMacro() {},
     toggleControls() {}, closeControls() {}, dispose() {},
   };
 }
@@ -238,10 +238,16 @@ export function createHud() {
   queenhud.innerHTML = '<div class="mm-frame mm-qhp">'
     + '<div class="mm-qhp-name">LA REINE</div>'
     + '<div class="mm-bar mm-qhp-bar"><i></i><span></span></div>'
+    + '<div class="mm-qhp-name mm-qres-name">RÉSERVES</div>'
+    + '<div class="mm-bar mm-qhp-bar mm-qres-bar"><i></i><span></span></div>'
     + '</div>'
     + '<div class="mm-frame mm-casterow"></div>';
   const qhpFill = queenhud.querySelector('.mm-qhp-bar > i');
   const qhpText = queenhud.querySelector('.mm-qhp-bar > span');
+  const qresBar = queenhud.querySelector('.mm-qres-bar');
+  const qresFill = qresBar.querySelector('i');
+  const qresText = qresBar.querySelector('span');
+  let lastQueenResKey = null;
   const casterow = queenhud.querySelector('.mm-casterow');
   const casteEls = new Map();     // id -> { root, ring, ico, cap, ...cache }
   const CASTE_RING_R = 15, CASTE_RING_C = 2 * Math.PI * CASTE_RING_R;
@@ -479,6 +485,25 @@ export function createHud() {
       lastQueenHpKey = key;
       qhpFill.style.width = `${((cur / max) * 100).toFixed(1)}%`;
       qhpText.textContent = `${Math.round(cur)} / ${Math.round(max)}`;
+    },
+
+    /**
+     * #84: the queen's reserves, under her health. { cur, max } plus the
+     * state it is in: 'low' pulses, 'settled' stops the clock (the bar then
+     * says who feeds her instead of a number that no longer moves).
+     */
+    setQueenReserve(r, settled = false) {
+      if (!r) return;
+      const max = Math.max(1, r.max || 1);
+      const cur = Math.max(0, Math.min(max, r.cur));
+      const low = !settled && cur / max <= 0.25;
+      const key = `${Math.round(cur)}|${max}|${low}|${settled}`;
+      if (key === lastQueenResKey) return;
+      lastQueenResKey = key;
+      qresFill.style.width = `${((settled ? 1 : cur / max) * 100).toFixed(1)}%`;
+      qresText.textContent = settled ? 'installée' : `${Math.round(cur)} / ${Math.round(max)}`;
+      qresBar.classList.toggle('mm-low', low);
+      qresBar.classList.toggle('mm-settled', !!settled);
     },
 
     /**

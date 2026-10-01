@@ -34,6 +34,8 @@ export function createInput(domElement, initialProfile = PLAYER_AVATAR) {
   let helpPressed = false;
   let menuPressed = false;
   let castePressed = null;
+  // #84: I asks the queen to settle (S is backward), Escape backs out of the confirmation
+  let settlePressed = false, escPressed = false;
   // #36: Tab / Shift+Tab (+1 / -1) and a click that was not a drag (px)
   let switchPressed = 0;
   let clickPending = null;
@@ -49,6 +51,8 @@ export function createInput(domElement, initialProfile = PLAYER_AVATAR) {
     if (e.code === 'KeyE') interactPressed = true;
     if (e.code === 'KeyH') helpPressed = true;
     if (e.code === 'KeyC') menuPressed = true;
+    if (e.code === 'KeyI' && !e.repeat) settlePressed = true;
+    if (e.code === 'Escape') escPressed = true;
     if (e.code === 'Tab') { if (!e.repeat) switchPressed = e.shiftKey ? -1 : 1; e.preventDefault(); }
     // 5/6 choose the caste of the next clutch. Digits 1-4 belong to the
     // graphics panel (core/quality.js), which owns its own listener.
@@ -151,6 +155,9 @@ export function createInput(domElement, initialProfile = PLAYER_AVATAR) {
     return v;
   }
 
+  function consumeSettle() { const v = settlePressed; settlePressed = false; return v; }
+  function consumeEscape() { const v = escPressed; escPressed = false; return v; }
+
   /** Consumes a pending caste pick, or null. */
   function consumeCaste() {
     const v = castePressed;
@@ -179,5 +186,5 @@ export function createInput(domElement, initialProfile = PLAYER_AVATAR) {
     domElement.removeEventListener('wheel', onWheel);
   }
 
-  return { state, readMoveIntent, consumeInteract, consumeHelp, consumeMenu, consumeCaste, consumeSwitch, consumeClick, setProfile, isInteractHeld, dispose };
+  return { state, readMoveIntent, consumeInteract, consumeHelp, consumeMenu, consumeCaste, consumeSettle, consumeEscape, consumeSwitch, consumeClick, setProfile, isInteractHeld, dispose };
 }
