@@ -108,12 +108,15 @@ export function poseParts(profile, a, legState, elapsed, emit) {
     const footW = S.planted;
     const outward = L.hip[0] > 0 ? b.side : scl3(b.side, -1);
     const pole = nrm3([b.up[0] + outward[0] * 0.75, b.up[1] + outward[1] * 0.75, b.up[2] + outward[2] * 0.75]);
-    const knee = solveKnee(hipW, footW, L1, L2, pole);
+    // #70: `foot` is the actually-reachable point (clamped to l1+l2 when the
+    // gait's target isn't) — draw and mark it there, not at the raw target,
+    // or the shin bone and the foot sphere disagree about where the foot is.
+    const { knee, foot } = solveKnee(hipW, footW, L1, L2, pole);
     bone(hipW, knee, LR.thigh * s, C.limb);
-    bone(knee, footW, LR.shin * s, C.limb);
+    bone(knee, foot, LR.shin * s, C.limb);
     const kr = LR.knee * s, fr = LR.foot * s;
     emit(SPHERE, knee, [kr, 0, 0], [0, kr, 0], [0, 0, kr], C.limb);
-    emit(SPHERE, footW, [fr, 0, 0], [0, fr, 0], [0, 0, fr], C.limb);
+    emit(SPHERE, foot, [fr, 0, 0], [0, fr, 0], [0, 0, fr], C.limb);
   }
 }
 

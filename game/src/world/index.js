@@ -6,21 +6,29 @@ import {
 import {
   buildLawn, buildWater, buildHorizon, groundY, groundNormal, groundSlope,
   soilAt, sampleTerrain, waterDepthAt, distanceToWater, riverEdgeAt, containSurface,
-  LAWN_BOUNDS, TERRAIN_BOUNDS, WATER_Y, RIVER,
+  LAWN_BOUNDS, TERRAIN_BOUNDS, WATER_Y, RIVER, lawnY,
 } from './terrain.js';
+import { createPlanGhost } from './planGhost.js';
+import { inOpenCutPastDoor, openCutFloorAt, OPEN_CUT_CLEARANCE } from './excavation.js';
 import { createGrassField } from './grass.js';
 import { buildTree, TREE, treeTrunkRadius, walkBranch as treeWalkBranch } from './tree.js';
 import { buildNestDecor, MUSHROOMS, ROCKS, mushroomCollideR } from './nestDecor.js';
 import { buildQueen } from './queen.js';
-import { addLocalLight, updateLocalLights, applyNestShading, daylightAt, pitFactorAt } from './lighting.js';
+import { addLocalLight, updateLocalLights, applyNestShading, daylightAt, pitFactorAt, nestInsideAt } from './lighting.js';
 import { shadeAt } from './shade.js';
 import { RESOURCE_NODES, harvestNode, nodesNear, buildResources } from './resources.js';
 import {
   initFounding, canFoundAt, foundNest, nestOrigin, getFoundedNest,
   populateNest, sealNest, updateFounding, digFaces, payDigFace, dugRooms,
-  nestFootprint, descentPath,
+  nestFootprint, descentPath, _coverAt, NEST_FUNGUS, openCells, flushNestMesh, nestMeshStats, groundCoverAt,
 } from './founding.js';
+import {
+  isOpen, floorAt, volumeSpan, walkableAt, planCells, plannedCells, removePlan, isPlanned,
+  onVolumeChange, volumeVersion, brushShape, MIN_COVER,
+} from './nestVolume.js';
 import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './sun.js';
+import { createAtmosphere } from './atmosphere.js';
+import { buildGardenDecor } from './gardenDecor.js';
 
 // Re-exported so Cataglyphis can pull everything needed for collision/climb
 // from one module without reaching into world/underground.js, world/tree.js,
@@ -69,6 +77,11 @@ import { RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix } from './
 //                             populateNest(n) / sealNest() are the #12 half
 //                             (empty chamber that fills up) and are an
 //                             addition to the contract — see the report.
+// #80 decor (contract §9): the garden's mushrooms, pebbles and leaf add their
+// footprints to ROCKS, which the lawn collision already walks. NEST_FUNGUS is
+// the glowing clusters in dug rooms, {x, z, r, y, room}, filled as rooms open
+// — a separate list because decorCollision.js skips everything on the lawn
+// list while she is inside the nest, which is where these stand.
 // RIG_PROLOGUE/RIG_FOUNDED/sunDir/foundedMix/setFoundedMix are the sky rig
 // main.js drives and shadeAt() reads, kept in one place so the light the
 // player is told about and the light drawn on screen cannot diverge.
@@ -79,11 +92,15 @@ export {
   TREE, treeTrunkRadius, treeWalkBranch,
   QUEEN, START, TUNNEL_MOUTH, TUNNEL_BACK, TUNNEL_R,
   LAWN_BOUNDS, TERRAIN_BOUNDS, WATER_Y, RIVER,
-  MUSHROOMS, ROCKS, mushroomCollideR, applyNestShading, daylightAt, pitFactorAt,
+  MUSHROOMS, ROCKS, mushroomCollideR, applyNestShading, daylightAt, pitFactorAt, nestInsideAt,
   shadeAt,
   RESOURCE_NODES, harvestNode, nodesNear,
   canFoundAt, foundNest, nestOrigin, getFoundedNest, populateNest, sealNest,
-  digFaces, payDigFace, dugRooms, nestFootprint, descentPath,
+  digFaces, payDigFace, dugRooms, nestFootprint, descentPath, _coverAt,
+  NEST_FUNGUS,
+  openCells, flushNestMesh, nestMeshStats, groundCoverAt,
+  isOpen, floorAt, volumeSpan, walkableAt, planCells, plannedCells, removePlan, isPlanned,
+  onVolumeChange, volumeVersion, brushShape, MIN_COVER, lawnY, createPlanGhost, inOpenCutPastDoor, openCutFloorAt, OPEN_CUT_CLEARANCE,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, foundedMix, setFoundedMix,
 };
 
@@ -155,6 +172,11 @@ export function createWorld() {
   const resources = buildResources();
   group.add(resources.group);
 
+  /* Garden-floor decor (#80), after the resources so it can keep clear of
+     their clusters. Fills ROCKS, which main.js indexes right after this. */
+  const garden = buildGardenDecor();
+  group.add(garden.group);
+
   /* Anything dug later (foundNest) hangs here, so a run-time nest is a child
      of the world like everything else and nothing has to be rebuilt for it
      to exist. */
@@ -166,17 +188,27 @@ export function createWorld() {
      excavated into it later. Without this the cut is roofed by the lawn and
      there is nothing to walk into — see openTheMeadow() for the capture that
      made that obvious. */
-  initFounding(dug, { lawn, grass });
+  initFounding(dug, { lawn, grass, garden });
+
+  /* Light shafts down the cut, dust and lamp bodies in the rooms (#78). */
+  const atmosphere = createAtmosphere();
+  group.add(atmosphere.group);
 
   function update(dt, elapsed, camera) {
     grass.update(dt, elapsed, camera);
-    updateFounding(dt);
+    updateFounding(dt, camera);
+    atmosphere.update(elapsed);
     queen.update(elapsed);
     water.update(elapsed);
     if (camera) {
       tree.update(camera);
       horizon.update(camera, foundedMix());
       updateLocalLights(camera.position);
+      /* The garden's instanced meshes span the whole lawn, so nothing culls
+         them: from inside the nest they would be drawn (main, shadow and
+         bloom passes) behind a wall of earth every frame. */
+      const p = camera.position;
+      garden.group.visible = nestInsideAt(p.x, p.y, p.z) < 0.95;
     }
   }
 
@@ -193,5 +225,12 @@ export function createWorld() {
     doorLights: underground.doorLights,
     mushrooms: decor.mushrooms,
     rocks: decor.rocks,
+    garden,
+    /* #34: everything that is "the earth" when the macro view hides it to
+       show the nest as a model (world/macroView.js). Handles, not copies. */
+    surface: {
+      lawn, water: water.mesh, horizon: horizon.group, grass: grass.mesh, tree: tree.group,
+      resources: resources.group, garden: garden.group, atmosphere: atmosphere.group,
+    },
   };
 }

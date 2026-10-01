@@ -71,6 +71,20 @@ async function main() {
       text: el ? el.textContent.replace(/\s+/g, ' ').trim() : null,
     };
   });
+  /* #75: the bottom-left health bar + caste roster. Read by class rather than
+     a per-square id, since the row is built one node per caste in
+     PRODUCED_CASTES (avatar.js) and this harness should not have to know how
+     many that is today. */
+  const queenHud = () => page.evaluate(() => {
+    const el = document.getElementById('queenhud');
+    if (!el) return null;
+    return {
+      text: el.textContent.replace(/\s+/g, ' ').trim(),
+      squares: el.querySelectorAll('.mm-caste-sq').length,
+      locked: el.querySelectorAll('.mm-caste-sq.mm-caste-locked').length,
+      inprod: el.querySelectorAll('.mm-caste-sq.mm-caste-inprod').length,
+    };
+  });
 
   /* ---- 1. it belongs to the profile, not to the player ------------------ */
   console.log('\n=== whose panel is it ===');
@@ -84,18 +98,44 @@ async function main() {
   check(who.worker === false, 'a forager does not — the panel is refused by caste, not by a player check');
   check(who.digger === false, 'nor does a fouisseuse');
 
-  /* ---- 2. it opens and closes on a real key ----------------------------- */
+  /* ---- 2. it is open on arrival, and C hides/shows it -------------------
+     #75: the porter wants the screen to read as an MMO "from the first
+     second" — a management panel nobody has opened yet is not that. So the
+     panel now starts SHOWN for a profile that manages, and this checks the
+     opposite of what it used to: that C can put it away, and bring it back,
+     rather than that a keypress is required just to see it once. */
   console.log('\n=== the key ===');
-  const closed0 = await panel();
-  check(!closed0.shown, 'it starts closed');
+  const opened0 = await panel();
+  check(opened0.shown, 'it is open on arrival, not something the player has to discover');
+  check(/masquer/.test(opened0.text), 'the panel itself names the key that hides it');
+
+  /* ---- 2b. the bottom-left health bar + caste squares (#75) --------------
+     Present from the same first frame, and — crucially — NOT tied to the
+     panel's own open/closed state: the queen has these whether or not the
+     player currently has her management window up, or is even the one
+     driving her (design/castes-et-micro-macro.md 3). Checked once at launch
+     and once with the panel hidden, so "hides everything" cannot silently
+     start meaning "hides the queen's own vitals too". */
+  const hud0 = await queenHud();
+  check(!!hud0, 'the queen health/caste HUD exists');
+  check(/LA REINE/.test(hud0.text), 'the health bar is labelled');
+  check(/\d+\s*\/\s*\d+/.test(hud0.text), 'health reads as a value, e.g. "100 / 100"');
+  check(hud0.squares >= 2, `one square per produced caste (found ${hud0.squares})`);
+  check(hud0.locked >= 1, 'the digger reads as locked before any clutch is laid');
+  check(/dès la/.test(hud0.text), 'the locked square says what unlocks it');
+  await shot('00-launch-open');
+
   await page.keyboard.press('KeyC');
   await page.waitForTimeout(250);
-  const opened = await panel();
-  console.log('  after C:', opened.shown);
-  check(opened.shown, 'C opens it');
+  const closed = await panel();
+  console.log('  after C:', closed.shown);
+  check(!closed.shown, 'C hides the management panel');
+  const hud1 = await queenHud();
+  check(!!hud1 && hud1.squares === hud0.squares, 'the health bar and caste squares stay up — C only hides the panel, not the game\'s own HUD');
+  await shot('00b-after-c-hidden');
   await page.keyboard.press('KeyC');
   await page.waitForTimeout(250);
-  check(!(await panel()).shown, 'C closes it again');
+  check((await panel()).shown, 'C shows it again');
 
   /* ---- 3. the numbers are the colony's own ------------------------------ */
   console.log('\n=== the numbers ===');
@@ -106,11 +146,12 @@ async function main() {
     window.__foundNest(a.x + 40, a.z + 40);
   });
   await page.waitForTimeout(400);
-  await page.keyboard.press('KeyC');
-  await page.waitForTimeout(300);
+  // it is already open from the check above (#75 default) — only press C if
+  // some earlier step left it hidden, so this does not silently flip it shut
+  if (!(await panel()).shown) { await page.keyboard.press('KeyC'); await page.waitForTimeout(300); }
   const withNest = await panel();
   console.log('  panel:', withNest.text);
-  check(withNest.shown, 'it is open again');
+  check(withNest.shown, 'it is open');
   check(/LA REINE/.test(withNest.text), 'it names who it belongs to');
   check(/fouisseuse/.test(withNest.text), 'the caste is called a fouisseuse, not a creuseuse (#50)');
   check(/PONTE/.test(withNest.text) && /COLONIE/.test(withNest.text) && /CHANTIERS/.test(withNest.text),
@@ -129,6 +170,79 @@ async function main() {
   /* The locked caste has to read as locked: the digger unlocks on the second
      clutch, and this run has laid none. */
   check(/verrouill/.test(withNest.text), 'the caste that is not unlocked yet reads as locked');
+
+  /* ---- 4. keys 5 and 6 really switch the next clutch's caste (#61) ------
+     PROGRESS.md defect #2: this was committed without a capture, because a
+     throwaway harness never sent a keystroke — window.__caste()/the panel
+     text agreed with each other and with nothing that had actually happened.
+     This sends the same real page.keyboard events verify-harvest.mjs proved
+     itself with, and reads back BOTH the HUD text and window.__caste(), so a
+     capture that merely shows the panel frozen on its default cannot pass. */
+  console.log('\n=== 5/6 switch the next clutch\'s caste (#61) ===');
+
+  /* The digger is locked until a first clutch is laid (CASTE_UNLOCK.digger in
+     player/index.js): pressing 6 while it is locked is a no-op by design, and
+     would prove nothing about the key. window.__beginLaying() plays the real
+     scripted sequence (same shortcut this file already used above to get a
+     nest without walking to one), and — as verify-gallery-walk.mjs already
+     established — a short E tap cuts it early and still lays the clutch, so
+     this does not have to sit through the full ~14s cutscene for a fact that
+     is not what #61 is about. */
+  const beganLaying = await page.evaluate(() => window.__beginLaying());
+  check(beganLaying === true, 'the laying sequence started (there is a founded chamber to run it in)');
+  await page.waitForTimeout(1200);
+  const running = await page.evaluate(() => window.__laying());
+  check(!!running.phase, `the scripted descent is running (phase "${running.phase}")`);
+  await page.keyboard.press('KeyE');
+  await page.waitForTimeout(600);
+  const laid = await page.evaluate(() => window.__laying());
+  check(laid.phase === null, 'E cut the cutscene short');
+  check(laid.brood >= 1, `cutting it still laid the clutch, unlocking the digger (brood ${laid.brood})`);
+
+  const unlocked = await page.evaluate(() => window.__caste().unlocked);
+  check(unlocked === true, 'window.__caste() now reports the digger as unlocked');
+
+  /* #75: the clutch just laid (3 worker eggs — the first laying is always
+     caste "worker") is still incubating (HATCH_SECONDS, paced): the worker
+     square should read as "in production", ring and all, before either of
+     the checks below gets a chance to wait long enough for it to hatch. */
+  const hudLaying = await queenHud();
+  check(!!hudLaying && hudLaying.inprod >= 1,
+    `a caste square shows production in progress (inprod=${hudLaying && hudLaying.inprod})`);
+  check(hudLaying && /%/.test(hudLaying.text), 'its square shows a percentage, not just a bare ring');
+  await shot('01b-caste-in-production');
+
+  if (!(await panel()).shown) { await page.keyboard.press('KeyC'); await page.waitForTimeout(250); }
+
+  /* Moved off the default on purpose before either capture: a screenshot of
+     "worker" taken without ever having pressed a key would be exactly the
+     old, unproven capture again. Digit6 first, so the "worker" shot below is
+     proof that 5 switches AWAY from digger, not a picture of a value nobody
+     touched. */
+  await page.keyboard.press('Digit6');
+  await page.waitForTimeout(250);
+  const midSwitch = await page.evaluate(() => window.__caste());
+  check(midSwitch.caste === 'digger', `Digit6 switched the caste (state says "${midSwitch.caste}")`);
+
+  await page.keyboard.press('Digit5');
+  await page.waitForTimeout(250);
+  const asWorker = { state: await page.evaluate(() => window.__caste()), panel: await panel() };
+  console.log('  after Digit5:', JSON.stringify(asWorker.state), '|', asWorker.panel.text);
+  check(asWorker.state.caste === 'worker', `Digit5 switched the caste back (state says "${asWorker.state.caste}")`);
+  /* Since the round-17 skin the PICKED caste carries a PROCHAINE tag right
+     after its name (it was a ● bullet before). */
+  check(/5\s*ouvrière\s*PROCHAINE/i.test(asWorker.panel.text),
+    'the panel itself marks ouvrières as the next clutch, not just the internal state');
+  await shot('02-caste-worker');
+
+  await page.keyboard.press('Digit6');
+  await page.waitForTimeout(250);
+  const asDigger = { state: await page.evaluate(() => window.__caste()), panel: await panel() };
+  console.log('  after Digit6:', JSON.stringify(asDigger.state), '|', asDigger.panel.text);
+  check(asDigger.state.caste === 'digger', `Digit6 switched the caste (state says "${asDigger.state.caste}")`);
+  check(/6\s*fouisseuse\s*PROCHAINE/i.test(asDigger.panel.text),
+    'the panel itself marks fouisseuses as the next clutch, not just the internal state');
+  await shot('03-caste-digger');
 
   console.log('\n=== console ===');
   console.log(' ', errors.length ? errors.slice(0, 6) : 'none');

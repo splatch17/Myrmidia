@@ -4,16 +4,22 @@ import {
   createWorld, containUnderground, profileR, groundY, applyNestShading, TREE,
   RIG_PROLOGUE, RIG_FOUNDED, sunDir, setFoundedMix, foundedMix,
   nestOrigin, canFoundAt, foundNest, populateNest, sealNest, getFoundedNest,
-  pitFactorAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
+  nestInsideAt, shadeAt, RESOURCE_NODES, harvestNode, waterDepthAt, distanceToWater,
   MUSHROOMS, ROCKS, TERRAIN_BOUNDS,
-  digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundSlope,
+  digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundSlope, NEST_FUNGUS,
+  openCells, flushNestMesh, nestMeshStats, isOpen, floorAt, volumeSpan, walkableAt,
+  planCells, plannedCells, removePlan, isPlanned, volumeVersion, groundCoverAt,
+  openCutFloorAt,
 } from './world/index.js';
 import { clamp, lerp } from './core/noise.js';
 import { createPlayerController } from './player/index.js';
 import { setOutlineZone } from './core/outline.js';
 import { createQualityPanel } from './core/quality.js';
+import { createBloom } from './core/bloom.js';
 import { indexWorld, worldQuery } from './core/worldIndexBridge.js';
 import { attachSpatialIndex, status as spatialStatus } from './player/spatial.js';
+import { createMacroView, applyMacroEnvironment } from './world/macroView.js';
+import { createMacroMode } from './core/macroMode.js';
 
 // Entry point for the Three.js/Vite migration (see design docs for the full
 // vision). Atta's world (underground gallery + side rooms, lawn, grass, tree
@@ -40,7 +46,21 @@ scene.fog = new THREE.Fog(0x1a1610, 40, 220);
 const hemi = new THREE.HemisphereLight(0xbfd8f5, 0x6e6a38, 0.85);
 scene.add(hemi);
 
-const HEMI_IN = { sky: new THREE.Color(0x4a5c86), ground: new THREE.Color(0x241f33), intensity: 0.55 };
+/* #78: the nest is blue and violet — its air, not a filter. Sky side pushed
+   from slate 0x4a5c86 to indigo-violet, ground side from 0x241f33 to a deeper
+   violet, and a little more of it (0.55 -> 0.72) since a cold fill on cold
+   earth reads darker than the old brown did at the same number. The warm
+   pools (brood, dig face, bead) are local lamps and do not go through this. */
+/* #90: lifted and warmed from below (sky 0x5b50b0 -> 0xa58ad0, ground
+   0x2b1f4e -> 0x7a5048, 0.72 -> 3.4). The prototype's tunnel never goes
+   black: its air is a mid-value mauve and the floor bounce warm, which is
+   what keeps the earth brown-pink under a violet sky (ambiance §10b.2).
+   The spec's 1.6 (x floor 0.5 = 0.80) was extrapolated from a Reinhard test;
+   measured here under ACES it left a corridor median of L 0.15 against the
+   0.22 asked — Three divides the hemisphere term by pi and the dug earth is a
+   dark albedo — hence 3.4, a warmer ground side and exposure 1.55 (below).
+   verify-fairy-90.mjs prints the numbers. */
+const HEMI_IN = { sky: new THREE.Color(0xa58ad0), ground: new THREE.Color(0x7a5048), intensity: 3.4 };
 
 /* The outdoor end of every commutation below is itself commuted, by a second
    scalar: `founded`, 0 during the prologue (queen alone, end of dusk) and 1
@@ -104,8 +124,11 @@ function trackSun(camera) {
    exposure in its frame loop): outdoors a warm haze that recedes for 400
    units, indoors a near-black one that closes in at 120 so the far end of the
    gallery falls away into darkness instead of staying a uniform brown wash. */
-const FOG_IN = new THREE.Color(0x191a2e);
-const SKY_IN = new THREE.Color(0x0c0b16);
+/* #90: depth in the nest reads as a fade INTO a lit violet haze, not a fall
+   to black (§10b.1); the background seen through gaps is darker than the
+   haze but not black. Near/far 6/135 -> 2/110 below. */
+const FOG_IN = new THREE.Color(0x5a4478);   // #78: 0x1f1a44
+const SKY_IN = new THREE.Color(0x2e2444);   // #78: 0x0d0a20
 
 const world = createWorld();
 scene.add(world.group);
@@ -129,7 +152,8 @@ scene.traverse((obj) => {
 // synthetic bypass of the actual input pipeline. Harmless in production —
 // just two object references on window.
 window.__renderer = renderer;
-window.__ant = player.ant;
+// a getter: the ant being played moves between entities (#36)
+Object.defineProperty(window, '__ant', { get: () => player.ant, configurable: true });
 window.__rooms = world.rooms;
 window.__camera = camera;
 window.__scene = scene;
@@ -138,6 +162,19 @@ window.__world = world;
 window.__contain = containUnderground;
 window.__profileR = profileR;
 window.__groundY = groundY;
+/* Three itself, so a probe can raycast the real scene instead of guessing at
+   a screenshot. A harness that can only photograph can tell you a wedge is
+   black; one that can raycast can tell you WHICH surface it is and which way
+   it faces, which is how #69 was finally named. */
+window.__THREE = THREE;
+importWorldCover();
+async function importWorldCover() {
+  const w = await import('./world/index.js');
+  window.__coverAt = w._coverAt;
+  // the local-light pool, so a harness can name the lamp behind a hot spot
+  // instead of guessing from a capture (#80, the queen's white thorax)
+  window.__lights = (await import('./world/lighting.js')).getLocalLights;
+}
 window.__tree = TREE;
 
 /* Round 6 seam for scripts/verify-round6.mjs. The harness founds a nest by
@@ -155,6 +192,15 @@ window.__world6 = {
      walks descentPath() and ray-casts the result. THREE itself is exposed
      for that ray-cast; there is no second copy of the library to import. */
   digFaces, payDigFace, dugRooms, nestFootprint, descentPath, groundY, groundSlope, THREE,
+  // #80: the dug rooms' fungus footprints and the garden's props
+  get nestFungus() { return NEST_FUNGUS; }, get rocks() { return ROCKS; },
+  get garden() { return world.garden; },
+  /* #81: the nest as a volume — free digging, the column queries the walk is
+     built on, plans, and the mesher's counters (scripts/verify-volume-81.mjs). */
+  openCells, flushNestMesh, nestMeshStats, isOpen, floorAt, volumeSpan, walkableAt,
+  planCells, plannedCells, removePlan, isPlanned, volumeVersion, groundCoverAt,
+  // #91: the trench floor a plan under it must stay under
+  openCutFloorAt,
 };
 
 renderer.setResizeCallback((aspect) => {
@@ -180,12 +226,18 @@ function frame() {
   // tree LOD against last frame's camera — one frame of lag, imperceptible),
   // then the player (writes this frame's antState/camera for next frame).
   world.update(dt, t, camera);
-  player.update(dt, t);
+  /* #34: in (or on the way in/out of) the macro view the player is frozen
+     and the macro mode writes the camera instead. */
+  const inMacro = macro.freezesPlayer();
+  player.update(dt, t, { macro: inMacro });
+  macro.update(dt, t);
   // the camera is final only now, and the dig ring is projected against it
-  player.syncDigDial(dt);
+  if (!inMacro) player.syncDigDial(dt);
 
   applyEnvironment();
-  renderer.render(scene, camera);
+  applyMacroEnvironment({ scene, renderer, hemi }, macro.mix());
+  bloom.setActive(emittersInView() || macro.mode === 'macro');
+  bloom.render();
   quality.update(dt);
 }
 
@@ -224,7 +276,10 @@ function nestness(cam, ant) {
      the gates above know nothing about it: without this the freshly dug
      chamber is a hole in the ground with the meadow's own haze in it. Same
      "whichever is more outdoors" rule as the tube. */
-  const pit = Math.min(pitFactorAt(cam.x, cam.y, cam.z), pitFactorAt(ant.x, ant.y, ant.z));
+  /* #78: nestInsideAt() = the pit factor OR depth under the rim along the
+     cut, so the air turns as the view goes down the ramp — the mouth as a
+     threshold — instead of only once the chamber's roof is overhead. */
+  const pit = Math.min(nestInsideAt(cam.x, cam.y, cam.z), nestInsideAt(ant.x, ant.y, ant.z));
   return Math.max(tube, pit);
 }
 
@@ -255,10 +310,10 @@ function applyEnvironment() {
 
   const outside = 1 - nestness(camera.position, player.ant);
   scene.fog.color.copy(FOG_IN).lerp(outFog, outside);
-  scene.fog.near = lerp(6, lerp(P.fogNear, F.fogNear, f), outside);
-  scene.fog.far = lerp(135, lerp(P.fogFar, F.fogFar, f), outside);
+  scene.fog.near = lerp(2, lerp(P.fogNear, F.fogNear, f), outside);
+  scene.fog.far = lerp(110, lerp(P.fogFar, F.fogFar, f), outside);
   scene.background.copy(SKY_IN).lerp(outBg, outside);
-  renderer.toneMappingExposure = lerp(1.28, lerp(P.exposure, F.exposure, f), outside);
+  renderer.toneMappingExposure = lerp(1.55, lerp(P.exposure, F.exposure, f), outside);
   hemi.color.copy(HEMI_IN.sky).lerp(outSky, outside);
   hemi.groundColor.copy(HEMI_IN.ground).lerp(outGround, outside);
   hemi.intensity = lerp(HEMI_IN.intensity, lerp(P.hemiIntensity, F.hemiIntensity, f), outside);
@@ -287,7 +342,34 @@ const NO_SPATIAL = typeof location !== 'undefined' && /[?&]nospatial=1/.test(loc
 if (!NO_SPATIAL) attachSpatialIndex(worldQuery, 'world');
 window.__spatial = () => ({ ...spatialStatus(), ...indexStats });
 
+/* #34 macro mode: the nest as a scale model, M to toggle. The look is
+   world/macroView.js, the mode (orbit camera, input, picking, selection) is
+   core/macroMode.js; see design/api-monde-gameplay.md 10. Created after the
+   one-shot applyNestShading traverse above: its materials are unlit on
+   purpose and must not be patched. */
+const macroView = createMacroView({ world, scene });
+const macro = createMacroMode({
+  camera, domElement: renderer.domElement, view: macroView,
+  getAnt: () => player.ant,
+  forEachAnt: player.macroInfo.forEachAnt,
+  faceCrew: player.macroInfo.faceCrew,
+  hud: player.hud,
+  /* #36: a click on an ant pin in the model takes that ant and flies back
+     to it: the pose play resumes from is re-aimed at the new ant first. */
+  pickAnt: (x, y) => player.pickAntAt(x, y, { lift: 5, radius: 26 }),
+  onAntPick: (id) => {
+    if (!player.takeControl(id, 'macro')) return;
+    const p = player.playCameraPose();
+    macro.setPlayPose(p.eye, p.aim);
+    macro.toggle();
+  },
+});
+player.attachMacro(macro);   // #82: the chantier tools (player/planTool.js)
+window.__macro = macro;
+
 const quality = createQualityPanel({ renderer, sun, scene });
+const bloom = createBloom(renderer, scene, camera);
+window.__bloom = bloom;
 
 renderer.setAnimationLoop(frame);
 // named and exposed so a verification driver can stop the loop, time a burst
@@ -307,5 +389,16 @@ window.__renderView = (eye, target, elapsed = 0) => {
   world.update(1 / 60, elapsed, camera);
   if (player.syncDigDial) player.syncDigDial(0);
   applyEnvironment();
-  renderer.render(scene, camera);
+  bloom.setActive(emittersInView());
+  bloom.render();
 };
+
+/* The only emitters are in a founded nest (the glow bead, the lamp bodies and
+   spores of world/atmosphere.js, whose own fade ends at 80 units), so the
+   bloom's side passes are skipped everywhere else — the prologue lawn pays
+   nothing for them. */
+function emittersInView() {
+  const n = getFoundedNest();
+  if (!n) return false;
+  return Math.hypot(camera.position.x - n.chamber.x, camera.position.z - n.chamber.z) < 160;
+}

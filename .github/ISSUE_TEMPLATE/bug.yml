@@ -1,0 +1,50 @@
+name: Défaut
+description: Quelque chose de cassé ou de faux à l'écran, vu en jouant ou sur une capture.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: vu
+    attributes:
+      label: Ce qu'on voit
+      description: Joindre la capture. La plupart des défauts de ce projet ne se voient QUE sur image.
+    validations:
+      required: true
+  - type: textarea
+    id: attendu
+    attributes:
+      label: Ce qu'on devrait voir
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Pour reproduire
+      description: Touches, endroit, cadence de test ON/OFF, harnais qui le montre.
+      placeholder: |
+        1. Fonder près de l'arbre
+        2. Descendre la rampe
+        3. …
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Agent
+      options:
+        - atta-rendu
+        - cataglyphis-gameplay
+        - cephalotes-da
+        - agent-leger
+        - je ne sais pas
+    validations:
+      required: true
+  - type: dropdown
+    id: gravite
+    attributes:
+      label: Gravité
+      options:
+        - "Bloquant — on ne peut pas continuer à jouer"
+        - "Visible — ça se voit tout de suite"
+        - "Mineur"
+    validations:
+      required: true

@@ -805,60 +805,40 @@ function generateBark() {
 }
 
 // ---------------------------------------------------------------------
-// tunnel-dirt_albedo — regenerated. v1 was cavity noise; this is clods of
-// packed earth separated by crevices, with pebbles pressed into the
-// surface, each with a lit cap and a dark contact line underneath. The
-// crevice lines are what give a gallery wall a *scale* — the same job the
-// prototype's per-vertex cavity shading does for the geometry, one level
-// of detail further down.
+// tunnel-dirt_albedo — v2 (#90). v1 drew clods of packed earth separated by
+// a network of dark crevice lines. On the nest's walls that network read as
+// paving / lizard skin, and the porter felt it as foreign to the fairy look
+// of the prototype's tunnel, which has no texture at all: flat facets and a
+// crevice shade baked per vertex. Scale and volume are now the GEOMETRY's
+// job (the dug volume's measured AO, world/founding.js volumeColour); the
+// texture only adds a soft grain: two octaves of value noise (4 and 9 cells
+// per tile, +-10 % and +-5 %), a few pale grains of 1-2 px, and the earth
+// drifting pink in patches, all without a single contour.
+// design/ambiance-prologue.md §10b.4.
 // ---------------------------------------------------------------------
 
 function generateTunnelDirt() {
   const W = 128, H = 128;
-  const clod = warped(cellular(4, 4, 11), 0.16, 17);
-  const pebble = warped(cellular(9, 9, 16), 0.08, 18);
-  const broad = tileableNoise(3, 3, 12);
-  const grain = tileableNoise(40, 40, 13);
-  const fine = tileableNoise(96, 96, 14);
-  const mossFleck = fleckMask(32, 15, 0.06, 0.20);
+  const oct4 = tileableNoise(4, 4, 21);
+  const oct9 = tileableNoise(9, 9, 22);
+  const patch = tileableNoise(3, 3, 23);
+  const EARTH = hexToRGB('#6d5130'), ROSE = hexToRGB('#5a4a5a'), GRAIN = hexToRGB('#7a6040');
 
   writeTexture('tunnel-dirt', 'albedo', W, H, (u, v) => {
-    const c = clod(u, v);
-    /* broad was 0.24. A 3x3 swing is a value pattern one third of a tile
-       wide — at DIRT_TILE = 5 that is a light-and-dark blotch 1.7 units
-       across, repeated identically every 5 units, and on a 34-unit mound it
-       is six copies of the same blotch. Large-scale value variation on a
-       wall is the *geometry's* job (the vertex colours the triplanar
-       multiplies, and the cavity shading baked into them); the texture's job
-       stops at the clod. Cut to 0.10, which leaves the ramp breathing
-       without giving the tile a signature. */
-    const t = clamp01(0.40 + (c.id - 0.5) * 0.34 + facetLight(c.dx, c.dy) * 0.24
-      + (broad(u, v) - 0.5) * 0.10 + (grain(u, v) - 0.5) * 0.26);
-    let col = tri(DIRT_DK, DIRT_MD, DIRT_LT, t);
-
-    const cre = 1 - smoothstep(clamp01(c.edge / 0.15));
-    col = mixRGB(col, darken(DIRT_DK, 0.55), cre * 0.80);
-
-    /* Grains, not gravel. Two changes against v3: the GRIT ramp instead of
-       STONE (warm, so a grain is a pale bit of the same earth rather than a
-       cool chip dropped on it), and 0.66 instead of 0.88 coverage so the
-       clod still shows through its brightest grains. Together they take the
-       grain-to-wall value ratio from 1.9x down to ~1.35x, which is what
-       stops the eye finding the repeat before it finds the wall. */
-    const p = pebble(u, v), pr = 0.22 + 0.14 * p.id;
-    if (p.d < pr && p.id > 0.52) {
-      const pl = facetLight(p.dx, p.dy);
-      col = mixRGB(col, tri(GRIT_DK, GRIT_MD, GRIT_LT, clamp01(0.45 + pl * 0.42)),
-        smoothstep(clamp01((1 - p.d / pr) / 0.45)) * 0.66);
-      const rim = (1 - Math.abs(p.d - pr * 0.92) / (pr * 0.22)) * clamp01(0.30 - pl);
-      if (rim > 0) col = mixRGB(col, darken(DIRT_DK, 0.5), smoothstep(clamp01(rim)) * 0.6);
+    const x = Math.round(u * W), y = Math.round(v * H);
+    const pk = smoothstep(clamp01((patch(u, v) - 0.35) / 0.4));
+    let col = mixRGB(EARTH, ROSE, pk * 0.8);
+    const k = 1 + (oct4(u, v) - 0.5) * 0.20 + (oct9(u, v) - 0.5) * 0.10;
+    col = [col[0] * k, col[1] * k, col[2] * k];
+    /* grains: a 2x2 one on ~3.5 % of the 2-px cells, a single pixel on ~2 %
+       of the rest — about 5 % of the tile, each its own brightness */
+    const c2 = hash2(x >> 1, y >> 1, 24) < 0.035;
+    const c1 = !c2 && hash2(x, y, 25) < 0.02;
+    if (c2 || c1) {
+      const g = 0.7 + 0.7 * (c2 ? hash2(x >> 1, y >> 1, 26) : hash2(x, y, 27));
+      col = [GRAIN[0] * g, GRAIN[1] * g, GRAIN[2] * g];
     }
-
-    const m = mossFleck(u, v) * clamp01(t * 1.6 - 0.5);
-    if (m > 0) col = mixRGB(col, tri(MOSS_DK, MOSS_MD, MOSS_LT, 0.4), m * 0.5);
-
-    const n = (fine(u, v) - 0.5) * 10;
-    return [col[0] + n, col[1] + n, col[2] + n];
+    return col;
   });
 }
 
@@ -926,13 +906,13 @@ function generateSeed() {
 }
 
 console.log('Generating procedural textures ->', TEXTURES_DIR);
-generateRamps();
-generateSky();
-generateLawnSoil();
-generateTunnelDirt();
-generateStone();
-generateChitin();
-generateMushroomCap();
-generateBark();
-generateSeed();
+/* node scripts/generate-procedural-textures.mjs [tunnel-dirt bark ...]:
+   with names, only those are rewritten (the others' PNGs are left alone). */
+const ONLY = process.argv.slice(2);
+const JOBS = {
+  ramps: generateRamps, sky: generateSky, 'lawn-soil': generateLawnSoil, 'tunnel-dirt': generateTunnelDirt,
+  stone: generateStone, chitin: generateChitin, 'mushroom-cap': generateMushroomCap, bark: generateBark,
+  seed: generateSeed,
+};
+for (const [name, job] of Object.entries(JOBS)) if (!ONLY.length || ONLY.includes(name)) job();
 console.log('Done.');

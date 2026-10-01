@@ -207,13 +207,26 @@ function writeInstance(node) {
   _e.set(node.tilt - Math.atan2(n[2], n[1]) * 0.6, node.yaw, node.tilt + Math.atan2(n[0], n[1]) * 0.6);
   _q.setFromEuler(_e);
   _p.set(node.x, groundY(node.x, node.z) - 0.35 * scale, node.z);
-  _s.set(scale, scale, scale);
+  const s = node.buried ? 0 : scale;
+  _s.set(s, s, s);
   _m.compose(_p, _q, _s);
   mesh.setMatrixAt(node._slot, _m);
   _c.set(1, 1, 1).lerp(C_HUSK, (1 - frac) * 0.8);
   mesh.setColorAt(node._slot, _c);
   mesh.instanceMatrix.needsUpdate = true;
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+}
+
+/** Seat every node on the ground as it is now, and let a dig swallow the ones
+ *  it went through (`buried(x, z)`, from world/founding.js). Left where the
+ *  meadow was, a twig hung in mid-air inside the hall; re-seated on the floor,
+ *  it stood across the room at twice the queen's height. A swallowed node is
+ *  spent and not drawn — it stays in the array, as the contract requires. */
+export function resettleResources(buried = null) {
+  for (const n of RESOURCE_NODES) {
+    if (buried && !n.buried && buried(n.x, n.z)) { n.buried = true; n.amount = 0; }
+    writeInstance(n);
+  }
 }
 
 /**

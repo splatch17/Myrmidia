@@ -270,3 +270,283 @@ un défaut, pas une règle (#49).
 Une capture de la jauge circulaire en cours au front de taille, et une du
 **hall ouvert** avec la reine dedans, arrivée à pied. Plus un harnais qui longe
 les parois — pas la ligne centrale — et ressort quand même.
+
+---
+
+## 8. Creuser depuis le hall : le nid pousse — round 19 (#62, #59)
+
+Écrit **avant** la répartition, comme les sept précédentes. Le round 16 a livré
+un front de taille : celui que la reine trouve au pied de la rampe, et qui
+ouvre le hall. Le hall est resté nu. Cette section dit comment il cesse de
+l'être, sans décider à la place du porteur ce que coûte un tunnel (#63) : les
+nombres ci-dessous sont des **valeurs de départ**, pas un arbitrage.
+
+### Ce qui change de forme
+
+Rien, et c'est le but : `rooms` / `links` / `faces` (§7) sont déjà des listes,
+`digFaces()` et `advanceDigFace()` ne changent pas de signature. Ce qui change
+est **quand** le monde ajoute des fronts, et **comment il choisit où ils
+mènent**.
+
+### Ce que `world/**` livre
+
+```
+digFaces()        -> inchangé. Contient désormais, dès que le hall s'ouvre,
+                     2 ou 3 fronts posés sur SES parois.
+advanceDigFace(id, antSeconds) -> inchangé. `opened` nomme la salle ouverte,
+                     laquelle porte à son tour ses propres fronts.
+```
+
+**Une direction est jugée sur tout son parcours, pas sur son point d'arrivée
+(#59).** Un front n'est publié que si le tunnel qu'il ouvrira *et* la salle au
+bout restent sous terre sur **toute leur longueur** : le toit construit doit
+rester sous la pelouse, avec la même marge de couverture que le dôme de la
+chambre, échantillonnée le long du parcours et non à son extrémité. Un site
+qui ne passe pas ce test n'est pas corrigé après coup : il n'est pas proposé.
+C'est la même règle que `canFoundAt()` — refuser avant, plutôt que réparer
+après.
+
+**Valeurs de départ, en fourmis-secondes** (la cadence de test les divise par
+5) : le premier front, celui du hall, reste à 75. Les fronts posés sur les
+parois du hall valent 120. Ceux de la génération suivante, 180. Elles vivent
+dans `world/founding.js`, en une seule constante par génération, pour qu'un
+arbitrage de #63 soit une ligne à changer et pas une chasse.
+
+**Une profondeur par génération.** Le nid descend : chaque salle ouverte depuis
+une autre est posée un cran plus bas, jamais plus haut. C'est ce qui garde le
+test de couverture satisfiable quand la pelouse remonte.
+
+### Ce que `player/**` livre en face
+
+- Les fouisseuses visent le front **ouvert le plus proche** (§7, inchangé), ce
+  qui les répartit d'elles-mêmes quand il y en a plusieurs.
+- Le menu de la reine (`C`) liste les chantiers ouverts : un nom, l'avancement,
+  le nombre de fouisseuses dessus. Lire, pas piloter — l'affectation manuelle
+  attend #63.
+- Le HUD ne dessine la jauge que pour le front **regardé**, sinon trois jauges
+  se recouvrent à l'écran.
+
+### Critère de fin commun
+
+Une capture du hall avec ses fronts de taille visibles sur les parois, une de
+la deuxième salle ouverte avec la reine dedans arrivée à pied, et un harnais
+qui creuse deux générations de suite sans qu'aucun toit ne perce la pelouse
+(0 cellule ouverte, comme `verify-descent` le mesure déjà).
+
+## 9. Décors : jardin et champignons du nid — round 22 (#80)
+
+Ajouté par Atta avec le ticket, à la demande de l'intégrateur (« ajoute au
+contrat si tu ajoutes une API »). Rien d'existant n'est renommé.
+
+### Ce que `world/**` livre
+
+```
+ROCKS          -> inchangé de forme ({x, z, r}). Contient maintenant tout ce
+                  que le jardin DESSINE : cailloux moussus, champignons
+                  (tige seule si le chapeau passe au-dessus de la reine,
+                  chapeau sinon), feuille morte (sa moitié relevée).
+                  Les 42 cailloux invisibles de l'ancien nid pré-construit
+                  en sont sortis : ils collisionnaient sans être dessinés.
+                  Un décor recouvert par une fondation (fosse, déblais,
+                  embouchure) est retiré de ROCKS ET de l'index spatial.
+NEST_FUNGUS    -> nouveau. Les bouquets lumineux des salles creusées,
+                  {x, z, r, y, room}, remplis quand une salle s'ouvre
+                  (une salle sur deux, le hall d'abord). Vidé par
+                  _resetFounding().
+```
+
+### Ce que `player/**` livre en face
+
+- **Rien à faire pour le jardin** : `decorCollision.js` lit déjà `ROCKS` sur la
+  pelouse.
+- **À brancher pour le nid** : `forEachCollider()` sort tôt quand
+  `insideNest(x, z)` est vrai, donc aucun collisionneur n'est testé dans le
+  nid. `NEST_FUNGUS` doit y être parcouru (liste courte, balayage linéaire
+  suffisant), avec le même rayon `r` que le monde publie. Les bouquets sont
+  posés contre la paroi, loin des fronts et du couloir d'entrée : ils ne
+  peuvent pas fermer un passage.
+
+### Critère de fin commun
+
+`scripts/verify-decor-80.mjs` : chaque décor du jardin est vu par
+`__decorPenetration`, une reine lâchée dedans en ressort ; le hall porte un
+bouquet contre sa paroi, à plus de 7 unités de tout front.
+
+## 10. Mode macro : le nid en maquette — round 22 (#34, première tranche)
+
+Ajouté par Atta avec le ticket, à la demande de l'intégrateur. Rien d'existant
+n'est renommé ; `dugRooms()` gagne un champ.
+
+### Ce que `world/**` livre
+
+```
+dugRooms()     -> inchangé, plus `size` : 'chamber' pour la salle 0,
+                  'small' | 'medium' | 'large' pour une salle creusée
+                  (libellé technique, comme `kind` de soilAt).
+createWorld()  -> gagne `surface` : { lawn, water, horizon, grass, tree,
+                  resources, garden, atmosphere } — ce que la maquette cache.
+world/macroView.js
+  createMacroView({ world, scene }) -> {
+    setActive(on, focus), update(dt, elapsed, camera, forEachAnt, focus),
+    rooms(), faces(), bounds(),          // relus à 4 Hz
+    setHover(room | null), setSelected(room | null),
+  }
+  applyMacroEnvironment({ scene, renderer, hemi }, mix)
+```
+
+La maquette ne reconstruit rien : chaque maillage de cavité (coque de
+fondation, salles, tunnels) change de matériau (intérieur opaque, faces vers
+la caméra coupées) et reçoit un double en faces arrière (silhouette en
+fresnel additif). La pelouse, l'herbe, le décor, l'arbre, l'eau, les déblais
+sont cachés ; la surface reste lisible par une grille posée sur `lawnY()` et
+l'anneau de la bouche. Tout est rendu à l'identique en sortie.
+
+### Ce que `core/macroMode.js` livre (câblé dans `main.js`)
+
+```
+createMacroMode({ camera, domElement, view, getAnt, forEachAnt, faceCrew, hud })
+  toggle()                 // la touche M (Échap sort aussi)
+  mode                     // 'play' | 'enter' | 'macro' | 'exit'
+  freezesPlayer()          // vrai hors 'play' : le joueur ne pilote plus
+  mix()                    // 0..1, suit la transition de 0,6 s
+  getSelection()           // salle choisie (forme de dugRooms()) | null
+  onSelect(fn)             // fn(salle | null) à chaque clic ; renvoie le
+                           // désabonnement
+  setTool({ hover(pick), click(pick) })   // null = outil 'select'
+  pickAt(x, y) -> { room, point }         // salle sous un point écran
+  roomScreen(id) -> { x, y }              // pour les harnais
+```
+
+`pick` = `{ room, point, hit }` : la salle dont le disque de sol est sous le
+curseur, et le point touché. C'est la prise pour la suite — peindre un volume
+à creuser, attribuer une fonction à une salle — : un outil de plus, pas un
+second mode.
+
+### Ce que `player/**` livre en face (fait dans ce ticket, minimal)
+
+- `update(dt, elapsed, { macro })` : en macro, pas de déplacement, pas de E,
+  la caméra de suivi n'est pas écrite ; l'état caméra d'`input.js` est remis
+  à la sortie (le glisser/la molette de la maquette passent aussi par lui).
+  Retour garanti sur la pose de jeu exacte.
+- `macroInfo.forEachAnt(fn)` → `fn(x, y, z, 'queen'|'worker'|'digger')`, sans
+  allocation ; `macroInfo.faceCrew(face)` → `{ diggers, required }`.
+- `hud.setMacro(on)` : cache commandes, invite, barre d'action, jauge et
+  objectif ; garde la vie de la reine et les castes ; affiche la légende.
+
+### Critère de fin
+
+`scripts/verify-macro-34.mjs` : M avant fondation (note « pas encore de
+fourmilière »), puis nid à trois salles, trois angles d'orbite, zoom, survol +
+infobulle, clic → sélection, retour sur la pose de jeu à 0,1 unité près,
+≥ 60 i/s en maquette à 1280×800, aucune erreur console.
+
+## 11. Le nid en volume libre — round 23 (#81, fondation)
+
+Ajouté par Atta avec le ticket, à la demande de l'intégrateur. Rien de §6–§10
+n'est renommé : ce qui change est **d'où viennent les réponses**.
+
+### Ce qui change de forme
+
+Tout ce qui est **sous un toit** (la chambre, sa porte, les salles et couloirs
+ouverts par les fronts, tout ce qui sera creusé librement) est un **volume** :
+une densité signée sur une grille de 1 unité (négatif = air creusé), en blocs
+de 16³ alloués seulement où l'on a creusé (`world/nestVolume.js`). La paroi est
+le passage par zéro, maillée par *surface nets* bloc par bloc
+(`world/nestVolumeMesh.js`), remaillée seulement là où le volume a changé et
+sous un budget par image. Creuser = `min(densité, pinceau)` : idempotent.
+
+La **tranchée à ciel ouvert** reste analytique (`world/excavation.js`) : elle
+n'est pas une cavité, elle est ouverte sur le ciel. Ses bords sont désormais
+irréguliers (`cutJitterAt`, vers l'extérieur seulement, donc tout ce qui était
+praticable le reste).
+
+`rooms` / `links` / `faces` (§7) restent, comme **métadonnées** : nom, taille,
+tas de déblais, lampes, tests de placement des plans suivants. Ils ne disent
+plus où est le sol.
+
+### Ce que `world/**` livre (réexporté par `world/index.js`)
+
+```
+openCells(brush)        -> number   cellules ouvertes (terre -> air). Creuse
+                                    et remaille (budgété), étire l'obscurité
+                                    du nid jusqu'à ce qui est creusé.
+                                    Idempotent. Rien avant la fondation.
+isOpen(x, y, z)         -> boolean  air creusé ?
+floorAt(x, z, nearY?)   -> number | null
+                                    sol de l'espace ouvert qui contient nearY
+                                    (ou du premier sous lui) ; sans nearY, le
+                                    plus bas. C'est la requête d'un nid
+                                    empilé : groundY(x, z) reste 2D et
+                                    répond le plus bas.
+volumeSpan(x, z, nearY?) -> { floor, ceil } | null
+walkableAt(x, z, nearY?) -> { floor, ceil } | null
+                                    là où la reine tient : hauteur >= 6, et
+                                    corps à >= 1,3 de la paroi à 2,5 du sol.
+planCells(brush)        -> { id, cells }   un plan (fantôme), stocké, PAS
+                                    creusé — la prise pour #82
+plannedCells()          -> [{ id, brush, cells }]
+removePlan(id)          -> boolean
+isPlanned(x, y, z)      -> boolean  dans un plan et pas encore creusé
+onVolumeChange(fn)      -> unsubscribe   fn({ kind: 'open'|'plan'|'unplan'|
+                                    'clear', ... }) ; 'open' porte les blocs
+                                    touchés
+volumeVersion()         -> number   change à chaque creusement
+brushShape(brush)       -> { sdf, box }  la forme exacte que creusera le
+                                    pinceau (aperçu fantôme de #82)
+flushNestMesh()         // remaille tout de suite (harnais, boucle arrêtée)
+nestMeshStats()         -> { meshes, tris, verts, pending, ... }
+MIN_COVER               // 3 : terre gardée sous la pelouse par défaut
+```
+
+`brush` = données pures (sérialisable, pour un plan envoyé au serveur) :
+
+```
+{ center: [x,y,z] | {x,y,z}, radius,
+  end?: [x,y,z],          // capsule center -> end
+  endRadius?,             // capsule effilée
+  floor?: true | y | [a, b],   // sol plat : true = 0,55 r sous l'axe,
+                               // un y absolu, ou une rampe du centre au bout
+  noise?,                 // grain de paroi (vers l'extérieur), défaut 14 % de r
+  cover?: number | null } // terre gardée sous la pelouse, défaut MIN_COVER ;
+                          // null = aucune (réservé au monde : ses salles ont
+                          // un tas de déblais)
+```
+
+**Inchangés, et adossés au volume** : `groundY`, `nestFootprint()` (contains /
+floorY / headroom), `descentPath()`, `digFaces()`, `payDigFace()`,
+`advanceDigFace()`, `dugRooms()`, `NEST_FUNGUS`, `LAMP_GLOWS`. Un front
+**creuse désormais au fil de sa jauge** : le couloir avance du front vers la
+salle prévue sur la première moitié, la salle se creuse depuis sa porte sur la
+seconde. `dugRooms()` ne la nomme qu'une fois le front fini, comme avant
+(`opened` inchangé). `containUnderground` / `profileR` restent ceux du vieux nid
+pré-construit (non affiché) et ne concernent pas le nid fondé.
+
+### Ce que `player/**` livre en face
+
+- **Rien d'obligatoire** : la marche, la caméra, les pattes lisent déjà
+  `groundY` / `nestFootprint()`.
+- **#83 (creuser à la main)** : appeler `openCells({ center, radius, floor })`
+  depuis la fouisseuse contrôlée ; `onVolumeChange` pour réagir (trouvailles
+  #87). Un creusement qui passe **au-dessus** d'une salle existante demande
+  `floorAt(x, z, ant.y)` plutôt que `groundY` : c'est le seul cas où la
+  réponse 2D n'est plus la bonne.
+- **#82 (plans en macro)** : `planCells(brush)` stocke le fantôme ;
+  `brushShape(brush).sdf` le dessine ; le chantier le creuse en appelant
+  `openCells` avec un pinceau qui grandit (min() est idempotent : ré-appliquer
+  un pinceau plus grand ne recreuse que la différence).
+
+### Critère de fin
+
+`scripts/verify-volume-81.mjs` : fondation en volume, tunnel en L et salle
+irrégulière creusés au pinceau, praticables hors ligne médiane, sous toit ; la
+reine y entre au clavier et reste au sol ; ≥ 50 i/s en creusant à chaque
+image ; captures en jeu (dont la porte en gros plan et les bords de la
+tranchée) et en maquette.
+
+## Tas de déblais (#85)
+
+`world/spoilMound.js` (module monde, minimal, appelé par `player/index.js`) :
+
+- `spoilAnchors()` -> `{ mouth, dir, drop, heap } | null` : `mouth` = bout de la rampe côté pelouse (`descentPath()`), `dir` = cap sortant, `drop` = ou le porteur pose sa boulette (12 u devant la bouche, 7 de côté), `heap` = centre du tas (côté le plus bas).
+- `createSpoilMound(scene)` -> `{ setAmount(n), update(dt), anchors(), mesh, state: { pellets, radius, height } }` : dôme de terre bas, `radius = 2.2 + 1.9 sqrt(n)` (max 13), hauteur 0,42 r, qui s approche en douceur de sa cible. `n` = boulettes SORTIES (`economy.state.out`). Posé sur `lawnY`, hors de la rampe.
+- Les nombres de l économie (nourriture par cellule, boulette par 120 cellules, ralentissement au-dela de 3, etc.) sont tous dans `player/economy.js` (`ECON`).

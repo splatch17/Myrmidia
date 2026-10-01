@@ -20,51 +20,62 @@
    KEYBOARD ONLY, and the same keys that already worked. 5 and 6 still choose
    the caste of the next clutch whether the panel is open or not: the panel is
    a place to SEE the state, not a second way to change it, and a menu that
-   introduces its own bindings is a menu the player has to learn twice. What it
-   adds is that the choice, its cost, what is in reserve, the headcount and the
-   work in progress are finally in one place instead of being a two-key
-   shortcut with no screen (#53).
+   introduces its own bindings is a menu the player has to learn twice.
+
+   Round 17 dressed it as an MMO window (player/uiTheme.js): a framed panel
+   with a gilded title, sections under ornamental rules, castes as slots with
+   their key-caps. Every word it says is the word it said before —
+   scripts/verify-queen-menu.mjs matches LA REINE, PONTE, COLONIE, CHANTIERS,
+   the reserve as "n /", "le hall", "personne" and "verrouill" in its text.
 
    It reads state it is handed. No world imports, no colony import: everything
    comes through render(), so this file cannot be the place two answers to the
-   same question start to disagree.
+   same question start to disagree. That is also why the caste list is read
+   off `s.casteOrder` rather than imported from avatar.js directly (#75) — the
+   order is player/index.js's own PRODUCED_CASTES (avatar.js), handed in with
+   the rest of the reading rather than a second door into the same data.
+
+   OPEN BY DEFAULT (#75). The porter's ask was that the screen reads as an
+   MMO "from the first second" — a management panel nobody has ever opened is
+   not that. `open` now starts true; nothing about WHO gets the panel
+   changed, only whether it starts shown to the profile that does. The
+   shortcut to put it away is written on the panel itself (the title row's
+   own key-cap, labelled "masquer") rather than left to the help panel alone.
    ========================================================================== */
+
+import { ensureUiTheme, keycap } from './uiTheme.js';
 
 const PANEL_ID = 'queenmenu';
 
-/* Kept out of the markup so a caste added to avatar.js shows up here without
-   this file being edited — the entry the panel does not know about is listed
-   by its own label rather than skipped. */
-const CASTE_ORDER = ['worker', 'digger'];
-
-export function createQueenMenu(root = document.body) {
+export function createQueenMenu(root = document.body, handlers = {}) {
+  ensureUiTheme();
   const el = document.createElement('div');
   el.id = PANEL_ID;
-  /* Below the controls panel rather than centred on the right edge: both are
-     right-aligned, and centred it sat straight on top of the help the player
-     is most likely to still have open the first time they press C. */
-  el.style.cssText = 'position:absolute;right:12px;top:288px;'
-    + 'width:290px;padding:12px 14px;font:12px/1.65 monospace;color:#e6d3ab;'
-    + 'background:rgba(12,10,8,0.78);border:1px solid rgba(255,214,150,0.18);'
-    + 'border-radius:6px;pointer-events:none;user-select:none;';
+  /* Left, under the unit frame: the portrait above it says whose panel this
+     is, which is the genre's own layout for a character window. */
+  el.className = 'mm mm-frame';
   el.style.display = 'none';
   root.appendChild(el);
+  /* #84: the panel's two buttons (settle, lay at a distance). Delegated: the
+     markup is rewritten on change, the listener is not. */
+  el.addEventListener('pointerdown', (e) => e.stopPropagation());
+  el.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const b = e.target.closest && e.target.closest('[data-act]');
+    if (!b || b.disabled) return;
+    const fn = handlers[b.dataset.act];
+    if (fn) fn();
+  });
 
-  let open = false;
+  let open = true;
   let lastHtml = null;
 
-  const row = (label, value, dim) =>
-    `<div style="display:flex;justify-content:space-between;gap:10px${dim ? ';opacity:0.55' : ''}">`
-    + `<span style="opacity:0.75">${label}</span><span>${value}</span></div>`;
-
-  const heading = (t) =>
-    `<div style="margin:9px 0 3px;color:#ffe6b0;opacity:0.9;letter-spacing:0.06em">${t}</div>`;
-
-  function bar(p) {
+  const kv = (label, value) => `<div class="mm-kv"><span>${label}</span><b>${value}</b></div>`;
+  const heading = (t) => `<div class="mm-h">${t}</div>`;
+  const bar = (p) => {
     const w = Math.round(Math.max(0, Math.min(1, p)) * 100);
-    return '<div style="height:4px;background:rgba(0,0,0,0.5);border-radius:2px;overflow:hidden;margin:2px 0 4px">'
-      + `<div style="height:100%;width:${w}%;background:#d8a24e"></div></div>`;
-  }
+    return `<div class="mm-bar mm-thin"><i style="width:${w}%"></i></div>`;
+  };
 
   return {
     /** Is the profile currently controlled one that gets this panel at all? */
@@ -90,7 +101,7 @@ export function createQueenMenu(root = document.body) {
      *   counts,           { worker, digger, eggs }
      *   brood,            clutches laid
      *   rooms,            [{ id }]
-     *   faces,            [{ id, worked, needed, diggers }]
+     *   faces,            [{ id, worked, needed, diggers, required }]
      * }
      */
     render(profile, s) {
@@ -100,43 +111,88 @@ export function createQueenMenu(root = document.body) {
       }
       if (!show) return;
 
-      const casteRows = CASTE_ORDER.map((id, i) => {
+      const casteRows = (s.casteOrder || []).map((id, i) => {
         const unlocked = s.casteUnlocked(id);
         const picked = s.caste === id;
-        const key = 5 + i;
-        const mark = picked ? '<span style="color:#ffc46a">&#9679;</span>' : '<span style="opacity:0.3">&#9675;</span>';
-        const name = s.casteLabel(id);
-        return row(`${mark} <span style="color:#ffe6b0">${key}</span> ${name}`,
-          unlocked ? (picked ? 'prochaine' : '') : 'verrouillée', !unlocked);
+        const cls = `mm-slot${picked ? ' mm-picked' : ''}${unlocked ? '' : ' mm-locked'}`;
+        const tag = unlocked ? (picked ? 'prochaine' : '') : 'verrouillée';
+        return `<div class="${cls}">${keycap(5 + i)}`
+          + `<span class="mm-slot-name">${s.casteLabel(id)}</span>`
+          + `<span class="mm-slot-tag">${tag}</span></div>`;
       }).join('');
 
       /* Work in progress, from the world's own face list. Listed even when
          nobody is on it — an empty chantier with a crew of zero is the whole
          reason to lay fouisseuses, and a panel that hides it hides the
-         decision it exists to support. */
+         decision it exists to support.
+
+         #76: the crew value now names the REQUIREMENT alongside who is
+         there, "2 / 3 fouisseuses" — the number that decides whether the bar
+         below it is going to move at all — rather than just how many are
+         present. "personne" stays the word for zero (scripts/verify-queen-
+         menu.mjs matches it), with the requirement added alongside it. */
       const faceRows = (s.faces || []).length
         ? s.faces.map((f) => {
             const p = f.needed > 0 ? f.worked / f.needed : 0;
-            return row(f.id === 'face-hall' ? 'le hall' : f.id,
-              f.diggers > 0 ? `${f.diggers} au front` : 'personne')
-              + bar(p);
+            const req = f.required || 1;
+            const plural = req > 1 ? 's' : '';
+            const crewLabel = f.diggers > 0
+              ? `${f.diggers} / ${req} fouisseuse${plural}`
+              : `personne (0 / ${req})`;
+            return kv(f.id === 'face-hall' ? 'le hall' : f.id, crewLabel) + bar(p);
           }).join('')
-        : '<div style="opacity:0.55">rien à creuser pour l\'instant</div>';
+        : ((s.plans || []).length ? '' : '<div class="mm-empty">rien à creuser pour l\'instant</div>');
 
-      const html = '<div style="color:#ffe6b0;letter-spacing:0.08em;margin-bottom:4px">LA REINE</div>'
-        + `<div style="opacity:0.6;margin-bottom:2px">${profile.label}</div>`
+      /* #82: the chantiers painted in the macro model, after the hall's own
+         walls. Same crew reading ("2 / 3 fouisseuses"), a star when the player
+         made it prioritaire, and "en attente" while it only touches a chantier
+         that is not open yet. */
+      const planRows = (s.plans || []).map((p) => {
+        const plural = p.required > 1 ? 's' : '';
+        const crew = p.waiting ? 'en attente du chantier voisin'
+          : p.diggers > 0 ? `${p.diggers} / ${p.required} fouisseuse${plural}` : `personne (0 / ${p.required})`;
+        const price = p.gratis ? '' : ` · ${p.paid} / ${p.cost} nourriture`;
+        const warn = p.starved ? '<div class="mm-empty">plus de nourriture : à l’arrêt</div>' : (p.spoil > 3 ? `<div class="mm-empty">déblais ${p.spoil} au front : ralenti</div>` : '');
+        return kv(`${p.priority ? '★ ' : ''}${p.label} · ${Math.round(p.progress * 100)} %${price}`, crew) + bar(p.progress) + warn;
+      }).join('');
+
+      /* #84: settling, then what it paid. The button is live even when she
+         cannot settle yet: it answers with the reason instead of being a
+         grey box nobody can read. */
+      const st = s.settle;
+      let settleBlock = '';
+      if (st && st.settled) {
+        settleBlock = heading('INSTALLATION')
+          + kv('profondeur', `${st.settled.depth.toFixed(0)} u`)
+          + kv('ponte', `+${Math.round(st.settled.layBonus * 100)} %`)
+          + kv('défense', `+${Math.round((st.settled.defense - 1) * 100)} %`)
+          + `<div style="text-align:center"><button class="mm-btn" data-act="lay"${st.canLay ? '' : ' disabled'}>Pondre</button></div>`;
+      } else if (st) {
+        settleBlock = heading('INSTALLATION')
+          + kv('profondeur', `${st.depth.toFixed(0)} / ${st.minDepth} u`)
+          + (st.reason ? `<div class="mm-empty">${st.reason}</div>` : '')
+          + `<div style="text-align:center"><button class="mm-btn" data-act="settle"${st.ok ? '' : ' style="opacity:.55"'}>S\u2019installer ici ${keycap('I')}</button></div>`;
+      }
+
+      const html = `<div class="mm-win-title"><span class="mm-title">LA REINE</span>`
+        + `<span class="mm-win-hide">${keycap('C')} masquer</span></div>`
+        + `<div class="mm-win-sub">${profile.label}</div>`
         + heading('PONTE')
         + casteRows
-        + row('réserve', `${s.reserve} / ${s.cost}`)
-        + row('couvées', s.brood)
+        + kv('nourriture', s.food === null ? '—' : `${s.food}`)
+        + kv('réserve', `${s.reserve} / ${s.cost}`)
+        + kv('couvées', s.brood)
         + heading('COLONIE')
-        + row(s.casteLabel('worker'), s.counts.worker)
-        + row(s.casteLabel('digger'), s.counts.digger)
-        + row('œufs', s.counts.eggs)
-        + row('salles creusées', s.rooms.length)
+        + kv(s.casteLabel('worker'), s.counts.worker)
+        + kv(s.casteLabel('digger'), s.counts.digger)
+        + kv('œufs', s.counts.eggs)
+        + kv('salles creusées', s.rooms.length)
+        + kv('déblais', `${s.spoilLying} au front · ${s.spoilOut} au tas`)
         + heading('CHANTIERS')
         + faceRows
-        + '<div style="margin-top:9px;opacity:0.55">C — fermer  ·  E — pondre</div>';
+        + planRows
+        + settleBlock
+        + `<div class="mm-win-foot">${keycap('C')} — masquer  ·  ${keycap('E')} — pondre</div>`;
 
       // written only on change: this runs every frame
       if (html !== lastHtml) { el.innerHTML = html; lastHtml = html; }

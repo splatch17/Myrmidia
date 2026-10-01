@@ -1,8 +1,9 @@
 import { clamp, damp } from '../core/noise.js';
 import { nrm3, cross3 } from '../core/vecmath.js';
 import { dampAngle } from './mathUtil.js';
-import { containUnderground, containSurface, groundY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '../world/index.js';
+import { containUnderground, containSurface, groundY, lawnY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '../world/index.js';
 import { resolveDecorCollision } from './decorCollision.js';
+import { aiFloorAt, containAiStep } from './nestPath.js';
 import { nestFootprint, boundaryBetween, boundaryNormal } from './nest.js';
 import { PLAYER_AVATAR, collideRadius, strideOf } from './avatar.js';
 
@@ -78,14 +79,14 @@ const NEST_DOOR_PROBE = 3.3;
 function containNest(ant, fromX, fromZ) {
   const fp = nestFootprint();
   if (!fp) return false;
-  const wasIn = fp.contains(fromX, fromZ);
-  const isIn = fp.contains(ant.x, ant.z);
+  const wasIn = fp.contains(fromX, fromZ, ant.y);
+  const isIn = fp.contains(ant.x, ant.z, ant.y);
 
   if (!wasIn) {
     if (!isIn) return false;
     // coming in: only where the floor she would land on is the floor she is
     // already standing on, i.e. the open threshold of the cut and nowhere else
-    if (groundY(fromX, fromZ) - fp.floorY(ant.x, ant.z) > NEST_LEDGE) {
+    if (groundY(fromX, fromZ, ant.y) - fp.floorY(ant.x, ant.z, ant.y) > NEST_LEDGE) {
       ant.x = fromX; ant.z = fromZ;
       return false;
     }
@@ -94,7 +95,7 @@ function containNest(ant, fromX, fromZ) {
   if (isIn) return true;
 
   // going out: the edge is a wall unless the excavation reaches daylight there
-  const [bx, bz] = boundaryBetween(fp, fromX, fromZ, ant.x, ant.z);
+  const [bx, bz] = boundaryBetween(fp, fromX, fromZ, ant.x, ant.z, 10, ant.y);
   const toX = ant.x, toZ = ant.z;
   ant.x = bx; ant.z = bz; // walled in by default; undone below if it is a door
 
@@ -103,7 +104,7 @@ function containNest(ant, fromX, fromZ) {
      no roofed edge is ever a way out however the ground outside happens to
      lie. Asked first because it is the cheap half and the one that cannot be
      fooled by a meadow that dips to the chamber's depth. */
-  if (Number.isFinite(fp.headroom(bx, bz))) return true;
+  if (Number.isFinite(fp.headroom(bx, bz, ant.y))) return true;
 
   /* Open cut, so the question is real: is the ground on the other side of
      this edge the floor she is standing on, or the lip of the trench above
@@ -114,8 +115,8 @@ function containNest(ant, fromX, fromZ) {
   if (ul < 1e-6) return true;
   ux /= ul; uz /= ul;
   const ox = bx + ux * NEST_DOOR_PROBE, oz = bz + uz * NEST_DOOR_PROBE;
-  if (fp.contains(ox, oz)) return true; // the edge doubles back: still inside
-  if (Math.abs(groundY(ox, oz) - fp.floorY(bx, bz)) > NEST_LEDGE) return true;
+  if (fp.contains(ox, oz, ant.y)) return true; // the edge doubles back: still inside
+  if (Math.abs(groundY(ox, oz) - fp.floorY(bx, bz, ant.y)) > NEST_LEDGE) return true;
 
   ant.x = toX; ant.z = toZ; // a door: she keeps the step she took
   return false;
@@ -137,7 +138,7 @@ function containNest(ant, fromX, fromZ) {
  * behaves the same whatever shape the world digs.
  */
 function slideAlongNestWall(ant, fp, fromX, fromZ, toX, toZ) {
-  const n = boundaryNormal(fp, ant.x, ant.z);
+  const n = boundaryNormal(fp, ant.x, ant.z, 1.2, ant.y);
   if (!n) return;
   const mx = toX - fromX, mz = toZ - fromZ;
   const into = mx * n[0] + mz * n[1];
@@ -146,7 +147,7 @@ function slideAlongNestWall(ant, fp, fromX, fromZ, toX, toZ) {
   const sx = mx - n[0] * into, sz = mz - n[1] * into;
   if (Math.hypot(sx, sz) < 1e-4) return;       // dead into the wall: no tangent
   const nx = ant.x + sx, nz = ant.z + sz;
-  if (fp.contains(nx, nz)) { ant.x = nx; ant.z = nz; }
+  if (fp.contains(nx, nz, ant.y)) { ant.x = nx; ant.z = nz; }
 }
 
 export function computeWishDir(intent, camEye, camAim) {
@@ -186,6 +187,24 @@ export function stepAnt(ant, wish, intent, dt) {
      comes from the footprint rather than from groundY() so that the walk is
      right today *and* after #41, when the two are the same number by
      construction (api-monde-gameplay.md §6). */
+  /* #83: a pocket dug by hand is sized for a WORKER, and the queen's footprint
+     (clearance 6 high, a body off every wall) does not contain it. A worker-
+     sized ant underground follows the same rule the AI diggers walk by
+     (nestPath.js) wherever the queen-sized footprint would wall her in; the
+     entrance, the trench and the big rooms keep the queen's rules. */
+  if (!p.manages && ant.y < lawnY(fromX, fromZ) - 3) {
+    const qfp = nestFootprint();
+    const f0 = aiFloorAt(fromX, fromZ, ant.y);
+    if (qfp && f0 !== null && (!qfp.contains(fromX, fromZ, ant.y)
+        || (!qfp.contains(ant.x, ant.z, ant.y) && aiFloorAt(ant.x, ant.z, ant.y) !== null))) {
+      const f = containAiStep(ant, fromX, fromZ);
+      ant.floorY = null;
+      ant.y = f === null ? ant.y : f;
+      ant.bob = Math.sin(ant.travel * (Math.PI * 2 / strideOf(p)) * 2) * 0.13 * s * clamp(ant.speed / (8 * s), 0, 1);
+      return;
+    }
+  }
+
   if (containNest(ant, fromX, fromZ)) {
     const fp = nestFootprint();
     /* If containNest pushed her back onto the boundary, the step is not over —
@@ -202,7 +221,7 @@ export function stepAnt(ant, wish, intent, dt) {
        nest.js's stand-in. With #41 in, this stays null and the six feet each
        sample the real floor they are on. */
     ant.floorY = fp.approx ? fp.floorY(ant.x, ant.z) : null;
-    ant.y = fp.floorY(ant.x, ant.z);
+    ant.y = fp.floorY(ant.x, ant.z, ant.y);
     ant.bob = Math.sin(ant.travel * (Math.PI * 2 / strideOf(p)) * 2) * 0.13 * s * clamp(ant.speed / (8 * s), 0, 1);
     return;
   }

@@ -1,25 +1,38 @@
-import * as THREE from 'three';
 import { antState } from '../core/antState.js';
-import { clamp } from '../core/noise.js';
-import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath } from '../world/index.js';
-import { PLAYER_AVATAR, collideRadius, profileById } from './avatar.js';
+import * as THREE from 'three';
+import { clamp, damp } from '../core/noise.js';
+import { groundY, distanceToWater, foundedMix, digFaces, payDigFace, dugRooms, descentPath, createPlanGhost, lawnY, inOpenCutPastDoor } from '../world/index.js';
+import { PLAYER_AVATAR, PROFILES, collideRadius, profileById, legLengths, PRODUCED_CASTES } from './avatar.js';
 import { buildOutlineHull } from '../core/outline.js';
-import { makeAnt, makeLegState, updateLegs } from './legs.js';
+import { makeAnt, makeLegState, updateLegs, antMatrix, localToWorld, solveKnee } from './legs.js';
 import { buildAntMesh } from './antMesh.js';
 import { createInput } from './input.js';
 import { createQueenMenu } from './queenMenu.js';
-import { createCameraRig } from './camera.js';
+import { createCameraRig, desiredCamera } from './camera.js';
 import { computeWishDir, stepAnt } from './movement.js';
-import { stepClimb, GRASS } from './climb.js';
+import { stepClimb, exitClimb, GRASS } from './climb.js';
+import { pickDigGauge } from './digGauge.js';
+import { findNestPath, aiFloorAt } from './nestPath.js';
 import { deepestPenetration, resolveDecorCollision, mushroomRadii } from './decorCollision.js';
 import { evaluateSite, siteHeadline, siteDetail } from './siteQuality.js';
 import { createInteraction } from './interaction.js';
 import { createProps } from './props.js';
 import { resourceNodes } from './resources.js';
-import { nestOrigin, canFound, found, refusalText } from './founding.js';
+import { nestOrigin, canFound, found, refusalText, isFounded } from './founding.js';
+import {
+  settleVerdict, settleBonuses, settleToastText, tickReserve, activityOf, reserveLow, depthOf, MIN_DEPTH,
+} from './settle.js';
+import { createSettleUi } from './settleUi.js';
 import { createHud } from './hud.js';
 import { createTargetMarker } from './marker.js';
-import { createColony } from './colony.js';
+import { createColony, requiredCrewFor, CONTROL_DIG_MULT } from './colony.js';
+import { createPlans } from './plans.js';
+import { createHandDig } from './handDig.js';
+import { createEconomy, ECON } from './economy.js';
+import { createSpoilView } from './spoilView.js';
+import { createSpoilMound } from '../world/spoilMound.js';
+import { createPlanTool } from './planTool.js';
+import { createEntities } from './entities.js';
 import { createCrowd } from './crowd.js';
 import { nestInfo, nestFootprint } from './nest.js';
 import { WORKER } from './avatar.js';
@@ -70,62 +83,69 @@ const SPAWN_YAW = -Math.PI / 2; // facing -X: the meadow, the bowl and the far t
 // frame budget
 const SITE_INTERVAL = 0.25, SITE_MOVE = 3;
 
-export function createPlayerController({ scene, camera, domElement, profile = PLAYER_AVATAR }) {
-  const ant = makeAnt(SURFACE_START[0], 0, SURFACE_START[1], profile);
-  ant.yaw = SPAWN_YAW;
-  ant.y = groundY(ant.x, ant.z);
+export function createPlayerController({ scene, camera, domElement, profile: startProfile = PLAYER_AVATAR }) {
+  const ant0 = makeAnt(SURFACE_START[0], 0, SURFACE_START[1], startProfile);
+  ant0.yaw = SPAWN_YAW;
+  ant0.y = groundY(ant0.x, ant0.z);
   // she is 2.2x a worker: a spawn point that was clear for a worker can still
   // overlap a pebble or a stem for her. Two resolves settle it (see
   // decorCollision.js on why the second pass exists) before the first frame,
   // rather than having her visibly shoved aside on frame one.
-  resolveDecorCollision(ant, 0);
-  resolveDecorCollision(ant, 0);
-  ant.y = groundY(ant.x, ant.z);
+  resolveDecorCollision(ant0, 0);
+  resolveDecorCollision(ant0, 0);
+  ant0.y = groundY(ant0.x, ant0.z);
 
-  const legState = makeLegState(profile);
-  const { group, updatePose } = buildAntMesh(profile);
-  scene.add(group);
-  /* The outline is built from the finished mesh rather than inside
-     antMesh.js, so the rendering trick and the anatomy stay separable: a
-     second creature gets an outline by being passed through here, not by
-     having one baked into how it is modelled. */
-  scene.add(buildOutlineHull(group));
+  /* #36: the queen is one entity among the colony's, and "the ant the player
+     drives" is whichever entity is flagged `controlled` (entities.js). The
+     four names below — cur / ant / legState / profile — always describe that
+     one, and are rebound in bindBody() when control moves. */
+  const queen = {
+    id: 'queen', profileId: startProfile.id, profile: startProfile, ai: 'idle', controlled: true,
+    ant: ant0, legState: makeLegState(startProfile), carrying: null,
+  };
+  let cur = queen;
+  let ant = queen.ant, legState = queen.legState, profile = queen.profile;
+
+  /* One mesh rig per caste, ALL built here at construction: main.js runs its
+     one-shot scene.traverse() (nest shading) right after this returns, so a
+     rig created later would be lit as if it stood in an open field. Only the
+     queen's and the controlled ant's are shown. The outline is built from the
+     finished mesh rather than inside antMesh.js, so the rendering trick and
+     the anatomy stay separable. Ants nobody controls are drawn by the crowd. */
+  const rigs = new Map();
+  for (const p of Object.values(PROFILES)) {
+    const built = buildAntMesh(p);
+    const hull = buildOutlineHull(built.group);
+    built.group.visible = false;
+    hull.visible = false;
+    scene.add(built.group);
+    scene.add(hull);
+    rigs.set(p.id, { group: built.group, hull, updatePose: built.updatePose });
+  }
+  const group = rigs.get(queen.profileId).group;
 
   const input = createInput(domElement, profile);
   // the boom starts behind her, not behind +Z: camYaw defaults to 0 in
   // input.js, which with a spawn facing west would open the game on a side
   // view of the queen instead of on the meadow she is looking at
   input.state.camYaw = SPAWN_YAW;
-  const queenMenu = createQueenMenu();
+  // #84: both buttons of the queen's panel (functions below, hoisted)
+  const queenMenu = createQueenMenu(document.body, { settle: () => requestSettle(), lay: () => layFromMenu() });
+  const settleUi = createSettleUi();
   const cameraRig = createCameraRig(camera);
 
-  /* Screen position of the dig gauge (#51). The projection lives here rather
-     than in hud.js because this is the file that already holds a camera, and
-     a HUD that learns what a projection matrix is stops being a HUD.
-     
+  /* Screen position of the dig gauge (#51), and which face gets it when
+     several are open at once (#62 requirement 2 — see digGauge.js, pulled
+     out so the "at most one, nearest the centre" rule has its own unit
+     test, see scripts/verify-dig-gauge-pick.mjs). Kept as a call here
+     rather than in hud.js because this is the file that already holds a
+     camera, and a HUD that learns what a projection matrix is stops being
+     a HUD.
+
      One frame behind: main.js writes camera.position after this runs. On a
-     ring that fills over seventy-five seconds that is invisible, and paying
-     for it with a second update order would not be. */
-  const _dp = new THREE.Vector3();
-  function projectDig(g) {
-    if (!g) return null;
-    _dp.set(g.x, g.y + 6.5, g.z);
-    const d = _dp.distanceTo(camera.position);
-    _dp.project(camera);
-    /* z outside [-1,1] is behind the near plane or past the far one; a point
-       behind the camera projects to a mirrored position on screen, which is a
-       gauge floating over open meadow while the face is at her back. */
-    const visible = _dp.z > -1 && _dp.z < 1
-      && _dp.x > -1.35 && _dp.x < 1.35 && _dp.y > -1.35 && _dp.y < 1.35;
-    const w = window.innerWidth, h = window.innerHeight;
-    return {
-      ...g,
-      sx: (_dp.x * 0.5 + 0.5) * w,
-      sy: (-_dp.y * 0.5 + 0.5) * h,
-      scale: 46 / Math.max(12, d),
-      visible,
-    };
-  }
+     ring that fills over seventy-five seconds that is invisible, and
+     paying for it with a second update order would not be. */
+  const projectDig = (candidates) => pickDigGauge(candidates, camera);
   const hud = createHud();
   const marker = createTargetMarker(scene);
   /* The colony, and the two draw calls that show it. Workers are drawn
@@ -133,7 +153,39 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
      the player's way would be six hundred draw calls, which is precisely the
      cost the spatial index round went to the trouble of removing from the CPU
      side. See crowd.js. */
-  const colony = createColony();
+  /* #82: the colony's food store, as far as one exists. The pile the queen
+     lays from is the only one there is until #85 (full food + spoil economy):
+     no pile yet = chantiers are free ("gratuit (test)"). */
+  /* #85: that pile IS the colony's food store now: foragers' deliveries feed it
+     (colony.js -> econ.deliver), and a clutch, a chantier (paid as it is dug)
+     and a hand-dug bite draw on it. Numbers: economy.js. */
+  const food = {
+    available: () => (interaction.harvest.state.cache ? interaction.harvest.stock() : null),
+    spend: (n) => interaction.harvest.spend(n),
+    give: (n) => {
+      const c = interaction.harvest.state.cache;
+      if (!c) return;
+      const k = Object.keys(c.items)[0] || 'graine';
+      c.items[k] = (c.items[k] || 0) + n; c.total += n;
+    },
+  };
+  const econ = createEconomy({ food });
+  const plans = createPlans({ food, econ });
+  const colony = createColony({ plans, econ });
+  // #83/#85: the controlled digger's hands (built now so nest shading sees its meshes). A bite
+  // costs food outside a chantier (inside one the plan pays it, plans.canCredit) and leaves spoil.
+  const handDig = createHandDig({
+    scene, plans,
+    cost: (n, cells) => plans.canCredit(cells) && econ.chargeHand(n - plans.countIn(cells)) ? true : (econ.say(econ.NO_FOOD + ' : elle ne creuse plus à la main'), false),
+    onDug: (free, at, a) => econ.dug(null, free, at[0], at[1], at[2]),
+  });
+  const spoilView = createSpoilView(scene);
+  const mound = createSpoilMound(scene);
+  econ.setAnchors(() => mound.anchors());
+  const ghost = createPlanGhost();
+  scene.add(ghost.group);
+  const allFaces = () => digFaces().concat(plans.faces());
+  const entities = createEntities({ queen, colony });
   /* What the next clutch will be (#38). Held here rather than in colony.js
      because it is a decision the *player* makes and colony.js is the thing
      that lives without them — the moment the queen has a management panel
@@ -150,6 +202,14 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
      both castes existed from the first frame and the choice was free, which
      is the same as no choice. */
   const CASTE_UNLOCK = { worker: 0, digger: 1 };   // clutches required
+  /* What the bottom-of-screen caste square says while it is still grey
+     (#75) — read off the same CASTE_UNLOCK the picker itself enforces, so
+     the legend can never promise a caste sooner than E actually allows one.
+     "ᵉ" matches laying.js's own ordinal spelling ("2ᵉ couvée"). */
+  function casteHint(id) {
+    const need = CASTE_UNLOCK[id] ?? 0;
+    return need > 0 ? `dès la ${need + 1}ᵉ ponte` : null;
+  }
   /* Kept here rather than pushed through interaction.say(): this is feedback
      on a *player* keypress, and interaction.js's message queue belongs to
      world events. Merged into the same HUD line below, with the player's own
@@ -157,6 +217,22 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
      overwritten by something the colony did. */
   let casteMsg = null, casteMsgTimer = 0;
   function casteUnlocked(id) { return interaction.laying.brood() >= CASTE_UNLOCK[id]; }
+  /* The one path that picks the next clutch's caste — keys 5/6 (input.js)
+     and the #75 caste-square buttons (hud.js) both end up here, rather than
+     each keeping its own copy of "is it unlocked" and "what does the zone
+     text say". A click passes the same id a keypress would, so the button
+     never needs to duplicate the unlock rule CASTE_UNLOCK already enforces
+     above (casteUnlocked). */
+  function selectCaste(pick) {
+    if (!pick) return;
+    if (casteUnlocked(pick)) {
+      caste = pick;
+      casteMsg = `Prochaine ponte : ${pick === 'digger' ? 'fouisseuses' : 'ouvrières'}`;
+    } else {
+      casteMsg = 'Fouisseuses : à débloquer à la deuxième ponte';
+    }
+    casteMsgTimer = 3.5;
+  }
   const crowd = createCrowd(scene, WORKER);
   const interaction = createInteraction({ profile });
   // Props (carried item, the pile, stand-in resource markers) are built here,
@@ -169,6 +245,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   cameraRig.update(ant, input.state.camYaw, input.state.wantPitch, input.state.camDist, 0);
 
   let siteTimer = 0, siteAt = null, site = null, nestCard = null;
+  const crowdList = [];
 
   function refreshSite(dt) {
     siteTimer -= dt;
@@ -193,8 +270,229 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     hud.setSite(siteHeadline(site), siteDetail(site), site.diggable);
   }
 
-  function update(dt, elapsed) {
-    const intent = input.readMoveIntent();
+  /* #34: while the macro view is up (core/macroMode.js) the queen is not
+     steered and the follow camera is not written, so leaving the model
+     lands on exactly the shot the player left. The orbit drag/wheel still
+     reach input.js underneath; its camera state is put back on the way out
+     rather than teaching input.js about modes. The colony keeps living. */
+  const IDLE_INTENT = { ix: 0, iy: 0, mag: 0, sprint: false };
+  let macroSnap = null;
+  let macroTool = null;
+  let macroMixNow = () => 0;   // macro mode's 0..1 blend, set by attachMacro()
+
+  /* ---- control moves between ants (#36) ---------------------------------- */
+
+  // never while the burrow beat / the laying sequence is placing the queen:
+  // she is a cutscene then, and whoever took over would inherit it
+  entities.setGuard(() => !interaction.busy());
+
+  function publishRadius() { if (typeof window !== 'undefined') window.__antRadius = collideRadius(profile); }
+  function bindBody(e) {
+    cur = e; ant = e.ant; legState = e.legState; profile = e.profile;
+    publishRadius();
+  }
+
+  /* What the outgoing ant was holding stays with HER (entity.carrying, a kind
+     string like colony.js's own workers use), and the incoming one's load
+     goes back into the one shared harvest state the HUD/props/E-ladder read. */
+  entities.onChange(({ from, to }) => {
+    const h = interaction.harvest.state;
+    from.carrying = h.carrying ? h.carrying.kind : null;
+    h.carrying = to.carrying ? { kind: to.carrying } : null;
+    h.progress = 0; h.activeId = null;
+    // a released ant must not stay hanging off a stem its brain does not know about
+    if (from.ant.climb) exitClimb(from.ant);
+    to.carrying = null;
+    bindBody(to);
+    input.setProfile(profile);
+    // the boom opens behind the new ant, and glides there instead of cutting
+    input.state.camYaw = ant.yaw;
+    cameraRig.glide = 1.6;
+    siteAt = null;
+    if (macroSnap) {
+      // in the model: leaving it must land on THIS ant, not on where the
+      // previous one was - the follow shot is rebuilt and the saved boom reset
+      macroSnap.camYaw = input.state.camYaw;
+      macroSnap.wantPitch = input.state.wantPitch;
+      macroSnap.camDist = input.state.camDist;
+      const want = desiredCamera(ant, input.state.camYaw, input.state.wantPitch, input.state.camDist);
+      cameraRig.eye = want.eye.slice(); cameraRig.aim = want.aim.slice();
+    }
+  });
+
+  /* A click on an ant, in pixels: the nearest projected body within a thumb of
+     the cursor. `lift` puts the sample point where the pin/body reads. */
+  const _pv = new THREE.Vector3();
+  function pickAntAt(px, py, { lift = 1.5, radius = 30, includeCurrent = false } = {}) {
+    const w = domElement.clientWidth || window.innerWidth, h = domElement.clientHeight || window.innerHeight;
+    camera.updateMatrixWorld();
+    let best = null, bestD = radius;
+    const list = entities.all();
+    for (let i = 0; i < list.length; i++) {
+      const e = list[i];
+      if (!includeCurrent && e === cur) continue;
+      _pv.set(e.ant.x, e.ant.y + lift * (e.ant.scale || 1), e.ant.z).project(camera);
+      if (_pv.z > 1 || _pv.z < -1) continue;
+      const d = Math.hypot((_pv.x + 1) * 0.5 * w - px, (1 - _pv.y) * 0.5 * h - py);
+      if (d < bestD) { bestD = d; best = e; }
+    }
+    return best ? best.id : null;
+  }
+
+  /* The brain of the queen when nobody plays her: stand where she is and let
+     the legs settle. Kept here (not in colony.js) because she is not one of
+     its workers and the pose needs nothing but her record. */
+  function idleQueen(dt) {
+    queen.ant.speed = damp(queen.ant.speed, 0, 9, dt);
+    updateLegs(queen.ant, queen.legState, dt);
+  }
+
+  /* ---- the queen settles (#84, rules and numbers in settle.js) ------------- */
+
+  function settleBonusesNow(depth) {
+    const o = nestOrigin();
+    return settleBonuses(depth, o ? evaluateSite(o.x, o.z).score : 0);
+  }
+  function refuse(text) { casteMsg = text; casteMsgTimer = 5; }
+
+  /** Ask: refused with the reason, or the confirmation (settling is permanent). */
+  function requestSettle() {
+    if (colony.state.dead || colony.state.settled || settleUi.isConfirming()) return;
+    const v = settleVerdict(queen.ant, colony.state, interaction.busy());
+    if (!v.ok) { refuse(v.reason); return; }
+    settleUi.confirm(settleBonusesNow(v.depth), { yes: confirmSettle, no: () => settleUi.cancel() });
+  }
+
+  function confirmSettle() {
+    settleUi.cancel();
+    const v = settleVerdict(queen.ant, colony.state, interaction.busy());
+    if (!v.ok) { refuse(v.reason); return; }
+    const b = settleBonusesNow(v.depth);
+    casteMsg = null; casteMsgTimer = 0;
+    colony.state.settled = { ...b, at: colony.state.age };
+    interaction.setLayRate(1 + b.layBonus);
+    queen.ant.speed = 0;
+    settleUi.toast(settleToastText(b));
+    // the player's body passes to the first worker; with none yet she stays
+    // on the (now immobile) queen and the hint says what to do about it
+    const first = colony.state.workers[0];
+    if (first && cur === queen) entities.takeControl(first.id, 'settle');
+  }
+
+  function layFromMenu() {
+    if (colony.state.dead) return;
+    if (interaction.layNow()) colony.addEggs(3, caste);
+  }
+
+  function showEnd() {
+    settleUi.cancel();
+    const s = colony.state;
+    settleUi.endScreen({
+      time: s.age, depth: s.maxDepth, rooms: dugRooms().length, laid: s.laid,
+      cause: 'Affamée : ses réserves se sont épuisées, puis sa vie.',
+    }, () => window.location.reload());
+  }
+
+  /* The objective chain's new last step: after the hall, settling. And a
+     warning in front of whatever the objective is once the reserves run low. */
+  function settleObjective(base) {
+    const s = colony.state;
+    if (s.dead) return 'La reine est morte.';
+    if (s.settled) {
+      if (!profile.manages) return base;
+      const missing = interaction.clutchCost() - interaction.harvest.stock();
+      if (!interaction.laying.canLayMore()) return 'Installée — la chambre est pleine. Tab : jouer une ouvrière.';
+      return missing > 0
+        ? `Installée — il manque ${missing} unité${missing > 1 ? 's' : ''} au dépôt pour pondre (Tab : jouer une ouvrière)`
+        : 'Installée — pondez : E, ou le bouton Pondre du panneau (C)';
+    }
+    let text = base;
+    if (profile.manages && isFounded() && dugRooms().length > 1 && !interaction.busy()) {
+      const v = settleVerdict(queen.ant, s, false);
+      text = v.ok
+        ? 'Objectif : s\u2019installer ici — touche I (la reine ne bougera plus)'
+        : `Objectif : descendre à ${MIN_DEPTH} u dans le nid pour s\u2019y installer (${v.depth.toFixed(0)} u)`;
+    }
+    if (s.queenReserve.cur <= 0) return `RÉSERVES ÉPUISÉES — la reine perd de la vie ! ${text}`;
+    if (reserveLow(s)) return `Réserves basses (${Math.round(s.queenReserve.cur)}) ! ${text}`;
+    return text;
+  }
+
+  /* #85: the standing line says so when the chantiers are held up for food */
+  function economyObjective(base) {
+    const held = plans.rows().some((r) => r.starved);
+    if (held) return `${econ.NO_FOOD} — les fouisseuses attendent : rapportez des graines. ${base}`;
+    return base;
+  }
+  function spoilPrompt(act) {
+    if (profile.id !== 'digger' || interaction.busy()) return null;
+    if (cur.spoil) {
+      const d = econ.dropPoint();
+      return d && Math.hypot(d.x - ant.x, d.z - ant.z) <= ECON.DROP_RADIUS + 4 ? 'E — poser le déblais sur le tas' : 'Elle porte un déblais : au tas, dehors, près de l’entrée';
+    }
+    if (act.kind === 'none' && !handDig.state.aim && econ.pileNear(ant.x, ant.z)) return 'E — porter un déblais dehors';
+    return null;
+  }
+
+  // who the HUD says you are: "n° 2" for the second digger, nothing for the queen
+  function unitTag() {
+    if (cur === queen) return '';
+    let n = 0;
+    for (const w of colony.state.workers) { if (w.profileId === cur.profileId) n++; if (w === cur) break; }
+    return `n° ${n}`;
+  }
+
+  // the objective line of a controlled ant that is not the queen
+  function fieldObjective() {
+    const carrying = interaction.harvest.state.carrying;
+    if (profile.id === 'digger') {
+      if (cur.atFace) return `Vous creusez au front — ×${CONTROL_DIG_MULT} une fouisseuse de la colonie`;
+      let best = null, bestD = Infinity;
+      for (const f of allFaces()) {
+        const d = Math.hypot(f.x + f.nx * (f.standoff ?? 5) - ant.x, f.z + f.nz * (f.standoff ?? 5) - ant.z);
+        if (d < bestD) { bestD = d; best = f; }
+      }
+      return best ? `Objectif : rejoindre le front de creusement (à ${bestD.toFixed(0)} u)` : 'Aucun front ouvert : rien à creuser pour l\u2019instant';
+    }
+    return carrying
+      ? 'Objectif : rapporter au dépôt de la reine'
+      : 'Objectif : récolter (E maintenu) et rapporter au dépôt';
+  }
+
+  function update(dt, elapsed, opts) {
+    const macro = !!(opts && opts.macro);
+    if (macro && !macroSnap) {
+      macroSnap = { camYaw: input.state.camYaw, wantPitch: input.state.wantPitch, camDist: input.state.camDist };
+    } else if (!macro && macroSnap) {
+      input.state.camYaw = macroSnap.camYaw;
+      input.state.wantPitch = macroSnap.wantPitch;
+      input.state.camDist = macroSnap.camDist;
+      macroSnap = null;
+    }
+    const settled = !!colony.state.settled, dead = colony.state.dead;
+    // #84: a settled queen never walks again; the dead do not play
+    const intent = (macro || dead || (settled && cur === queen)) ? IDLE_INTENT : input.readMoveIntent();
+    const pressSettle = input.consumeSettle(), pressEsc = input.consumeEscape();
+    if (!dead) {
+      if (settleUi.isConfirming()) {
+        if (pressEsc) settleUi.cancel();
+        else if (pressSettle) confirmSettle();
+        else if (!settleVerdict(queen.ant, colony.state, interaction.busy()).ok) settleUi.cancel();
+      } else if (pressSettle && !macro) requestSettle();
+    }
+
+    /* #36: switching. Tab / Shift+Tab walk the roster; a click on an ant in
+       the world takes it. Not in the macro model (its own pins do that, and a
+       click there is the model's), and both are consumed either way so a
+       press made in the model cannot fire on the way out. */
+    const sw = input.consumeSwitch(), click = input.consumeClick();
+    if (!macro) {
+      if (sw) entities.cycle(sw, 'tab');
+      else if (click) {
+        const id = pickAntAt(click.x, click.y);
+        if (id !== null) entities.takeControl(id, 'click');
+      }
+    }
 
     /* E, resolved in context (interaction.js): climb on/off, harvest a node,
        drop what she carries, or dig the first chamber. Both readings of the
@@ -207,21 +505,35 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     /* The panel is offered to the PROFILE, not to the player (#53). A caste
        without `manages` gets nothing from this key, which is what makes the
        flag load-bearing rather than decorative. */
-    if (input.consumeMenu()) queenMenu.toggle(profile);
-    const pick = input.consumeCaste();
-    if (pick) {
-      if (casteUnlocked(pick)) {
-        caste = pick;
-        casteMsg = `Prochaine ponte : ${pick === 'digger' ? 'fouisseuses' : 'ouvrières'}`;
-      } else {
-        casteMsg = 'Fouisseuses : à débloquer à la deuxième ponte';
-      }
-      casteMsgTimer = 3.5;
-    }
+    if (input.consumeMenu()) queenMenu.toggle(entities.manager().profile);
+    selectCaste(input.consumeCaste());
     // a caste can be locked again by nothing, but the guard costs one line and
     // stops a saved pick from outliving the rule that allowed it
     if (!casteUnlocked(caste)) caste = 'worker';
-    const act = interaction.update(ant, input.consumeInteract(), input.isInteractHeld(), dt);
+    const pressedE = input.consumeInteract();
+    const still = macro || dead;
+    /* #85: a controlled digger takes a pellet from a pile at a tap of E when not
+       facing earth, and puts it down at the mound (carrying, she cannot bite).
+       Decided BEFORE the ladder so the tap is not also a climb or a harvest: at
+       the mound a stem in reach would otherwise win. */
+    let spoilTap = false;
+    if (pressedE && !still && profile.id === 'digger' && !interaction.busy() && !ant.climb) {
+      const pre = interaction.resolve(ant).kind;
+      const drop = econ.dropPoint();
+      if (cur.spoil) {
+        if (drop && Math.hypot(drop.x - ant.x, drop.z - ant.z) <= ECON.DROP_RADIUS + 4) {
+          econ.deposit(); cur.spoil = null; spoilTap = true;
+          casteMsg = 'Déblais déposé : le tas grossit'; casteMsgTimer = 4;
+        }
+      } else if (pre === 'none' && !handDig.state.aim) {
+        const pile = econ.pileNear(ant.x, ant.z);
+        if (pile && econ.takePellet(pile.id)) {
+          cur.spoil = { faceId: pile.id }; spoilTap = true;
+          casteMsg = 'Elle porte un déblais : au tas, dehors, près de l’entrée'; casteMsgTimer = 4;
+        }
+      }
+    }
+    const act = interaction.update(ant, still || spoilTap ? false : pressedE, still ? false : input.isInteractHeld(), dt, queen.ant);
 
     if (interaction.busy()) {
       /* The founding sequence (laying.js, #6) is placing her along a path
@@ -237,34 +549,92 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
       stepAnt(ant, wish, intent, dt);
     }
 
+    /* #83: E held, in a digger, with nothing else claiming it: she digs where
+       she looks. The ladder's 'none' is what leaves the key free. */
+    {
+      const diggerHere = !macro && profile.id === 'digger' && !interaction.busy() && !ant.climb && !cur.spoil;
+      const digging = handDig.update(diggerHere ? ant : null, diggerHere && act.kind === 'none' && input.isInteractHeld(),
+        input.state.wantPitch, dt);
+      cur.handDigging = digging.active;
+    }
     updateLegs(ant, legState, dt);
-    updatePose(ant, legState, elapsed);
-    group.position.set(0, 0, 0); // parts are already placed in world space (see antMesh.js)
+    if (!queen.controlled) idleQueen(dt);   // her brain: stand and settle
+    // the queen's rig always; the controlled ant's own caste rig when it is not her
+    for (const r of rigs.values()) { r.group.visible = false; r.hull.visible = false; }
+    const qr = rigs.get(queen.profileId);
+    qr.updatePose(queen.ant, queen.legState, elapsed);
+    qr.group.visible = qr.hull.visible = true;
+    if (cur !== queen) {
+      const r = rigs.get(cur.profileId);
+      r.updatePose(ant, legState, elapsed);
+      r.group.visible = r.hull.visible = true;
+    }
+
+    /* #91: a camera squeezed into a small room can end up inside her. She is
+       shrunk toward her own centre (the rig's matrices are world-space, so the
+       group is scaled about her position) until the boom clears again. */
+    {
+      const k = cameraRig.fade === undefined ? 1 : cameraRig.fade;
+      const g = rigs.get(cur.profileId);
+      const qg = rigs.get(queen.profileId);
+      for (const r of (cur === queen ? [qg] : [qg, g])) {
+        const mine = r === g;
+        const kk = mine ? k : 1;
+        r.group.scale.setScalar(kk); r.hull.scale.setScalar(kk);
+        r.group.position.set(ant.x * (1 - kk), (ant.y + 3 * (ant.scale || 1)) * (1 - kk), ant.z * (1 - kk));
+        r.hull.position.copy(r.group.position);
+      }
+    }
 
     antState.position.set(ant.x, ant.y, ant.z);
     antState.radius = collideRadius(profile); // footprint half-width, for grass contact bend
 
-    props.update(ant, interaction.harvest.state);
+    props.update(ant, interaction.harvest.state, interaction.burrow.state);
 
     /* A clutch becomes eggs the colony owns. laying.js counts clutches; this
        is the first thing that turns one into something that hatches. */
     if (interaction.laying.state.justLaid) colony.addEggs(3, caste);
     colony.update(dt);
-    crowd.render(colony.state.workers, elapsed);
+    if (tickReserve(colony.state, dt, activityOf(queen.ant, queen.profile,
+      colony.state.digging > 0 || interaction.busy()), queen.ant)) showEnd();
+    if (macroTool) macroTool.update(dt);
+    {
+      // #85: the mound grows with what was brought out; the pellets show where they lie and who carries one
+      mound.setAmount(econ.state.out);
+      mound.update(dt);
+      const carriers = [];
+      for (const w of colony.state.workers) if (w.haul || w.spoil) carriers.push({ x: w.ant.x, y: w.ant.y, z: w.ant.z, yaw: w.ant.yaw });
+      spoilView.update(econ.state.piles, carriers);
+    }
+    if (plans.consumeDirty()) ghost.setPlans(plans.ghostList());
+    ghost.update(dt, elapsed, camera, macroMixNow(), (domElement && domElement.clientHeight) || window.innerHeight);
+    const planDone = plans.state.doneEvent;
+    if (planDone) { plans.state.doneEvent = null; casteMsg = `Chantier terminé : ${planDone.label}`; casteMsgTimer = 5; }
+    // the controlled one is drawn by her own rig above, not twice
+    crowdList.length = 0;
+    for (const w of colony.state.workers) if (!w.controlled) crowdList.push(w);
+    crowd.render(crowdList, elapsed);
 
     refreshSite(dt);
-    hud.setPrompt(interaction.promptText(ant, act));
-    hud.setObjective(interaction.objectiveText(ant));
+    hud.setPrompt(handDig.promptText() || spoilPrompt(act) || interaction.promptText(ant, act));
+    hud.setObjective(economyObjective(settleObjective(profile.manages ? interaction.objectiveText(ant) : fieldObjective())));
     const colonyLine = colony.statusText();
     hud.setStock(colonyLine ? `${interaction.inventoryText()}  |  ${colonyLine}` : interaction.inventoryText());
     if (casteMsgTimer > 0) { casteMsgTimer -= dt; if (casteMsgTimer <= 0) casteMsg = null; }
-    hud.setEvent(casteMsg || interaction.message());
+    hud.setEvent(casteMsg || econ.state.msg || interaction.message());
     hud.setHold(interaction.holdProgress(act));
-    queenMenu.render(profile, {
+    /* One reading of the colony per frame, handed to both the panel and the
+       unit frame: two calls that each built their own would be two answers
+       to "how many workers" a frame apart, on screen at the same time. */
+    const colonyView = {
       caste,
       casteUnlocked,
+      casteOrder: PRODUCED_CASTES,
       casteLabel: (id) => profileById(id).label,
       reserve: interaction.harvest.stock(),
+      food: interaction.harvest.state.cache ? interaction.harvest.stock() : null,
+      spoilLying: econ.totalLying(),
+      spoilOut: econ.state.out,
       cost: interaction.clutchCost(),
       brood: interaction.laying.brood(),
       counts: {
@@ -273,10 +643,49 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
         eggs: colony.state.eggs.length,
       },
       rooms: dugRooms(),
+      settle: (() => {
+        const st = colony.state;
+        if (st.settled) {
+          return { settled: st.settled, canLay: interaction.laying.canLayMore() && interaction.harvest.stock() >= interaction.clutchCost() };
+        }
+        const v = settleVerdict(queen.ant, st, interaction.busy());
+        return { ok: v.ok, reason: v.reason, depth: v.depth, minDepth: MIN_DEPTH };
+      })(),
+      plans: plans.rows((id) => colony.state.faceWork.get(id) || 0),
       faces: digFaces().map((f) => ({
-        ...f, diggers: colony.state.faceWork.get(f.id) || 0,
+        ...f, diggers: colony.state.faceWork.get(f.id) || 0, required: requiredCrewFor(f),
       })),
-    });
+    };
+    /* The menu and the caste squares belong to whoever `manages` the colony,
+       wherever the player is standing: reachable at a distance (C), which is
+       what makes a worker a legitimate body to be in (#36). */
+    const manager = entities.manager().profile;
+    queenMenu.render(manager, colonyView);
+    hud.setUnit(profile, colonyView, unitTag());
+    hud.setControlHint(colony.state.settled && !colony.state.workers.length
+      ? 'pondez une ouvrière — Tab pour changer de fourmi'
+      : 'Tab — changer de fourmi');
+    /* Bottom-left, always: the queen's own vitals, not the controlled unit's
+       (#75). She stays the same ant whether or not she is the one under the
+       player's hand right now (design/castes-et-micro-macro.md 3), so this
+       does not gate on `profile.manages` the way the panel above does. */
+    hud.setQueenHp(colony.state.queenHp);
+    hud.setQueenReserve(colony.state.queenReserve, settled);
+    /* The squares are buttons since #75 round 2: clicking one calls
+       selectCaste() exactly like pressing 5/6 does (same function, same
+       unlock rule). `manages` gates clickability the way queenMenu.js gates
+       the whole panel — never "is this the player" (design/castes-et-micro-
+       macro.md 3) — while the roster itself keeps showing regardless, same
+       as the health bar beside it. */
+    hud.setCastes(PRODUCED_CASTES.map((id) => ({
+      id,
+      label: profileById(id).label,
+      unlocked: casteUnlocked(id),
+      progress: colony.casteProgress(id),
+      hint: casteHint(id),
+      selected: caste === id,
+      count: colonyView.counts[id] || 0,
+    })), { manages: manager.manages, onSelect: selectCaste });
     /* The dig gauge is NOT drawn here. It is projected against the camera, and
        the camera is not final until cameraRig.update() further down — so main
        .js calls syncDigDial() once the camera is where the frame will be
@@ -303,6 +712,7 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
        *in*, which after a sequence that turned her round is a shot of her
        face from the far side of the spoil heap. */
     if (interaction.laying.state.justEnded) input.state.camYaw = ant.yaw;
+    if (macro) return;
     cameraRig.update(ant, input.state.camYaw, input.state.wantPitch, input.state.camDist, dt,
       interaction.shot(ant));
   }
@@ -314,11 +724,28 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
   // reading agrees with where the ant is standing (#32).
   if (typeof window !== 'undefined') {
     window.__decorPenetration = deepestPenetration;
-    window.__antRadius = collideRadius(profile);
+    publishRadius();
     window.__site = (x, z) => evaluateSite(x, z);
-    window.__avatar = profile;
+    Object.defineProperty(window, '__avatar', { get: () => profile, configurable: true });
     window.__mushroomRadii = mushroomRadii;
     window.__grass = GRASS;  // so the harness can walk to a real climbable stem
+    // #70: bone-length measurement, so a harness can assert invariance
+    // instead of eyeballing it. Mirrors exactly what antMesh.js draws (same
+    // solveKnee() call against the same hip/foot), and also reports what the
+    // pre-fix code would have drawn (a bone from knee to the *raw*,
+    // unsaturated gait target, legState[i].planted) — so one run reports both
+    // the old bug's actual deviation and the fix's, instead of needing two.
+    window.__legBones = () => {
+      const mat = antMatrix(ant);
+      const [L1, L2] = legLengths(profile);
+      const d3 = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+      return profile.legs.map((L, i) => {
+        const hipW = localToWorld(mat, L.hip);
+        const rawFoot = legState[i].planted;
+        const { knee, foot } = solveKnee(hipW, rawFoot, L1, L2, mat.basis.up);
+        return { l1: L1, l2: L2, thigh: d3(hipW, knee), shinOld: d3(knee, rawFoot), shinNew: d3(knee, foot) };
+      });
+    };
     // #29/#33: the harness has to know where a node is in order to walk to
     // it, and what the loop thinks she is holding — it still *drives* with
     // real key events.
@@ -331,16 +758,38 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__foundNest = (x, z) => found(x, z);
     window.__rooms2 = () => dugRooms();
     window.__faces = () => digFaces();
+    window.__plans = plans;
+    window.__econ = econ; window.__mound = mound; window.__spoilView = spoilView;
+    window.__food = food;
+    window.__handDig = handDig.state; window.__handDigProbe = (p) => { const r = handDig.probe(ant, p ?? input.state.wantPitch); return r && { why: r.why, ok: r.ok, surf: r.surf, n: r.cells && r.cells.length / 3 }; };
+    window.__hud = hud;
+    window.__findNestPath = findNestPath;
+    window.__aiFloorAt = aiFloorAt;
+    window.__lawnY = lawnY;
+    window.__inCut = inOpenCutPastDoor;
+    window.__planGhost = ghost;
+    // #76: the crew threshold as a pure function of a face, so a harness can
+    // check its own numbers against the same formula colony.js pays against
+    window.__requiredCrew = requiredCrewFor;
     /* #40: where the nest is walkable, whether she is in it, and which floor
        the controller is following. `approx` says whether that came from the
        world's own nestFootprint() or from the stand-in nest.js keeps until
        #41 lands — a harness that cannot tell those apart would happily
        report the feature working on a guess. */
     window.__nest = () => nestInfo(ant);
+    // #84: the settle hooks - the harness presses the real keys/buttons, these only read and reach ground it cannot walk to quickly
+    window.__settle = {
+      verdict: () => settleVerdict(queen.ant, colony.state, interaction.busy()),
+      depth: () => depthOf(queen.ant),
+      queenAnt: () => queen.ant,
+      request: requestSettle,
+      confirm: confirmSettle,
+      confirming: () => settleUi.isConfirming(),
+    };
     // point probe, so a harness can ask about ground it has not walked to yet
-    window.__nestAt = (x, z) => {
+    window.__nestAt = (x, z, y) => {
       const fp = nestFootprint();
-      return fp ? { inside: fp.contains(x, z), floorY: fp.floorY(x, z), ground: groundY(x, z), approx: fp.approx } : null;
+      return fp ? { inside: fp.contains(x, z, y), floorY: fp.floorY(x, z, y), ground: groundY(x, z, y), headroom: fp.headroom(x, z, y), approx: fp.approx } : null;
     };
     // the gallery normally opens when the diggers finish (colony.js); the
     // harness needs it open without replaying twenty minutes of colony
@@ -355,8 +804,11 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
     window.__descentPath = () => (typeof descentPath === 'function' ? descentPath() : null);
     // ...and needs to be able to start the cutscene in order to prove it can
     // be cut. The cut itself is a real keypress.
-    window.__beginLaying = () => interaction.laying.begin(ant);
+    window.__beginLaying = () => interaction.laying.begin(queen.ant);
     window.__caste = () => ({ caste, msg: casteMsg, unlocked: casteUnlocked('digger') });
+    // what a clutch costs right now, pace included (verify-burrow.mjs checks
+    // the pile is spent by exactly this much, exactly once, across #68's beat)
+    window.__clutchCost = () => interaction.clutchCost();
     window.__queenMenu = (profileId) => ({
       open: queenMenu.isOpen(),
       // asked of a profile by id, so a harness can prove the panel is refused
@@ -374,13 +826,53 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
       const st = interaction.laying.state;
       return { phase: st.phase, t: +st.t.toFixed(3), brood: st.brood, mix: foundedMix() };
     };
+    // #68: the burrow beat between the founding hold and the laying
+    // cutscene — likewise not driven by keys (scripts/verify-burrow.mjs
+    // watches it run rather than pressing anything for its 3-5 s).
+    window.__burrow = () => {
+      const st = interaction.burrow.state;
+      return { active: st.active, t: +st.t.toFixed(3) };
+    };
+    /* #76: lets a harness drive the whole player tick (colony + HUD + queen
+       menu) with a SYNTHETIC dt instead of real wall-clock seconds — the
+       crew-threshold measurement needs to simulate tens or hundreds of
+       ant-seconds of digging, and doing that by actually waiting that long
+       in a headless browser would make the harness itself the slow part.
+       Safe to call with no input pending: an idle real frame already calls
+       this with an empty input state whenever the player stands still. */
+    window.__playerUpdate = (dt, elapsed = 0) => update(dt, elapsed);
+    /* #75 round 2: lets a harness prove a click on a caste-square button
+       never reaches the orbit-drag/pointer-lock input the canvas listens
+       for — camYaw only moves inside input.js's own onPointerMove, and only
+       while dragging is true, so an unchanged reading before/after a click
+       is a direct proof, not an inference from camera drift. */
+    window.__control = {
+      list: () => entities.all().map((e) => ({ id: e.id, profileId: e.profileId, ai: e.ai, controlled: !!e.controlled, x: e.ant.x, z: e.ant.z, atFace: !!e.atFace })),
+      current: () => ({ id: cur.id, profileId: cur.profileId }),
+      take: (id) => entities.takeControl(id, 'harness'),
+      pickScreen: (x, y) => pickAntAt(x, y),
+      screenOf: (id) => {
+        const e = entities.get(id);
+        const w = domElement.clientWidth || window.innerWidth, h = domElement.clientHeight || window.innerHeight;
+        camera.updateMatrixWorld();
+        _pv.set(e.ant.x, e.ant.y + 1.5 * (e.ant.scale || 1), e.ant.z).project(camera);
+        return { x: (_pv.x + 1) * 0.5 * w, y: (1 - _pv.y) * 0.5 * h, front: _pv.z > -1 && _pv.z < 1 };
+      },
+      antOf: (id) => { const e = entities.get(id); return e ? { x: e.ant.x, y: e.ant.y, z: e.ant.z, yaw: e.ant.yaw, speed: e.ant.speed } : null; },
+      queenMenuOpen: () => queenMenu.isOpen(),
+    };
+    window.__setCamYaw = (y) => { input.state.camYaw = y; };
+    window.__inputState = () => ({ dragging: input.state.dragging, camYaw: input.state.camYaw });
   }
 
   function dispose() {
     input.dispose();
     hud.dispose();
     queenMenu.dispose();
+    settleUi.dispose();
     marker.dispose();
+    spoilView.dispose();
+    mound.dispose();
     crowd.dispose();
     props.dispose();
   }
@@ -392,8 +884,55 @@ export function createPlayerController({ scene, camera, domElement, profile = PL
    * would see from there.
    */
   function syncDigDial(dt = 0) {
-    hud.setDig(projectDig(colony.digProgress()), dt);
+    hud.setDig(projectDig(colony.digCandidates()), dt);
   }
 
-  return { ant, group, update, syncDigDial, dispose };
+  /* #34: what the macro view needs from the colony, and nothing more —
+     every ant's position for the dots, and a face's crew for the tooltip.
+     A callback rather than an array so the per-frame dot pass allocates
+     nothing. */
+  const macroInfo = {
+    // fn(x, y, z, kind, id): the id is what a click on the pin hands back to takeControl()
+    forEachAnt(fn) {
+      fn(queen.ant.x, queen.ant.y, queen.ant.z, 'queen', queen.id);
+      const ws = colony.state.workers;
+      for (let i = 0; i < ws.length; i++) {
+        const w = ws[i];
+        fn(w.ant.x, w.ant.y, w.ant.z, w.profileId === 'digger' ? 'digger' : 'worker', w.id);
+      }
+    },
+    faceCrew(face) {
+      if (face.plan) return { diggers: colony.state.faceWork.get(face.id) || 0, required: requiredCrewFor(face) };
+      return { diggers: colony.state.faceWork.get(face.id) || 0, required: requiredCrewFor(face) };
+    },
+  };
+
+  return {
+    /** the ant being played right now (the queen until control moves) */
+    get ant() { return ant; },
+    group, update, syncDigDial, dispose, hud, macroInfo, plans,
+    /* #82: the macro model's chantier tools (main.js calls this once, with the
+       macro mode it created). Returns the tool bar handle. */
+    attachMacro(macro) {
+      macroMixNow = () => macro.mix();
+      macroTool = createPlanTool({
+        macro, plans, ghost, camera, domElement,
+        diggerCount: () => colony.state.workers.filter((w) => w.profileId === 'digger').length,
+        crewAt: (id) => colony.state.faceWork.get(id) || 0,
+      });
+      if (typeof window !== 'undefined') window.__planTool = macroTool;   // harness handle, not gameplay
+      return macroTool;
+    },
+    /* #36 / #84: the door for "the queen has settled, play the first worker".
+       takeControl(id) -> false when refused (unknown id, already that ant, or
+       the queen is mid burrow/laying sequence); onControlChange(fn) gets
+       { from, to, reason } on every change, and the same is dispatched on
+       window as a `control-change` CustomEvent. */
+    takeControl: (id, reason = 'api') => entities.takeControl(id, reason),
+    onControlChange: (fn) => entities.onChange(fn),
+    entities,
+    pickAntAt,
+    /** the follow-camera pose play resumes from (macro exit after a pin click) */
+    playCameraPose: () => ({ eye: cameraRig.eye.slice(), aim: cameraRig.aim.slice() }),
+  };
 }

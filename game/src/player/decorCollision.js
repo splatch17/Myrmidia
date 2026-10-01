@@ -1,4 +1,4 @@
-import { MUSHROOMS, ROCKS, mushroomCollideR, TREE, treeTrunkRadius, TUNNEL_MOUTH, containUnderground, profileR, getRoomBranches } from '../world/index.js';
+import { MUSHROOMS, ROCKS, NEST_FUNGUS, mushroomCollideR, TREE, treeTrunkRadius, TUNNEL_MOUTH, containUnderground, profileR, getRoomBranches } from '../world/index.js';
 import { insideNest } from './nest.js';
 import { clamp } from '../core/noise.js';
 import { bladeCurvePoint } from '../world/blade.js';
@@ -227,8 +227,18 @@ function maxRadius(list) {
    candidates without a line changing here. `reach` is the query radius —
    the ant's own body plus the widest collider in the list, so nothing whose
    edge touches the ant can be culled by a correct index. */
-function forEachCollider(x, z, fn, antR = 0) {
+function forEachCollider(x, z, fn, antR = 0, y = null) {
   const emit = (o) => fn(o.x, o.z, o.r);
+  /* The glowing fungus in dug rooms (#80) stands in the founded nest, which
+     the lawn lists skip. Tested in 2D like everything else, but only for an
+     ant standing on the same floor (y given and close), so an ant walking on
+     the lawn above a room never bumps into a cap twenty units under her. */
+  if (y !== null) {
+    for (let i = 0; i < NEST_FUNGUS.length; i++) {
+      const f = NEST_FUNGUS[i];
+      if (Math.abs(y - f.y) < 4 && Math.abs(x - f.x) < f.r + antR && Math.abs(z - f.z) < f.r + antR) emit(f);
+    }
+  }
   /* Nothing on the lawn can be touching her when she is under it (#40). The
      pebbles, the stems and the tree are all placed in 2D and tested in 2D, so
      without this the boulder standing over her nest keeps shoving her around
@@ -251,12 +261,12 @@ function forEachCollider(x, z, fn, antR = 0) {
  *  exactly the radii the resolver uses, rather than a copy of them. `antR`
  *  defaults to 0, i.e. "is the ant's centre inside something"; pass a body
  *  radius to ask the stricter "is any of the ant inside something". */
-export function deepestPenetration(x, z, antR = 0) {
+export function deepestPenetration(x, z, antR = 0, y = null) {
   let worst = 0;
   forEachCollider(x, z, (cx, cz, r) => {
     const pen = r + antR - Math.hypot(x - cx, z - cz);
     if (pen > worst) worst = pen;
-  }, antR);
+  }, antR, y);
   return worst;
 }
 
@@ -277,7 +287,7 @@ function collectDecorPush(ant) {
     push.x += (dx / d) * pen;
     push.z += (dz / d) * pen;
     push.n++;
-  }, antR);
+  }, antR, Number.isFinite(ant.y) ? ant.y : null);
   return push;
 }
 

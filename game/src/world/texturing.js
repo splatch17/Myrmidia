@@ -99,7 +99,8 @@ function loadAlbedo(url, worldPerTile) {
    design/charte-stylisation.md §7.5. tunnel-dirt moved 3.5 -> 5.0 there: at
    3.5 the clods fall under the readable threshold and the wall goes back to
    being noise. */
-export const DIRT_TILE = 5.0;
+/* #90: 5.0 -> 7.0, with the soft v2 grain (no clods left to size). */
+export const DIRT_TILE = 7.0;
 export const BARK_TILE = 16;
 export const LAWN_TILE = 45;
 export const STONE_TILE = 12;
@@ -237,7 +238,11 @@ export function texturedEmissiveMaterial({ map, strength = 1.0, emissive = 1.6, 
       `#include <emissivemap_fragment>
        totalEmissiveRadiance += vColor * gTriTex * ${emissive.toFixed(2)};`);
   };
-  material.userData.shaderTag = 'triplanar-emissive';
-  material.customProgramCacheKey = () => 'triplanar-emissive';
+  /* The strength is baked into the shader text, so it has to be in the key:
+     the glow bead (2.2) and a fungus cap (0.95) sharing one program is one of
+     them glowing at the other's strength (#80). */
+  const tag = 'triplanar-emissive-' + emissive.toFixed(2);
+  material.userData.shaderTag = tag;
+  material.customProgramCacheKey = () => tag;
   return material;
 }

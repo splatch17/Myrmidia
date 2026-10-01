@@ -6,6 +6,7 @@ import { paceCost } from '../core/pace.js';
 import { KIND_LABEL, nodesAreProvisional } from './resources.js';
 import { canFound, found, refusalText, isFounded, provisional as foundingProvisional, FOUND_SECONDS, nestOrigin, bearingWord } from './founding.js';
 import { createLaying } from './laying.js';
+import { createBurrow } from './burrow.js';
 import { insideNest } from './nest.js';
 
 /* ==========================================================================
@@ -31,7 +32,12 @@ import { insideNest } from './nest.js';
      3. enough on the pile, standing on it -> hold E to found. Above
         harvesting on purpose: once the stock is there, the pile *is* the
         next gesture, and the player who wants more can simply walk to a node
-        (the pile is where she chose to put it, not where the food is).
+        (the pile is where she chose to put it, not where the food is). The
+        hold completing does not dig immediately any more (#68): it starts
+        burrow.js's short "she digs herself a hole" beat, which is the thing
+        that actually calls found() when it ends, and then hands straight on
+        to the existing laying cutscene — same one clutch spend either way,
+        see finalizeFounding() below.
      4. a node in reach     -> hold E to harvest
      5. a stem/trunk in reach -> E climbs
    Once the colony exists, rung 3 becomes "hold E at the mouth to lay the next
@@ -46,10 +52,16 @@ const MOUTH_RADIUS = 15;    // how close to her own entrance counts as "at it"
 
 export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   const harvest = createHarvest();
-  const bodyR = collideRadius(profile);
+  /* #36: the actor of the ladder is whichever ant is controlled, not always
+     the queen, so the body radius and the queen-only verbs are read off the
+     ant passed in. `profile` is only the fallback for a bare record. */
+  const bodyOf = (ant) => collideRadius(ant.profile || profile);
+  const manages = (ant) => !!(ant.profile || profile).manages;
 
   const laying = createLaying();
+  const burrow = createBurrow();
   let foundProgress = 0, layProgress = 0;
+  let layRate = 1;   // #84: a settled queen lays faster (settle.js bonuses)
   let lastMessage = null, messageTimer = 0;
 
   /** Distance from the ant to the mouth of her own nest, or Infinity. */
@@ -68,6 +80,10 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
    *  descent is a thing to watch only while it is also a thing she cannot do
    *  herself (#40). Once she has walked down, E lays where she stands. */
   function layPlace(ant) {
+    // laying and founding are the colony-manager's verbs (the `manages` flag,
+    // never "is this the player"): a controlled forager walking over the mouth
+    // has nothing to lay
+    if (!manages(ant)) return null;
     if (!isFounded() || foundingProvisional() || !laying.canLayMore()) return null;
     if (harvest.stock() < clutchCost()) return null;
     if (insideNest(ant.x, ant.z)) return 'here';
@@ -76,10 +92,33 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
 
   function say(text, seconds = 3.2) { lastMessage = text; messageTimer = seconds; }
 
+  /**
+   * The world actually gets dug here — at the end of the burrow beat
+   * (naturally, or cut short with E), never at the top of the hold any more
+   * (#68). One clutch spent, one time, whichever door this is called from:
+   * burrow.js's update() returning true, or its cancel() from the 'burrow'
+   * case below. Nothing else calls found() for the first chamber.
+   */
+  function finalizeFounding(ant) {
+    const res = found(ant.x, ant.z);
+    say(res.ok
+      ? (foundingProvisional()
+        ? 'Colonie fondée ici. (le monde ne creuse pas encore la chambre)'
+        : 'Colonie fondée ici.')
+      : `impossible : ${refusalText(res.reason)}`, 6);
+    if (res.ok) {
+      // The pile is what she dug with: it goes into the founding, the same
+      // five units a later clutch costs.
+      harvest.spend(clutchCost());
+      laying.begin(ant);
+    }
+  }
+
   /** What E means right now. Pure — the HUD reads it every frame. */
   function resolve(ant) {
-    // the founding sequence owns her (laying.js): E means nothing until it
-    // hands her back
+    // the burrow beat and the founding sequence both own her in turn
+    // (burrow.js, laying.js): E means nothing else until they hand her back
+    if (burrow.active()) return { kind: 'burrow' };
     if (laying.active()) return { kind: 'sequence' };
     if (ant.climb) return { kind: 'climb', climbTarget: null };
 
@@ -98,7 +137,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     }
 
     const cache = harvest.state.cache;
-    if (cache && !isFounded() && harvest.enough() && harvest.cacheDistance(ant) <= CACHE_RADIUS) {
+    if (cache && manages(ant) && !isFounded() && harvest.enough() && harvest.cacheDistance(ant) <= CACHE_RADIUS) {
       const verdict = canFound(ant.x, ant.z);
       return { kind: 'found', ok: verdict.ok, reason: verdict.reason, assumed: verdict.assumed };
     }
@@ -106,7 +145,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     const place = layPlace(ant);
     if (place) return { kind: 'lay', inPlace: place === 'here' };
 
-    const node = harvest.target(ant, bodyR);
+    const node = harvest.target(ant, bodyOf(ant));
     if (node) return { kind: 'harvest', node };
 
     const climbTarget = nearestClimbable(ant);
@@ -120,11 +159,22 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
    * Returns the resolved action so the HUD can describe it without resolving
    * a second time (and possibly differently).
    */
-  function update(ant, pressed, held, dt) {
+  function update(ant, pressed, held, dt, queenAnt = ant) {
+    /* The burrow beat moves the ant itself (straight down, on the spot),
+       same reason it runs first: whatever else might move her this frame
+       has to see her already there. A natural end applies the founding
+       exactly once, here — the only other door is the 'burrow' case below,
+       and burrow.js guarantees update() and cancel() cannot both fire for
+       the same run of the beat. */
+    /* The burrow beat and the laying sequence belong to the QUEEN's body,
+       whoever is being played: they keep running on her while the player is
+       in a worker (#36) — and `ant` below is then the worker's. */
+    if (burrow.update(queenAnt, dt)) finalizeFounding(queenAnt);
+
     /* The sequence moves the ant itself, so it runs before anything that
        might also move her, and it is stepped even when it is idle: it owns
        the prologue -> colony crossfade, which outlives the last phase. */
-    laying.update(ant, dt);
+    laying.update(queenAnt, dt);
     const ev = laying.eventText();
     if (ev) say(ev, 6);
 
@@ -151,31 +201,25 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
           foundProgress += dt / FOUND_SECONDS;
           if (foundProgress >= 1) {
             foundProgress = 0;
-            const res = found(ant.x, ant.z);
-            say(res.ok
-              ? (foundingProvisional()
-                ? 'Colonie fondée ici. (le monde ne creuse pas encore la chambre)'
-                : 'Colonie fondée ici.')
-              : `impossible : ${refusalText(res.reason)}`, 6);
-            /* Straight into the descent, with no free walk in between: the
-               sky's crossfade has to happen while she is underground
-               (design/ressources-et-fondation.md §7a). laying.js refuses on
-               its own if the world could not actually dig a chamber. */
-            if (res.ok) {
-              /* The pile is what she dug with: it goes into the founding, the
-                 same five units a later clutch costs. Leaving it standing let
-                 the queen lay a second clutch the moment she climbed back out
-                 of the first, on food she had never gone back for. */
-              harvest.spend(clutchCost());
-              laying.begin(ant);
-            }
+            /* #68: the hold no longer digs the world directly. It starts the
+               short burrow beat instead — found()/harvest.spend()/
+               laying.begin() all happen once, in finalizeFounding(), when
+               that beat ends (naturally or cut). */
+            burrow.begin(ant);
           }
         }
         break;
       }
+      case 'burrow':
+        /* Same key, same idea as cutting the laying cutscene below: E settles
+           what the beat still owed (the dig itself) right now instead of
+           waiting out the timer, then hands her straight to the cutscene it
+           was always going to lead into. */
+        if (pressed) { burrow.cancel(ant); finalizeFounding(ant); }
+        break;
       case 'lay': {
         if (held) {
-          layProgress += dt / LAY_SECONDS;
+          layProgress += dt * layRate / LAY_SECONDS;
           if (layProgress >= 1) {
             layProgress = 0;
             const laid = act.inPlace ? laying.layInPlace() : laying.begin(ant);
@@ -221,6 +265,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   /** The contextual line: what E would do, or how far along the current hold
    *  is. Null when there is nothing to say. */
   function promptText(ant, act) {
+    if (act.kind === 'burrow') return burrow.promptText();
     if (act.kind === 'sequence') return laying.promptText();
     if (act.kind === 'lay') {
       if (layProgress > 0) return `Ponte… ${pct(layProgress)}`;
@@ -245,6 +290,7 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
 
   /** The standing objective: what this whole prologue is for, in one line. */
   function objectiveText(ant) {
+    if (burrow.active()) return 'La fondation : elle se creuse un terrier.';
     if (laying.active()) return 'La fondation : elle descend pondre.';
     if (isFounded()) {
       const o = nestOrigin();
@@ -269,6 +315,19 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
     if (harvest.enough()) return 'Objectif : fonder la colonie sur le dépôt';
     const tail = nodesAreProvisional() ? ' [nœuds provisoires]' : '';
     return `Objectif : récolter ${missing} unité${missing > 1 ? 's' : ''} de plus${tail}`;
+  }
+
+  const busy = () => burrow.active() || laying.active();
+  /** #84: lay from the queen's menu, wherever the player is standing. The
+   *  same clutch, the same price as the E hold - without the hold. */
+  function layNow() {
+    if (busy()) return false;
+    if (!isFounded() || foundingProvisional() || !laying.canLayMore()) return false;
+    if (harvest.stock() < clutchCost()) return false;
+    if (!laying.layInPlace()) return false;
+    harvest.spend(clutchCost());
+    say(laying.eventText() || 'Elle pond.', 6);
+    return true;
   }
 
   function inventoryText() { return harvest.inventoryLine(); }
@@ -325,16 +384,19 @@ export function createInteraction({ profile = PLAYER_AVATAR } = {}) {
   }
 
   return {
-    harvest, laying, update, resolve, promptText, objectiveText, inventoryText, message,
+    harvest, laying, burrow, update, resolve, promptText, objectiveText, inventoryText, message,
     holdProgress, targetMark,
     /** What a clutch costs right now, with the test pace already applied.
      *  Exposed so the queen's panel (#53) shows the same number the prompt
      *  does instead of deriving a second one that can drift from it. */
     clutchCost,
-    /** True while the founding sequence, not the player, is driving the ant. */
-    busy: () => laying.active(),
+    /** True while the burrow beat or the founding sequence, not the player,
+     *  is driving the ant. */
+    busy,
+    layNow,
+    setLayRate: (k) => { layRate = k; },
     /** The scripted camera shot for this frame, or null (camera.js). */
-    shot: (ant) => laying.shot(ant),
+    shot: (ant) => (burrow.active() ? burrow.shot(ant) : laying.shot(ant)),
     isHold: (act) => !!HOLD_KINDS[act.kind],
     endFrame: () => harvest.endFrame(),
   };

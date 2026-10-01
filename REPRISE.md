@@ -13,60 +13,64 @@
 
 ## 0. LA DEMANDE EN COURS — c'est ici qu'on reprend
 
-### Mon dernier prompt, littéralement
+*État au 2026-10-01 : round 22 publié — macro #34, décors #80, boutons #79,
+volume libre #81, ambiance féerique #90, contrôle #36, plans #82, #91, creuser
+à la main #83, installation de la reine #84 (#77 jouable). Prochain : #85
+(nourriture + déblais), puis #86, #87, #88, #89. Les §0 précédents restent dans
+l'historique git.*
 
-> **« assez bien mais il y a des choses à modifier. l'entrée est relativement
-> compliquée, et la remontée bug encore, il faut faciliter les déplacements et
-> la transition avec les zones réduites. On peut au départ arriver simplement
-> en bas devant de la terre à creuser. Pour cela il faudra pondre des
-> creuseuses (trouver un meilleur nom) qui commenceront à creuser (je veux une
-> petite animation de barre de chargement circulaire, type MMORPG/jeu récent,
-> qui en finissant laisse apparaître une nouvelle petite 'salle' qui serve
-> simplement de 'hall' pour commencer à creuser des tunnels. il faudra alors un
-> certain nombre de fourmis pour creuser plus, on brainstormera sur la manière
-> dont tout cela doit fonctionner. crée des tickets et implémente ce que je
-> viens d'expliquer, et continue le développement suivant ce qui est prévu
-> initialement. »**
+### La direction du jeu — elle commande tout le reste
 
-### Livré au round 16 (`3175592`, `f3a5015`)
+**Lire `design/fourmiliere-a-batir.md` en entier.** En bref : l'arrivée dans
+le monde est faite ; l'accent passe au **gameplay**. La **fourmilière est la
+fiche de personnage** du joueur : on la **façonne librement** (plus de salles
+de taille standard), on l'**améliore** palier par palier (confort, défenses,
+salles spéciales à débloquer), puis armée et combats.
 
-Tickets **#48 à #53**, tous implémentés. Quatre harnais passent :
-`verify-descent`, `verify-dig`, `verify-gallery-walk`, `verify-queen-menu`.
+Tranché avec moi au round 22 (ne pas rouvrir) :
+- **Reine (#77)** : les **réserves** pressent avant l'installation (prédateur
+  plus tard) ; creuser loin rapporte **sécurité + bonus de nid + meilleur
+  site** ; à l'installation on passe **dans la première ouvrière** puis on
+  change librement ; mort de la reine = **fin de partie** (méta-progression à
+  trouver plus tard — lignée/ruines/vol commun **refusés**). XP #7 = même
+  progression.
+- **Macro (#34)** : 3D orbitale, terre transparente. Livré en première tranche.
+- **Creuser** : **plans peints en macro** (chantiers automatiques) **+ creuser
+  à la main** en jouant une fouisseuse (trouvailles, vitesse, forme fine,
+  urgence). Le premier tunnel reste celui de la reine. Coût = **nourriture +
+  déblais** (dôme qui grandit). Limite = **coût croissant + paliers**.
+- **Placement libre** des salles pour l'instant (pas d'humidité/chaleur).
 
-| Demande | État |
-|---|---|
-| L'entrée est compliquée | ✅ 73 u de tranchée pour 18 de descente → **46 u pour 13**. Virage 1,9 rad → 0,85 |
-| Arriver en bas devant de la terre à creuser | ✅ Le front de taille est posé sur le dernier segment du chemin de descente : **mesuré à 0,0° de son axe d'arrivée** |
-| La remontée bugue | ✅ Deux causes, ci-dessous |
-| Faciliter les zones réduites | ✅ Les parois glissent au lieu d'arrêter net |
-| Meilleur nom que « creuseuse » | ✅ **fouisseuse** (terme zoologique réel). Si tu préfères autre chose, c'est une ligne |
-| Jauge circulaire type MMO | ✅ Anneau SVG **posé sur le front de taille**, projeté à l'écran, avec pulsation à l'achèvement |
-| Une petite salle « hall » | ✅ S'ouvre d'un coup quand la jauge se remplit, r 8,5, reliée par un couloir |
-| Un certain nombre de fourmis pour creuser plus | ⏳ Le mécanisme est là (les fronts sont une liste, chacun avec son coût) — **les nombres restent à brainstormer, comme demandé** |
-| Continuer le développement prévu | ✅ Étape 5 : **le menu de gestion de la reine** (`C`) |
+### File du round 23 — dans cet ordre, un agent neuf par ticket
 
-### Les deux causes de « la remontée bugue »
+| # | Demande | Agent |
+|---|---|---|
+| [#81](https://github.com/splatch17/Myrmidia/issues/81) | Nid en volume libre (cellules + maillage organique) — fondation | Atta |
+| [#36](https://github.com/splatch17/Myrmidia/issues/36) | Contrôler n'importe quelle fourmi | Cataglyphis |
+| [#82](https://github.com/splatch17/Myrmidia/issues/82) / [#83](https://github.com/splatch17/Myrmidia/issues/83) | Plans en macro / creuser à la main | Cataglyphis |
+| [#84](https://github.com/splatch17/Myrmidia/issues/84) | Réserves, installation, bascule, fin de partie (#77 jouable) | Cataglyphis |
+| #85 → #89 | Coût et déblais, salles désignées + paliers, trouvailles, défenses, finitions macro | voir tickets |
 
-1. **La galerie était plus étroite que la reine.** Elle publiait 3,1 de
-   demi-largeur marchable pour un corps de rayon 3,3. Quatrième fois que ce
-   piège frappe. Aucun harnais ne l'avait vu **parce qu'ils suivaient tous la
-   ligne centrale**, là où il n'y a rien à toucher. Le harnais a maintenant un
-   test qui va volontairement **dans le mur**.
-2. **Le nid était la seule surface du jeu qui arrêtait net.** `containNest()`
-   la remettait sur le point frontière et le pas s'arrêtait là — donc monter
-   une tranchée qui tourne en frottant le mur extérieur n'avançait pas d'un
-   pouce. Ça glisse maintenant, sur une normale estimée depuis `contains()`
-   seul, donc ça tient quelle que soit la forme creusée.
+### Défauts encore ouverts
 
-### Ce qui reste ouvert
+[#69](https://github.com/splatch17/Myrmidia/issues/69) parois mal affichées à
+l'entrée (le maillage de la tranchée dessine du sol que le monde ne déclare
+pas — la mesure et le test à écrire sont dans le ticket), #72, #35, #74.
 
-- **Le brainstorm que tu as annoncé** : combien de fourmis pour quel
-  creusement, coût en fourmis-secondes ou en effectif minimum, ce qu'on creuse
-  après le hall, si un tunnel se paye aussi en ressources. Rien n'a été tranché
-  à ta place — les valeurs actuelles (75 fourmis-secondes pour le hall) sont
-  des points de départ.
-- Le hall est nu : c'est un volume, pas encore un lieu. Il n'a **pas** encore
-  ses propres fronts de taille sur ses parois (le modèle les supporte).
+### Règles de travail qui ont coûté des sessions
+
+- **Un ticket = un agent NEUF avec une consigne complète.** Ne jamais réveiller
+  un agent terminé : ça recharge tout son historique (317 000 tokens pour une
+  correction de cadrage). Les petites retouches, la session principale les fait.
+- Les copies de travail d'agent partent de `main`, pas de la branche : leur
+  commit se replace sur `feature/threejs-migration` au moment de fusionner.
+- Les harnais servent `dist/` : **recompiler avant CHAQUE passe**, un seul
+  harnais à la fois, et **regarder les PNG**.
+- Sous Windows le serveur de test survit à la fin du script : `taskkill`. Tout
+  éteindre en fin de round, copies de travail comprises.
+- Rapports d'agents : 10 lignes maximum.
+
+---
 
 ## 1. Le projet, et ce que j'en attends
 
@@ -147,7 +151,7 @@ Conséquences **immédiates** sur le code (`design/castes-et-micro-macro.md` §3
 | 3 | Le tunnel s'ouvre d'un coup | ✅ fait |
 | 4 | **Y entrer et en sortir** | ✅ **fait au tour 15** (`da6d7ce`) |
 | 5 | Le menu de gestion de la reine | ✅ fait au tour 16 (`f3a5015`) |
-| 6 | **Contrôler n'importe quelle fourmi** | 🔴 **la suite** — le menu de la reine a déjà posé la moitié du terrain : il s'affiche sur le drapeau `manages` du profil, pas sur « est-ce le joueur » |
+| 6 | **Contrôler n'importe quelle fourmi** — devient le cœur du jeu après l'installation de la reine (§0, #77) | 🔴 **la suite** — le menu de la reine a déjà posé la moitié du terrain : il s'affiche sur le drapeau `manages` du profil, pas sur « est-ce le joueur » |
 | 7 | Creuser depuis le hall | à venir — **à brainstormer avec le porteur d'abord** |
 
 ---
