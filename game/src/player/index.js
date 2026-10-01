@@ -23,6 +23,7 @@ import { createHud } from './hud.js';
 import { createTargetMarker } from './marker.js';
 import { createColony, requiredCrewFor, CONTROL_DIG_MULT } from './colony.js';
 import { createPlans } from './plans.js';
+import { createHandDig } from './handDig.js';
 import { createPlanTool } from './planTool.js';
 import { createEntities } from './entities.js';
 import { createCrowd } from './crowd.js';
@@ -159,6 +160,8 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     },
   });
   const colony = createColony({ plans });
+  // #83: the controlled digger's hands (built now so nest shading sees its meshes)
+  const handDig = createHandDig({ scene, plans });
   const ghost = createPlanGhost();
   scene.add(ghost.group);
   const allFaces = () => digFaces().concat(plans.faces());
@@ -407,6 +410,14 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
       stepAnt(ant, wish, intent, dt);
     }
 
+    /* #83: E held, in a digger, with nothing else claiming it: she digs where
+       she looks. The ladder's 'none' is what leaves the key free. */
+    {
+      const diggerHere = !macro && profile.id === 'digger' && !interaction.busy() && !ant.climb;
+      const digging = handDig.update(diggerHere ? ant : null, diggerHere && act.kind === 'none' && input.isInteractHeld(),
+        input.state.wantPitch, dt);
+      cur.handDigging = digging.active;
+    }
     updateLegs(ant, legState, dt);
     if (!queen.controlled) idleQueen(dt);   // her brain: stand and settle
     // the queen's rig always; the controlled ant's own caste rig when it is not her
@@ -456,7 +467,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     crowd.render(crowdList, elapsed);
 
     refreshSite(dt);
-    hud.setPrompt(interaction.promptText(ant, act));
+    hud.setPrompt(handDig.promptText() || interaction.promptText(ant, act));
     hud.setObjective(profile.manages ? interaction.objectiveText(ant) : fieldObjective());
     const colonyLine = colony.statusText();
     hud.setStock(colonyLine ? `${interaction.inventoryText()}  |  ${colonyLine}` : interaction.inventoryText());
@@ -585,6 +596,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     window.__rooms2 = () => dugRooms();
     window.__faces = () => digFaces();
     window.__plans = plans;
+    window.__handDig = handDig.state; window.__handDigProbe = (p) => { const r = handDig.probe(ant, p ?? input.state.wantPitch); return r && { why: r.why, ok: r.ok, surf: r.surf, n: r.cells && r.cells.length / 3 }; };
     window.__hud = hud;
     window.__findNestPath = findNestPath;
     window.__aiFloorAt = aiFloorAt;
@@ -675,6 +687,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
       antOf: (id) => { const e = entities.get(id); return e ? { x: e.ant.x, y: e.ant.y, z: e.ant.z, yaw: e.ant.yaw, speed: e.ant.speed } : null; },
       queenMenuOpen: () => queenMenu.isOpen(),
     };
+    window.__setCamYaw = (y) => { input.state.camYaw = y; };
     window.__inputState = () => ({ dragging: input.state.dragging, camYaw: input.state.camYaw });
   }
 

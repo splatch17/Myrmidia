@@ -1,8 +1,9 @@
 import { clamp, damp } from '../core/noise.js';
 import { nrm3, cross3 } from '../core/vecmath.js';
 import { dampAngle } from './mathUtil.js';
-import { containUnderground, containSurface, groundY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '../world/index.js';
+import { containUnderground, containSurface, groundY, lawnY, QUEEN, TUNNEL_MOUTH, LAWN_BOUNDS } from '../world/index.js';
 import { resolveDecorCollision } from './decorCollision.js';
+import { aiFloorAt, containAiStep } from './nestPath.js';
 import { nestFootprint, boundaryBetween, boundaryNormal } from './nest.js';
 import { PLAYER_AVATAR, collideRadius, strideOf } from './avatar.js';
 
@@ -186,6 +187,24 @@ export function stepAnt(ant, wish, intent, dt) {
      comes from the footprint rather than from groundY() so that the walk is
      right today *and* after #41, when the two are the same number by
      construction (api-monde-gameplay.md §6). */
+  /* #83: a pocket dug by hand is sized for a WORKER, and the queen's footprint
+     (clearance 6 high, a body off every wall) does not contain it. A worker-
+     sized ant underground follows the same rule the AI diggers walk by
+     (nestPath.js) wherever the queen-sized footprint would wall her in; the
+     entrance, the trench and the big rooms keep the queen's rules. */
+  if (!p.manages && ant.y < lawnY(fromX, fromZ) - 3) {
+    const qfp = nestFootprint();
+    const f0 = aiFloorAt(fromX, fromZ, ant.y);
+    if (qfp && f0 !== null && (!qfp.contains(fromX, fromZ, ant.y)
+        || (!qfp.contains(ant.x, ant.z, ant.y) && aiFloorAt(ant.x, ant.z, ant.y) !== null))) {
+      const f = containAiStep(ant, fromX, fromZ);
+      ant.floorY = null;
+      ant.y = f === null ? ant.y : f;
+      ant.bob = Math.sin(ant.travel * (Math.PI * 2 / strideOf(p)) * 2) * 0.13 * s * clamp(ant.speed / (8 * s), 0, 1);
+      return;
+    }
+  }
+
   if (containNest(ant, fromX, fromZ)) {
     const fp = nestFootprint();
     /* If containNest pushed her back onto the boundary, the step is not over —

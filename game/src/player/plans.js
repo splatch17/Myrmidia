@@ -324,8 +324,23 @@ export function createPlans({ food } = {}) {
     return best;
   }
 
+  /** #83: cells a player's hand just opened (Int32Array x,y,z...). Each one that
+   *  belongs to a chantier is paid to it at the AI's own rate (SECONDS_PER_CELL),
+   *  so hand-digging inside a plan advances it. Call BEFORE the cells are opened.
+   *  -> number of cells credited */
+  function creditCells(cells) {
+    let total = 0;
+    for (const p of list.slice()) {
+      if (!p.face) continue;
+      let n = 0;
+      for (let i = 0; i < cells.length; i += 3) if (p.keys.has(ckey(cells[i], cells[i + 1], cells[i + 2]))) n++;
+      if (n) { pay(p.id, n * SECONDS_PER_CELL); total += n; }
+    }
+    return total;
+  }
+
   return {
-    state, evaluate, commit, cancel, pay, update, faces, pickPlan, togglePriority,
+    state, evaluate, commit, cancel, pay, creditCells, update, faces, pickPlan, togglePriority,
     get(id) { return list.find((p) => p.id === id) || null; },
     /** [{ id, cells }] for the ghost (only when it changed since the last call) */
     ghostList() { return list.map((p) => ({ id: p.id, cells: p.cells })); },

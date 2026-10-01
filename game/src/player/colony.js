@@ -398,6 +398,8 @@ export function createColony({ plans = null } = {}) {
     state.faceRate.clear();
     for (const w of state.workers) {
       if (w.profileId !== 'digger' || !w.atFace || !w.faceId) continue;
+      // #83: her hands are paying a chantier cell by cell (plans.creditCells): not twice
+      if (w.controlled && w.handDigging && plans && plans.get(w.faceId)) continue;
       state.faceWork.set(w.faceId, (state.faceWork.get(w.faceId) || 0) + 1);
       state.faceRate.set(w.faceId, (state.faceRate.get(w.faceId) || 0) + (w.controlled ? CONTROL_DIG_MULT : 1));
     }
