@@ -542,3 +542,11 @@ irrégulière creusés au pinceau, praticables hors ligne médiane, sous toit ; 
 reine y entre au clavier et reste au sol ; ≥ 50 i/s en creusant à chaque
 image ; captures en jeu (dont la porte en gros plan et les bords de la
 tranchée) et en maquette.
+
+## Tas de déblais (#85)
+
+`world/spoilMound.js` (module monde, minimal, appelé par `player/index.js`) :
+
+- `spoilAnchors()` -> `{ mouth, dir, drop, heap } | null` : `mouth` = bout de la rampe côté pelouse (`descentPath()`), `dir` = cap sortant, `drop` = ou le porteur pose sa boulette (12 u devant la bouche, 7 de côté), `heap` = centre du tas (côté le plus bas).
+- `createSpoilMound(scene)` -> `{ setAmount(n), update(dt), anchors(), mesh, state: { pellets, radius, height } }` : dôme de terre bas, `radius = 2.2 + 1.9 sqrt(n)` (max 13), hauteur 0,42 r, qui s approche en douceur de sa cible. `n` = boulettes SORTIES (`economy.state.out`). Posé sur `lawnY`, hors de la rampe.
+- Les nombres de l économie (nourriture par cellule, boulette par 120 cellules, ralentissement au-dela de 3, etc.) sont tous dans `player/economy.js` (`ECON`).
