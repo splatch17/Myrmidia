@@ -368,7 +368,7 @@ export function createHud() {
       }
       const colonyShown = !!(s && profile.manages);
       const k = colonyShown
-        ? `${s.reserve}|${s.cost}|${s.counts.worker}|${s.counts.digger}|${s.counts.eggs}`
+        ? `${s.reserve}|${s.cost}|${s.counts.worker}|${s.counts.digger}|${s.counts.eggs}|${s.food}|${s.spoilLying}|${s.spoilOut}`
         : 'none';
       if (k === lastUnitKey) return;
       lastUnitKey = k;
@@ -380,7 +380,9 @@ export function createHud() {
       uBarText.textContent = `Réserve ${s.reserve} / ${s.cost}`;
       uChips.innerHTML = `<span><b>${s.counts.worker}</b> ouvrières</span>`
         + `<span><b>${s.counts.digger}</b> fouisseuses</span>`
-        + `<span><b>${s.counts.eggs}</b> œufs</span>`;
+        + `<span><b>${s.counts.eggs}</b> œufs</span>`
+        + (s.food === null ? '' : `<span id="foodchip"><b>${s.food}</b> nourriture</span>`)
+        + (s.spoilLying + s.spoilOut > 0 ? `<span id="spoilchip"><b>${s.spoilLying}</b> déblais au front · <b>${s.spoilOut}</b> au tas</span>` : '');
     },
 
     /**
@@ -414,7 +416,8 @@ export function createHud() {
          one case drawn as two short tspans instead of plain text. */
       const req = g.required || 1;
       const short = g.diggers > 0 && g.diggers < req;
-      const crewText = g.diggers === 0
+      const crewText = g.note ? g.note
+        : g.diggers === 0
         ? 'personne ne creuse'
         : short
           ? [`il faut ${req} fouisseuses,`, `il y en a ${g.diggers}`]

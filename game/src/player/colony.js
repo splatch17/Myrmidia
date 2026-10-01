@@ -5,6 +5,7 @@ import { makeAnt, makeLegState, updateLegs } from './legs.js';
 import { dampAngle } from './mathUtil.js';
 import { paceTime } from '../core/pace.js';
 import { initialSettleState } from './settle.js';
+import { ECON } from './economy.js';
 
 /* ==========================================================================
    The colony: eggs that hatch, and workers that forage.
@@ -161,7 +162,7 @@ function nearestLiveNode(x, z) {
   return best;
 }
 
-export function createColony({ plans = null } = {}) {
+export function createColony({ plans = null, econ = null } = {}) {
   /* the hall's walls (the world's own faces) plus the chantiers painted in the macro model (#82) */
   const allFaces = () => (plans && plans.count() ? digFaces().concat(plans.faces()) : digFaces());
   const state = {
@@ -283,6 +284,32 @@ export function createColony({ plans = null } = {}) {
     updateLegs(a, w.legState, dt, DIGGER);
   }
 
+  /* #85: carrying a spoil pellet out. The walk is the digger's own (same path
+     search, same containment) toward the drop point by the entrance; while she
+     is at it she is not at her face, so the crew gauge sees one fewer hand. */
+  function stepHaul(w, dt) {
+    const a = w.ant, h = w.haul;
+    h.t += dt;
+    const drop = econ.dropPoint();
+    w.atFace = false;
+    if (!drop || h.t > ECON.HAUL_GIVE_UP) { econ.putBack(h.faceId); w.haul = null; a.speed = 0; return; }
+    const d = Math.hypot(drop.x - a.x, drop.z - a.z);
+    if (d <= ECON.DROP_RADIUS) { econ.deposit(); w.haul = null; a.speed = 0; return; }
+    if (!w.nav) w.nav = makeNavState();
+    tickNav(w.nav, dt, a);
+    const wp = navTarget(w.nav, a, drop.x, drop.z);
+    a.yaw = dampAngle(a.yaw, Math.atan2(wp.x - a.x, wp.z - a.z), 6, dt);
+    a.speed = WORKER_SPEED * 0.9;
+    const step = a.speed * dt, fx = a.x, fz = a.z;
+    a.x += Math.sin(a.yaw) * step; a.z += Math.cos(a.yaw) * step; a.travel += step;
+    containAiStep(a, fx, fz);
+    const f = aiFloorAt(a.x, a.z, a.y);
+    a.floorY = f;
+    a.y = f !== null ? f : groundY(a.x, a.z, a.y);
+    a.bob = Math.sin(a.travel * (Math.PI * 2 / strideOf(DIGGER)) * 2) * 0.13 * Math.min(1, a.speed / 8);
+    updateLegs(a, w.legState, dt, DIGGER);
+  }
+
   /* A controlled digger walks herself (movement.js); all this decides is
      whether she is at a face — the same test the AI's arrival uses, against
      the nearest open face's stand-off point — so the crew rule (#76) reads the
@@ -298,7 +325,11 @@ export function createColony({ plans = null } = {}) {
   }
 
   /** Release: the brain restarts from a clean slate (no stale target/path). */
-  function resetBrain(w) { w.targetId = null; w.repath = 0; w.atFace = false; }
+  function resetBrain(w) {
+    w.targetId = null; w.repath = 0; w.atFace = false;
+    // #85: a pellet she carried while played is hers to take out when the AI has her again
+    if (w.spoil) { w.haul = { faceId: w.spoil.faceId, t: 0 }; w.spoil = null; }
+  }
 
   function stepWorker(w, dt) {
     const a = w.ant;
@@ -333,6 +364,7 @@ export function createColony({ plans = null } = {}) {
       if (w.carrying) {
         // home: drop what she carries
         state.delivered += WORKER_CARRY;
+        if (econ) econ.deliver(WORKER_CARRY);   // #85: the colony's food store is the queen's pile
         w.carrying = null;
       } else {
         const took = harvestNode(w.targetId, WORKER_CARRY);
@@ -374,19 +406,31 @@ export function createColony({ plans = null } = {}) {
     }
 
     if (plans) plans.update(dt);
+    if (econ) econ.update(dt);
     const faces = allFaces();
     const diggerWorkers = state.workers.filter((w) => w.profileId === 'digger' && !w.controlled);
     const assignment = faces.length ? assignDiggers(diggerWorkers, faces) : null;
 
     state.digging = 0;
+    const haulerOf = new Map();
+    if (econ) {
+      for (const w of diggerWorkers.slice().sort((p, q) => p.id - q.id)) {
+        const fid = assignment && assignment.get(w.id);
+        if (fid && !haulerOf.has(fid)) haulerOf.set(fid, w.id);
+      }
+    }
     for (const w of state.workers) {
       if (w.controlled) {
+        if (w.haul) { w.spoil = { faceId: w.haul.faceId }; w.haul = null; }   // #85: taken mid-haul: she keeps carrying it
         if (w.profileId === 'digger') { stepControlledDigger(w, faces); if (w.atFace) state.digging++; }
         continue;   // the player steers her; nothing else about her is the AI's
       }
       if (w.profileId === 'digger') {
+        if (w.haul) { stepHaul(w, dt); continue; }
         stepDigger(w, dt, faces, assignment && assignment.get(w.id));
         if (w.atFace) state.digging++;
+        /* #85: the lowest-id digger of a crew at a face with spoil lying at it takes a pellet out */
+        if (econ && w.atFace && haulerOf.get(w.faceId) === w.id && econ.takePellet(w.faceId)) w.haul = { faceId: w.faceId, t: 0 };
       } else {
         stepWorker(w, dt);
       }
@@ -445,6 +489,7 @@ export function createColony({ plans = null } = {}) {
       progress: f.needed > 0 ? f.worked / f.needed : 0,
       diggers: state.faceWork.get(f.id) || 0,
       required: requiredCrewFor(f),   // #76: so the HUD can say why it waits
+      note: econ ? econ.faceNote(f.id, f.starved) : null,   // #85: "plus de nourriture" / spoil slowing the face
     }));
   }
 
@@ -491,7 +536,7 @@ export function createColony({ plans = null } = {}) {
       eggs: state.eggs.map((e) => ({ id: e.id, age: e.age })),
       opened: state.opened.slice(),
       workers: state.workers.map((w) => ({
-        id: w.id, profileId: w.profileId, carrying: w.carrying,
+        id: w.id, profileId: w.profileId, carrying: w.carrying, haul: w.haul ? w.haul.faceId : null,
         x: w.ant.x, z: w.ant.z, yaw: w.ant.yaw,
       })),
     };

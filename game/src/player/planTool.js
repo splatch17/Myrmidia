@@ -214,7 +214,7 @@ export function createPlanTool({ macro, plans, ghost, camera, domElement, digger
 
   function costText(ev) {
     const crew = diggerCount();
-    return `<div>${ev.n} cellules · <b>${ev.gratis ? 'gratuit (test)' : `${ev.cost} nourriture`}</b></div>`
+    return `<div>${ev.n} cellules · <b>${ev.gratis ? 'gratuit (test)' : `${ev.cost} nourriture`}</b>${ev.gratis ? '' : ` (payée en creusant)`}</div>`
       + `<div>Effectif requis : <b>${ev.crew}</b> fouisseuses `
       + `<span style="color:${crew >= ev.crew ? '#9fe0a0' : '#ffb07a'}">(vous en avez ${crew})</span></div>`;
   }
@@ -234,7 +234,9 @@ export function createPlanTool({ macro, plans, ghost, camera, domElement, digger
     const pct = Math.round((r ? r.progress : 0) * 100);
     return `<div class="mm-title">${p.label}${p.priority ? ' ★' : ''}</div>`
       + `<div>${r && r.waiting ? 'en attente du chantier voisin' : `avancement <b>${pct} %</b>`}</div>`
-      + `<div>${crewNow} / ${p.crew} fouisseuses · ${p.n0} cellules</div>${extra}`;
+      + `<div>${crewNow} / ${p.crew} fouisseuses · ${p.n0} cellules</div>`
+      + (r && r.starved ? '<div style="color:#ff9d8a">plus de nourriture : le chantier est à l’arrêt</div>' : '')
+      + (r && r.spoil > 0 ? `<div>déblais au front : <b>${r.spoil}</b>${r.spoil > 3 ? ' (le front ralentit)' : ''}</div>` : '') + extra;
   }
 
   function hover() {
@@ -249,7 +251,7 @@ export function createPlanTool({ macro, plans, ghost, camera, domElement, digger
       ghost.setHighlight(p && toolId !== 'select' ? p.id : null);
       if (p) {
         const extra = toolId === 'cancel'
-          ? `<div style="color:#ff9d8a">clic — annuler${p.gratis ? '' : ` (rend jusqu’à ${p.cost} nourriture)`}</div>`
+          ? `<div style="color:#ff9d8a">clic — annuler${p.gratis ? '' : ` (payé au fur et à mesure : ${p.paid} / ${p.cost} déjà dépensées, non rendues)`}</div>`
           : toolId === 'prio' ? `<div style="color:var(--mm-gold)">clic — ${p.priority ? 'retirer la priorité' : 'prioritaire'}</div>` : '';
         showTip(planTip(p, extra), mx, my);
       } else tip.style.display = 'none';

@@ -1,5 +1,6 @@
 import { brushShape, planCells, removePlan, isOpen, openCells, lawnY, openCutFloorAt, OPEN_CUT_CLEARANCE } from '../world/index.js';
-import { paceTime } from '../core/pace.js';
+import { paceTime, paceCost } from '../core/pace.js';
+import { ECON } from './economy.js';
 
 /* ==========================================================================
    Dig plans (#82): the CHANTIERS painted in the macro model.
@@ -26,11 +27,15 @@ import { paceTime } from '../core/pace.js';
    (planCells / removePlan) so the world's isPlanned() stays true to it.
    ========================================================================== */
 
-/* Costs. Deliberately plain numbers to be re-tuned by #85 (the full food +
-   spoil economy): food units per cell, a room costing more each time (design
-   fourmiliere-a-batir.md 2.3 "Limite: coût croissant"). */
-export const FOOD_PER_CELL = { room: 1 / 450, tunnel: 1 / 700 };
-export const ROOM_COST_STEP = 0.25;          // +25 % per room already committed
+/* Costs (#85): the numbers live in economy.js (ECON). A chantier is PAID AS
+   IT IS DUG: the food for each slice of progress is taken when that slice is
+   worked, so cancelling halfway only cost what was dug, and with no food the
+   diggers stop where they stand ("plus de nourriture"). Committing still asks
+   for the whole price to be in the pile - no starting what cannot be finished.
+   A room costs more each time (design fourmiliere-a-batir.md 2.3 "Limite:
+   coût croissant"). */
+export const FOOD_PER_CELL = ECON.FOOD_PER_CELL;
+export const ROOM_COST_STEP = ECON.ROOM_COST_STEP;   // +25 % per room already committed
 export const SECONDS_PER_CELL = 0.06;        // fouisseuse-seconds, before the test pace
 const MIN_CELLS = 60;
 const MAX_BOX = 44;                          // one brush never spans more than this
@@ -63,7 +68,7 @@ export function cellsOf(brush) {
  *              the colony's food store; available() null = none exists yet,
  *              and a chantier is then "gratuit (test)".
  */
-export function createPlans({ food } = {}) {
+export function createPlans({ food, econ = null } = {}) {
   const list = [];                 // active chantiers, in the order planned
   let seq = 1;
   const made = { room: 0, tunnel: 0 };   // committed so far, cancelled ones excluded
@@ -78,7 +83,7 @@ export function createPlans({ food } = {}) {
 
   function nextCost(kind, n) {
     const step = 1 + ROOM_COST_STEP * (kind === 'room' ? made.room : made.tunnel * 0.4);
-    return Math.max(1, Math.ceil(n * FOOD_PER_CELL[kind] * step));
+    return paceCost(Math.max(1, Math.ceil(n * FOOD_PER_CELL[kind] * step)));
   }
 
   const hasOpenNeighbour = (x, y, z) => NB.some((d) => isOpen(x + d[0], y + d[1], z + d[2]));
@@ -142,14 +147,13 @@ export function createPlans({ food } = {}) {
   function commit(brush, kind) {
     const ev = evaluate(brush, kind);
     if (!ev.ok) return { ok: false, reason: ev.reason, eval: ev };
-    if (!ev.gratis) food.spend(ev.cost);
     const reg = planCells(brush);
     made[kind]++;
     const plan = {
       id: `plan-${seq++}`, worldId: reg.id, kind, brush: JSON.parse(JSON.stringify(brush)),
       label: `${kind === 'room' ? 'Salle' : 'Tunnel'} ${made[kind]}`,
       cells: ev.cells, keys: keySet(ev.cells), n0: ev.n, total: ev.n,
-      cost: ev.cost, gratis: ev.gratis, crew: ev.crew, needed: ev.needed, worked: 0,
+      cost: ev.cost, paid: 0, starved: false, gratis: ev.gratis, crew: ev.crew, needed: ev.needed, worked: 0,
       priority: false, anchor: null, lastDue: 0, retryT: 0,
       face: null,
     };
@@ -238,11 +242,36 @@ export function createPlans({ food } = {}) {
     refreshFace(plan);
   }
 
-  /** Ant-seconds into a chantier (colony.js's gauge). Idempotent past done. */
+  /* Food due once `worked` ant-seconds are in: the price is spread over the
+     work, the first unit taken as soon as work starts. */
+  const dueAt = (plan, worked) => Math.ceil(plan.cost * Math.min(1, worked / plan.needed) - 1e-9);
+  function canAfford(plan, worked) {
+    if (plan.gratis || !food) return true;
+    const stock = food.available();
+    return stock === null || stock >= dueAt(plan, worked) - plan.paid;
+  }
+
+  /** Ant-seconds into a chantier (colony.js's gauge). Idempotent past done.
+   *  Slowed by spoil lying at the face (economy.slow), held up without food. */
   function pay(id, antSeconds) {
     const plan = list.find((p) => p.id === id);
     if (!plan || !plan.face) return null;
-    plan.worked = Math.min(plan.needed, plan.worked + antSeconds);
+    const add = antSeconds * (econ ? econ.slow(plan.id) : 1);
+    const next = Math.min(plan.needed, plan.worked + add);
+    if (!canAfford(plan, next)) {
+      plan.starved = plan.face.starved = true;
+      return { done: false, starved: true, needed: plan.needed, worked: plan.worked, opened: null };
+    }
+    plan.starved = plan.face.starved = false;
+    if (!plan.gratis && food) {
+      const due = dueAt(plan, next);
+      if (due > plan.paid) { food.spend(due - plan.paid); plan.paid = due; }
+    }
+    if (econ && next > plan.worked) {
+      const at = plan.stand || plan.anchor;
+      econ.dug(plan.id, ((next - plan.worked) / plan.needed) * plan.n0, at[0], at[1], at[2]);
+    }
+    plan.worked = next;
     plan.face.worked = plan.worked;
     if (plan.worked >= plan.needed) {
       dig(plan, true);
@@ -269,10 +298,7 @@ export function createPlans({ food } = {}) {
     list.splice(list.indexOf(plan), 1);
     removePlan(plan.worldId);
     made[plan.kind] = Math.max(0, made[plan.kind] - 1);
-    if (!plan.gratis && food) {
-      const back = Math.round(plan.cost * (1 - plan.worked / plan.needed));
-      if (back > 0) food.give(back);
-    }
+    // paid as it was dug (see the header): nothing to refund, what was spent is spent
     dirty = true;
     return true;
   }
@@ -328,6 +354,27 @@ export function createPlans({ food } = {}) {
    *  belongs to a chantier is paid to it at the AI's own rate (SECONDS_PER_CELL),
    *  so hand-digging inside a plan advances it. Call BEFORE the cells are opened.
    *  -> number of cells credited */
+  /** How many of these cells lie in a chantier (a hand bite's free part is the rest). */
+  function countIn(cells) {
+    let n = 0;
+    for (let i = 0; i < cells.length; i += 3) {
+      const k = ckey(cells[i], cells[i + 1], cells[i + 2]);
+      for (const p of list) if (p.face && p.keys.has(k)) { n++; break; }
+    }
+    return n;
+  }
+
+  /** Could the chantiers these cells belong to pay for them (food)? */
+  function canCredit(cells) {
+    for (const p of list) {
+      if (!p.face) continue;
+      let n = 0;
+      for (let i = 0; i < cells.length; i += 3) if (p.keys.has(ckey(cells[i], cells[i + 1], cells[i + 2]))) n++;
+      if (n && !canAfford(p, Math.min(p.needed, p.worked + n * SECONDS_PER_CELL))) { p.starved = p.face.starved = true; return false; }
+    }
+    return true;
+  }
+
   function creditCells(cells) {
     let total = 0;
     for (const p of list.slice()) {
@@ -340,7 +387,7 @@ export function createPlans({ food } = {}) {
   }
 
   return {
-    state, evaluate, commit, cancel, pay, creditCells, update, faces, pickPlan, togglePriority,
+    state, evaluate, commit, cancel, pay, creditCells, countIn, canCredit, update, faces, pickPlan, togglePriority,
     get(id) { return list.find((p) => p.id === id) || null; },
     /** [{ id, cells }] for the ghost (only when it changed since the last call) */
     ghostList() { return list.map((p) => ({ id: p.id, cells: p.cells })); },
@@ -351,7 +398,8 @@ export function createPlans({ food } = {}) {
         id: p.id, label: p.label, kind: p.kind, priority: p.priority,
         progress: p.needed > 0 ? p.worked / p.needed : 0,
         waiting: !p.face, required: p.crew, diggers: crewOf ? crewOf(p.id) : 0,
-        cells: p.n0, cost: p.cost, gratis: p.gratis,
+        cells: p.n0, cost: p.cost, paid: p.paid, starved: p.starved, gratis: p.gratis,
+        spoil: econ ? econ.lyingAt(p.id) : 0,
       }));
     },
     count: () => list.length,

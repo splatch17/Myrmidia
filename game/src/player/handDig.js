@@ -47,7 +47,7 @@ const NEUTRAL_PITCH = -0.19;     // the default camera pitch: aims level
 
 const N_DUST = 64;
 
-export function createHandDig({ scene, plans, cost = () => true }) {
+export function createHandDig({ scene, plans, cost = () => true, onDug = null }) {
   /* ---- the ring on the wall ------------------------------------------- */
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.7, 1.0, 40),
@@ -86,7 +86,7 @@ export function createHandDig({ scene, plans, cost = () => true }) {
   const state = {
     active: false,        // digging this frame (held with a valid bite)
     aim: false,           // a bite is available (ring visible)
-    bites: 0, seconds: 0, cells: 0, planCells: 0, freeCells: 0,
+    bites: 0, seconds: 0, cells: 0, planCells: 0, freeCells: 0, refused: 0,
     lastBite: null,
   };
   let budget = 0;
@@ -133,6 +133,7 @@ export function createHandDig({ scene, plans, cost = () => true }) {
    * `held` = E is down and nothing else claims it. `pitch` = camera wantPitch.
    */
   function update(ant, held, pitch, dt) {
+    if (state.refused > 0) state.refused -= dt;
     // dust always falls, whoever is controlled
     for (let i = 0; i < N_DUST; i++) {
       if (life[i] <= 0) continue;
@@ -164,7 +165,8 @@ export function createHandDig({ scene, plans, cost = () => true }) {
     state.active = true; state.seconds += dt;
     budget = Math.min(budget + HAND_RATE * dt, 60);
     const n = pr.cells.length / 3;
-    if (budget >= n && cost(n) !== false) {
+    if (budget >= n && cost(n, pr.cells) === false) { state.refused = 1.5; state.active = false; return state; }
+    if (budget >= n) {
       budget -= n;
       const credited = plans && plans.creditCells ? plans.creditCells(pr.cells) : 0;
       const opened = openCells(pr.brush);
@@ -173,6 +175,7 @@ export function createHandDig({ scene, plans, cost = () => true }) {
         state.planCells += credited; state.freeCells += opened - credited;
         state.lastBite = { center: pr.brush.center, cells: opened, credited };
         puff(pr.surf, 4, pr.dir);
+        if (onDug) onDug(opened - credited, pr.surf, ant);
       }
     }
     return state;
@@ -180,7 +183,7 @@ export function createHandDig({ scene, plans, cost = () => true }) {
 
   return {
     update, state, probe,
-    promptText: () => (state.aim ? 'E maintenu — creuser' : null),
+    promptText: () => (state.refused > 0 ? 'Plus de nourriture — rapportez des graines' : state.aim ? 'E maintenu — creuser' : null),
     dispose() { scene.remove(ring); scene.remove(dust); dustGeo.dispose(); },
   };
 }

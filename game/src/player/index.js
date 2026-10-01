@@ -28,6 +28,9 @@ import { createTargetMarker } from './marker.js';
 import { createColony, requiredCrewFor, CONTROL_DIG_MULT } from './colony.js';
 import { createPlans } from './plans.js';
 import { createHandDig } from './handDig.js';
+import { createEconomy, ECON } from './economy.js';
+import { createSpoilView } from './spoilView.js';
+import { createSpoilMound } from '../world/spoilMound.js';
 import { createPlanTool } from './planTool.js';
 import { createEntities } from './entities.js';
 import { createCrowd } from './crowd.js';
@@ -153,21 +156,32 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
   /* #82: the colony's food store, as far as one exists. The pile the queen
      lays from is the only one there is until #85 (full food + spoil economy):
      no pile yet = chantiers are free ("gratuit (test)"). */
-  const plans = createPlans({
-    food: {
-      available: () => (interaction.harvest.state.cache ? interaction.harvest.stock() : null),
-      spend: (n) => interaction.harvest.spend(n),
-      give: (n) => {
-        const c = interaction.harvest.state.cache;
-        if (!c) return;
-        const k = Object.keys(c.items)[0] || 'seed';
-        c.items[k] = (c.items[k] || 0) + n; c.total += n;
-      },
+  /* #85: that pile IS the colony's food store now: foragers' deliveries feed it
+     (colony.js -> econ.deliver), and a clutch, a chantier (paid as it is dug)
+     and a hand-dug bite draw on it. Numbers: economy.js. */
+  const food = {
+    available: () => (interaction.harvest.state.cache ? interaction.harvest.stock() : null),
+    spend: (n) => interaction.harvest.spend(n),
+    give: (n) => {
+      const c = interaction.harvest.state.cache;
+      if (!c) return;
+      const k = Object.keys(c.items)[0] || 'seed';
+      c.items[k] = (c.items[k] || 0) + n; c.total += n;
     },
+  };
+  const econ = createEconomy({ food });
+  const plans = createPlans({ food, econ });
+  const colony = createColony({ plans, econ });
+  // #83/#85: the controlled digger's hands (built now so nest shading sees its meshes). A bite
+  // costs food outside a chantier (inside one the plan pays it, plans.canCredit) and leaves spoil.
+  const handDig = createHandDig({
+    scene, plans,
+    cost: (n, cells) => plans.canCredit(cells) && econ.chargeHand(n - plans.countIn(cells)) ? true : (econ.say(econ.NO_FOOD + ' : elle ne creuse plus à la main'), false),
+    onDug: (free, at, a) => econ.dug(null, free, at[0], at[1], at[2]),
   });
-  const colony = createColony({ plans });
-  // #83: the controlled digger's hands (built now so nest shading sees its meshes)
-  const handDig = createHandDig({ scene, plans });
+  const spoilView = createSpoilView(scene);
+  const mound = createSpoilMound(scene);
+  econ.setDropPoint(() => { const a = mound.anchors(); return a ? a.drop : null; });
   const ghost = createPlanGhost();
   scene.add(ghost.group);
   const allFaces = () => digFaces().concat(plans.faces());
@@ -404,6 +418,22 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     return text;
   }
 
+  /* #85: the standing line says so when the chantiers are held up for food */
+  function economyObjective(base) {
+    const held = plans.rows().some((r) => r.starved);
+    if (held) return `${econ.NO_FOOD} — les fouisseuses attendent : rapportez des graines. ${base}`;
+    return base;
+  }
+  function spoilPrompt(act) {
+    if (profile.id !== 'digger' || act.kind !== 'none' || interaction.busy()) return null;
+    if (cur.spoil) {
+      const d = econ.dropPoint();
+      return d && Math.hypot(d.x - ant.x, d.z - ant.z) <= ECON.DROP_RADIUS + 4 ? 'E — poser le déblais sur le tas' : 'Elle porte un déblais : au tas, dehors, près de l’entrée';
+    }
+    if (!handDig.state.aim && econ.pileNear(ant.x, ant.z)) return 'E — porter un déblais dehors';
+    return null;
+  }
+
   // who the HUD says you are: "n° 2" for the second digger, nothing for the queen
   function unitTag() {
     if (cur === queen) return '';
@@ -498,10 +528,26 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
       stepAnt(ant, wish, intent, dt);
     }
 
+    /* #85: a controlled digger takes a pellet from a pile at a tap of E when not
+       facing earth, and puts it down at the mound (carrying, she cannot bite). */
+    {
+      const can = !macro && !dead && profile.id === 'digger' && !interaction.busy() && !ant.climb && act.kind === 'none';
+      if (can && pressedE) {
+        const drop = econ.dropPoint();
+        if (cur.spoil) {
+          if (drop && Math.hypot(drop.x - ant.x, drop.z - ant.z) <= ECON.DROP_RADIUS + 4) {
+            econ.deposit(); cur.spoil = null; casteMsg = 'Déblais déposé : le tas grossit'; casteMsgTimer = 4;
+          }
+        } else if (!handDig.state.aim) {
+          const pile = econ.pileNear(ant.x, ant.z);
+          if (pile && econ.takePellet(pile.id)) { cur.spoil = { faceId: pile.id }; casteMsg = 'Elle porte un déblais : au tas, dehors, près de l’entrée'; casteMsgTimer = 4; }
+        }
+      }
+    }
     /* #83: E held, in a digger, with nothing else claiming it: she digs where
        she looks. The ladder's 'none' is what leaves the key free. */
     {
-      const diggerHere = !macro && profile.id === 'digger' && !interaction.busy() && !ant.climb;
+      const diggerHere = !macro && profile.id === 'digger' && !interaction.busy() && !ant.climb && !cur.spoil;
       const digging = handDig.update(diggerHere ? ant : null, diggerHere && act.kind === 'none' && input.isInteractHeld(),
         input.state.wantPitch, dt);
       cur.handDigging = digging.active;
@@ -547,6 +593,14 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     if (tickReserve(colony.state, dt, activityOf(queen.ant, queen.profile,
       colony.state.digging > 0 || interaction.busy()), queen.ant)) showEnd();
     if (macroTool) macroTool.update(dt);
+    {
+      // #85: the mound grows with what was brought out; the pellets show where they lie and who carries one
+      mound.setAmount(econ.state.out);
+      mound.update(dt);
+      const carriers = [];
+      for (const w of colony.state.workers) if (w.haul || w.spoil) carriers.push({ x: w.ant.x, y: w.ant.y, z: w.ant.z, yaw: w.ant.yaw });
+      spoilView.update(econ.state.piles, carriers);
+    }
     if (plans.consumeDirty()) ghost.setPlans(plans.ghostList());
     ghost.update(dt, elapsed, camera, macroMixNow(), (domElement && domElement.clientHeight) || window.innerHeight);
     const planDone = plans.state.doneEvent;
@@ -557,12 +611,12 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     crowd.render(crowdList, elapsed);
 
     refreshSite(dt);
-    hud.setPrompt(handDig.promptText() || interaction.promptText(ant, act));
-    hud.setObjective(settleObjective(profile.manages ? interaction.objectiveText(ant) : fieldObjective()));
+    hud.setPrompt(handDig.promptText() || spoilPrompt(act) || interaction.promptText(ant, act));
+    hud.setObjective(economyObjective(settleObjective(profile.manages ? interaction.objectiveText(ant) : fieldObjective())));
     const colonyLine = colony.statusText();
     hud.setStock(colonyLine ? `${interaction.inventoryText()}  |  ${colonyLine}` : interaction.inventoryText());
     if (casteMsgTimer > 0) { casteMsgTimer -= dt; if (casteMsgTimer <= 0) casteMsg = null; }
-    hud.setEvent(casteMsg || interaction.message());
+    hud.setEvent(casteMsg || econ.state.msg || interaction.message());
     hud.setHold(interaction.holdProgress(act));
     /* One reading of the colony per frame, handed to both the panel and the
        unit frame: two calls that each built their own would be two answers
@@ -573,6 +627,9 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
       casteOrder: PRODUCED_CASTES,
       casteLabel: (id) => profileById(id).label,
       reserve: interaction.harvest.stock(),
+      food: interaction.harvest.state.cache ? interaction.harvest.stock() : null,
+      spoilLying: econ.totalLying(),
+      spoilOut: econ.state.out,
       cost: interaction.clutchCost(),
       brood: interaction.laying.brood(),
       counts: {
@@ -697,6 +754,8 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     window.__rooms2 = () => dugRooms();
     window.__faces = () => digFaces();
     window.__plans = plans;
+    window.__econ = econ; window.__mound = mound; window.__spoilView = spoilView;
+    window.__food = food;
     window.__handDig = handDig.state; window.__handDigProbe = (p) => { const r = handDig.probe(ant, p ?? input.state.wantPitch); return r && { why: r.why, ok: r.ok, surf: r.surf, n: r.cells && r.cells.length / 3 }; };
     window.__hud = hud;
     window.__findNestPath = findNestPath;
@@ -807,6 +866,8 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     queenMenu.dispose();
     settleUi.dispose();
     marker.dispose();
+    spoilView.dispose();
+    mound.dispose();
     crowd.dispose();
     props.dispose();
   }

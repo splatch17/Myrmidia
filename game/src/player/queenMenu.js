@@ -151,7 +151,9 @@ export function createQueenMenu(root = document.body, handlers = {}) {
         const plural = p.required > 1 ? 's' : '';
         const crew = p.waiting ? 'en attente du chantier voisin'
           : p.diggers > 0 ? `${p.diggers} / ${p.required} fouisseuse${plural}` : `personne (0 / ${p.required})`;
-        return kv(`${p.priority ? '★ ' : ''}${p.label} · ${Math.round(p.progress * 100)} %`, crew) + bar(p.progress);
+        const price = p.gratis ? '' : ` · ${p.paid} / ${p.cost} nourriture`;
+        const warn = p.starved ? '<div class="mm-empty">plus de nourriture : à l’arrêt</div>' : (p.spoil > 3 ? `<div class="mm-empty">déblais ${p.spoil} au front : ralenti</div>` : '');
+        return kv(`${p.priority ? '★ ' : ''}${p.label} · ${Math.round(p.progress * 100)} %${price}`, crew) + bar(p.progress) + warn;
       }).join('');
 
       /* #84: settling, then what it paid. The button is live even when she
@@ -177,6 +179,7 @@ export function createQueenMenu(root = document.body, handlers = {}) {
         + `<div class="mm-win-sub">${profile.label}</div>`
         + heading('PONTE')
         + casteRows
+        + kv('nourriture', s.food === null ? '—' : `${s.food}`)
         + kv('réserve', `${s.reserve} / ${s.cost}`)
         + kv('couvées', s.brood)
         + heading('COLONIE')
@@ -184,6 +187,7 @@ export function createQueenMenu(root = document.body, handlers = {}) {
         + kv(s.casteLabel('digger'), s.counts.digger)
         + kv('œufs', s.counts.eggs)
         + kv('salles creusées', s.rooms.length)
+        + kv('déblais', `${s.spoilLying} au front · ${s.spoilOut} au tas`)
         + heading('CHANTIERS')
         + faceRows
         + planRows
