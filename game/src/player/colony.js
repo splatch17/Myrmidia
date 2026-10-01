@@ -1,5 +1,5 @@
 import { makeNavState, navTarget, tickNav, containAiStep, aiFloorAt, atClosestApproach } from './nestPath.js';
-import { groundY, RESOURCE_NODES, harvestNode, nestOrigin, digFaces, payDigFace } from '../world/index.js';
+import { lawnY, groundY, RESOURCE_NODES, harvestNode, nestOrigin, digFaces, payDigFace } from '../world/index.js';
 import { WORKER, DIGGER, profileById, strideOf, collideRadius } from './avatar.js';
 import { makeAnt, makeLegState, updateLegs } from './legs.js';
 import { dampAngle } from './mathUtil.js';
@@ -252,7 +252,14 @@ export function createColony({ plans = null, econ = null } = {}) {
     if (!w.nav) w.nav = makeNavState();
     const atEnd = atClosestApproach(w.nav, a, d, siteROf(face));
     tickNav(w.nav, dt, d > siteROf(face) && !atEnd ? a : null);
-    const wp = d > siteROf(face) ? navTarget(w.nav, a, stand.x, stand.z) : stand;
+    /* #85: back from dropping a pellet she is on the lawn: the way in is the ramp, so the
+       first leg is to its mouth (the path search only knows nest ground) */
+    const mouth = econ && econ.mouthPoint();
+    if (w.reenter && (!mouth || Math.hypot(mouth.x - a.x, mouth.z - a.z) < 4)) w.reenter = false;   // one-way, like the haul legs
+    const onLawn = !!(w.reenter && mouth);
+    const exitP = onLawn && econ.exitPoint();
+    const viaExit = exitP && Math.hypot(mouth.x - a.x, mouth.z - a.z) > 11;   // in from the heap: back along the ramp's heading
+    const wp = onLawn ? (viaExit ? exitP : mouth) : d > siteROf(face) ? navTarget(w.nav, a, stand.x, stand.z) : stand;
     const dx = wp.x - a.x, dz = wp.z - a.z;
 
     if (d <= siteROf(face) || atEnd) {
@@ -294,10 +301,21 @@ export function createColony({ plans = null, econ = null } = {}) {
     w.atFace = false;
     if (!drop || h.t > ECON.HAUL_GIVE_UP) { econ.putBack(h.faceId); w.haul = null; a.speed = 0; return; }
     const d = Math.hypot(drop.x - a.x, drop.z - a.z);
-    if (d <= ECON.DROP_RADIUS) { econ.deposit(); w.haul = null; a.speed = 0; return; }
+    /* two legs, and the switch is one-way: the ramp's own floor sits within a few units of the
+       lawn near its top, so "am I underground" flickers there and she would dither on the lip */
+    const mouth = econ.mouthPoint();
+    if (!h.stage) h.stage = mouth && a.y < lawnY(a.x, a.z) - 3 ? 'mouth' : 'drop';
+    const exit = econ.exitPoint();
+    if (h.stage === 'mouth' && (!mouth || Math.hypot(mouth.x - a.x, mouth.z - a.z) < 4)) h.stage = exit ? 'out' : 'drop';
+    if (h.stage === 'out' && (!exit || Math.hypot(exit.x - a.x, exit.z - a.z) < 4)) h.stage = 'drop';
+    if (d <= ECON.DROP_RADIUS && h.stage === 'drop') { econ.deposit(); w.haul = null; w.back = true; w.reenter = true; a.speed = 0; return; }
     if (!w.nav) w.nav = makeNavState();
     tickNav(w.nav, dt, a);
-    const wp = navTarget(w.nav, a, drop.x, drop.z);
+    /* in the nest the way out is the ramp (the path search only knows nest ground):
+       to the mouth first, then straight over the lawn to the drop point */
+    const goal = h.stage === 'mouth' ? mouth : h.stage === 'out' ? exit : drop;
+    // the path search only knows nest ground: out on the lawn it is a straight walk
+    const wp = h.stage === 'mouth' ? navTarget(w.nav, a, goal.x, goal.z) : goal;
     a.yaw = dampAngle(a.yaw, Math.atan2(wp.x - a.x, wp.z - a.z), 6, dt);
     a.speed = WORKER_SPEED * 0.9;
     const step = a.speed * dt, fx = a.x, fz = a.z;
@@ -326,7 +344,7 @@ export function createColony({ plans = null, econ = null } = {}) {
 
   /** Release: the brain restarts from a clean slate (no stale target/path). */
   function resetBrain(w) {
-    w.targetId = null; w.repath = 0; w.atFace = false;
+    w.targetId = null; w.repath = 0; w.atFace = false; w.reenter = false;
     // #85: a pellet she carried while played is hers to take out when the AI has her again
     if (w.spoil) { w.haul = { faceId: w.spoil.faceId, t: 0 }; w.spoil = null; }
   }
@@ -428,7 +446,7 @@ export function createColony({ plans = null, econ = null } = {}) {
       if (w.profileId === 'digger') {
         if (w.haul) { stepHaul(w, dt); continue; }
         stepDigger(w, dt, faces, assignment && assignment.get(w.id));
-        if (w.atFace) state.digging++;
+        if (w.atFace) { state.digging++; w.back = false; }
         /* #85: the lowest-id digger of a crew at a face with spoil lying at it takes a pellet out */
         if (econ && w.atFace && haulerOf.get(w.faceId) === w.id && econ.takePellet(w.faceId)) w.haul = { faceId: w.faceId, t: 0 };
       } else {
@@ -452,15 +470,24 @@ export function createColony({ plans = null, econ = null } = {}) {
       state.faceWork.set(w.faceId, (state.faceWork.get(w.faceId) || 0) + 1);
       state.faceRate.set(w.faceId, (state.faceRate.get(w.faceId) || 0) + (w.controlled ? CONTROL_DIG_MULT : 1));
     }
+    /* #85: a digger out with a pellet still belongs to her crew (the minimum-crew
+       gate must not stall the whole face for every trip), but adds no work */
+    for (const w of state.workers) {
+      if (w.profileId !== 'digger' || w.controlled) continue;
+      const fid = w.haul ? w.haul.faceId : (w.back && !w.atFace ? w.faceId : null);   // out with it, or walking back
+      if (fid && faces.some((f) => f.id === fid)) state.faceWork.set(fid, (state.faceWork.get(fid) || 0) + 1);
+    }
     const facesById = new Map(faces.map((f) => [f.id, f]));
     for (const [id, crew] of state.faceWork) {
       /* #76: below the minimum crew, a face does not creep — it pays
          nothing at all, rather than a trickle no one would notice. */
       const f = facesById.get(id);
       if (f && crew < requiredCrewFor(f)) continue;
+      const rate = state.faceRate.get(id) || 0;
+      if (rate <= 0) continue;
       const r = f && f.plan
-        ? plans.pay(id, state.faceRate.get(id) * dt * paceDigMultiplier())
-        : payDigFace(id, state.faceRate.get(id) * dt * paceDigMultiplier());
+        ? plans.pay(id, rate * dt * paceDigMultiplier())
+        : payDigFace(id, rate * dt * paceDigMultiplier());
       if (r && r.opened) {
         state.opened.push(r.opened.id);
         state.lastOpened = r.opened;

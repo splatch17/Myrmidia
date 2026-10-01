@@ -165,7 +165,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     give: (n) => {
       const c = interaction.harvest.state.cache;
       if (!c) return;
-      const k = Object.keys(c.items)[0] || 'seed';
+      const k = Object.keys(c.items)[0] || 'graine';
       c.items[k] = (c.items[k] || 0) + n; c.total += n;
     },
   };
@@ -181,7 +181,7 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
   });
   const spoilView = createSpoilView(scene);
   const mound = createSpoilMound(scene);
-  econ.setDropPoint(() => { const a = mound.anchors(); return a ? a.drop : null; });
+  econ.setAnchors(() => mound.anchors());
   const ghost = createPlanGhost();
   scene.add(ghost.group);
   const allFaces = () => digFaces().concat(plans.faces());
@@ -425,12 +425,12 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     return base;
   }
   function spoilPrompt(act) {
-    if (profile.id !== 'digger' || act.kind !== 'none' || interaction.busy()) return null;
+    if (profile.id !== 'digger' || interaction.busy()) return null;
     if (cur.spoil) {
       const d = econ.dropPoint();
       return d && Math.hypot(d.x - ant.x, d.z - ant.z) <= ECON.DROP_RADIUS + 4 ? 'E — poser le déblais sur le tas' : 'Elle porte un déblais : au tas, dehors, près de l’entrée';
     }
-    if (!handDig.state.aim && econ.pileNear(ant.x, ant.z)) return 'E — porter un déblais dehors';
+    if (act.kind === 'none' && !handDig.state.aim && econ.pileNear(ant.x, ant.z)) return 'E — porter un déblais dehors';
     return null;
   }
 
@@ -512,7 +512,28 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
     if (!casteUnlocked(caste)) caste = 'worker';
     const pressedE = input.consumeInteract();
     const still = macro || dead;
-    const act = interaction.update(ant, still ? false : pressedE, still ? false : input.isInteractHeld(), dt, queen.ant);
+    /* #85: a controlled digger takes a pellet from a pile at a tap of E when not
+       facing earth, and puts it down at the mound (carrying, she cannot bite).
+       Decided BEFORE the ladder so the tap is not also a climb or a harvest: at
+       the mound a stem in reach would otherwise win. */
+    let spoilTap = false;
+    if (pressedE && !still && profile.id === 'digger' && !interaction.busy() && !ant.climb) {
+      const pre = interaction.resolve(ant).kind;
+      const drop = econ.dropPoint();
+      if (cur.spoil) {
+        if (drop && Math.hypot(drop.x - ant.x, drop.z - ant.z) <= ECON.DROP_RADIUS + 4) {
+          econ.deposit(); cur.spoil = null; spoilTap = true;
+          casteMsg = 'Déblais déposé : le tas grossit'; casteMsgTimer = 4;
+        }
+      } else if (pre === 'none' && !handDig.state.aim) {
+        const pile = econ.pileNear(ant.x, ant.z);
+        if (pile && econ.takePellet(pile.id)) {
+          cur.spoil = { faceId: pile.id }; spoilTap = true;
+          casteMsg = 'Elle porte un déblais : au tas, dehors, près de l’entrée'; casteMsgTimer = 4;
+        }
+      }
+    }
+    const act = interaction.update(ant, still || spoilTap ? false : pressedE, still ? false : input.isInteractHeld(), dt, queen.ant);
 
     if (interaction.busy()) {
       /* The founding sequence (laying.js, #6) is placing her along a path
@@ -528,22 +549,6 @@ export function createPlayerController({ scene, camera, domElement, profile: sta
       stepAnt(ant, wish, intent, dt);
     }
 
-    /* #85: a controlled digger takes a pellet from a pile at a tap of E when not
-       facing earth, and puts it down at the mound (carrying, she cannot bite). */
-    {
-      const can = !macro && !dead && profile.id === 'digger' && !interaction.busy() && !ant.climb && act.kind === 'none';
-      if (can && pressedE) {
-        const drop = econ.dropPoint();
-        if (cur.spoil) {
-          if (drop && Math.hypot(drop.x - ant.x, drop.z - ant.z) <= ECON.DROP_RADIUS + 4) {
-            econ.deposit(); cur.spoil = null; casteMsg = 'Déblais déposé : le tas grossit'; casteMsgTimer = 4;
-          }
-        } else if (!handDig.state.aim) {
-          const pile = econ.pileNear(ant.x, ant.z);
-          if (pile && econ.takePellet(pile.id)) { cur.spoil = { faceId: pile.id }; casteMsg = 'Elle porte un déblais : au tas, dehors, près de l’entrée'; casteMsgTimer = 4; }
-        }
-      }
-    }
     /* #83: E held, in a digger, with nothing else claiming it: she digs where
        she looks. The ladder's 'none' is what leaves the key free. */
     {

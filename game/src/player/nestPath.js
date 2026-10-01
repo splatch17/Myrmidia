@@ -20,10 +20,11 @@ import { nestFootprint } from './nest.js';
    ========================================================================== */
 
 const CELL = 2;
-/* Floor change per step. Generous on purpose: the plan tool digs a room and its
+/* Floor change per step. Generous on purpose (4 -> 6.5 in #85: a hauler has to find the way OUT
+   of a room dug 5 under the hall, which a crew walking IN never needed): the plan tool digs a room and its
    tunnel to different floor levels, so the junction is a ledge of several units
    that a worker scrambles over and the queen's own walk does not allow. */
-const STEP_UP = 4.0;
+const STEP_UP = 6.5;
 const MAX_NODES = 9000;
 /* A front sits at a wall, and the footprint keeps a body's width off every wall,
    so the standing place of a front is usually just outside what counts as
@@ -45,8 +46,15 @@ const PULL_SIDE = 1.8;
    what keeps it off them */
 const GRAZE = 0.15;
 function floorFor(fp, x, z, y, side = SIDE) {
-  const s = volumeSpan(x, z, y);
-  if (s && s.ceil - s.floor >= MIN_HEAD && y >= s.floor - 2.5 && y <= s.ceil) {
+  let s = volumeSpan(x, z, y);
+  /* #85: volumeSpan(.., y) only answers with a span AT or UNDER y, so a ledge higher than
+     she stands (the way out of a room dug under the hall) was always a wall: ask again from
+     a step higher, and take the floor above her if it is within a scramble */
+  if (!s || y > s.ceil) {
+    const up = volumeSpan(x, z, y + STEP_UP);
+    if (up && up.floor > y && up.floor - y <= STEP_UP) s = up;
+  }
+  if (s && s.ceil - s.floor >= MIN_HEAD && y >= s.floor - STEP_UP && y <= s.ceil) {
     const c = s.floor + 1.4;
     if (isOpen(x + side, c, z) && isOpen(x - side, c, z) && isOpen(x, c, z + side) && isOpen(x, c, z - side)) return s.floor;
     return null;
@@ -102,6 +110,28 @@ const DI = [1, -1, 0, 0, 1, 1, -1, -1], DJ = [0, 0, 1, -1, 1, -1, 1, -1];
  * walk).
  */
 export function findNestPath(sx, sy, sz, gx, gz, recenter = false) {
+  const r = searchNestPath(sx, sy, sz, gx, gz, recenter);
+  if (r) return r;
+  /* #85: a body pressed into a corner or the tapering end of a tunnel (where a
+     digger works, and so where she starts from when she carries spoil out) is not on
+     standable ground itself and every neighbour of her start is refused: the search
+     dies at once. Start from the nearest standable spot within a few units instead,
+     and step there first. */
+  const fp = nestFootprint();
+  if (!fp) return null;
+  for (const rad of [2, 3.5, 5]) {
+    for (let k = 0; k < 12; k++) {
+      const t = (k / 12) * Math.PI * 2, x = sx + Math.cos(t) * rad, z = sz + Math.sin(t) * rad;
+      const f = floorFor(fp, x, z, sy);
+      if (f === null || Math.abs(f - sy) > STEP_UP) continue;
+      const r2 = searchNestPath(x, f, z, gx, gz, recenter);
+      if (r2) { const out = [{ x, z }, ...r2]; if (r2.closest) out.closest = true; return out; }
+    }
+  }
+  return null;
+}
+
+function searchNestPath(sx, sy, sz, gx, gz, recenter = false) {
   const fp = nestFootprint();
   if (!fp) return null;
   if (!recenter && clearHop(fp, sx, sz, sy, gx, gz, PULL_SIDE)) return [{ x: gx, z: gz }];
@@ -238,6 +268,9 @@ export function containAiStep(a, fx, fz) {
   if (before === null && a.y > lawnY(fx, fz) - 3) return null;
   let f = aiFloorAt(a.x, a.z, a.y);
   if (f !== null) return f;
+  /* #85: the top of the ramp opens onto the meadow: a step that ends on the lawn, from a body
+     standing at lawn level, is her going OUT (a hauler with a pellet), not into earth */
+  if (a.y > lawnY(a.x, a.z) - 1.5) return null;
   const tx = a.x, tz = a.z;
   if ((f = aiFloorAt(tx, fz, a.y)) !== null) { a.x = tx; a.z = fz; return f; }
   if ((f = aiFloorAt(fx, tz, a.y)) !== null) { a.x = fx; a.z = tz; return f; }

@@ -104,13 +104,21 @@ export function createEconomy({ food } = {}) {
 
   /** Where hauled earth goes: on the lawn by the entrance, on the side away
    *  from the nest's own ramp (world/spoilMound.js picks the same point). */
-  let dropFn = null;
-  function setDropPoint(fn) { dropFn = fn; }
+  let anchorsFn = null;
+  function setAnchors(fn) { anchorsFn = fn; }          // () => { drop, mouth } | null
   function dropPoint() {
-    const d = dropFn && dropFn();
-    if (d) return d;
+    const a = anchorsFn && anchorsFn();
+    if (a) return a.drop;
     const o = nestOrigin();
     return o ? { x: o.x, z: o.z, y: lawnY(o.x, o.z) } : null;
+  }
+  /** Top of the ramp: the way in and out of the nest (the hauler's waypoint). */
+  function mouthPoint() { const a = anchorsFn && anchorsFn(); return a ? a.mouth : null; }
+  /** A point straight out along the ramp's heading, clear of the trench banks: the way
+   *  from the mouth to the heap goes through it, not diagonally over the cut's edge. */
+  function exitPoint() {
+    const a = anchorsFn && anchorsFn();
+    return a ? { x: a.mouth.x + a.dir.x * 10, z: a.mouth.z + a.dir.z * 10 } : null;
   }
 
   /** The nearest non-empty pile within `r` of (x, z), for the player's E. */
@@ -155,7 +163,7 @@ export function createEconomy({ food } = {}) {
 
   return {
     state, dug, slow, lyingAt, totalLying, takePellet, putBack, deposit, pileNear, pileAtFace,
-    setDropPoint, dropPoint, chargeHand, deliver, faceNote, say, update, stock,
+    setAnchors, dropPoint, mouthPoint, exitPoint, chargeHand, deliver, faceNote, say, update, stock,
     NO_FOOD: noFood,
   };
 }

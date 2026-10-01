@@ -34,20 +34,27 @@ const EARTH = [new THREE.Color('#6a4a30'), new THREE.Color('#8a6544'), new THREE
 export function spoilAnchors() {
   const path = descentPath();
   if (!path || path.length < 2) return null;
-  // the end of the ramp that comes up to the lawn = the highest point
-  let top = 0;
-  for (let i = 1; i < path.length; i++) if (path[i].y > path[top].y) top = i;
-  const nb = top === 0 ? path[1] : path[top - 1];
+  // the END of the ramp that comes up to the lawn (the path is one end to the other; the highest
+  // END, not the highest point: the lawn dips and the second sample can sit above the first)
+  const last = path.length - 1;
+  const top = path[0].y > path[last].y ? 0 : last;
+  const nb = top === 0 ? path[1] : path[last - 1];
   let dx = path[top].x - nb.x, dz = path[top].z - nb.z;
   let l = Math.hypot(dx, dz);
   if (l < 1e-6) { const o = nestOrigin(); dx = path[top].x - (o ? o.x : 0); dz = path[top].z - (o ? o.z : 0); l = Math.hypot(dx, dz) || 1; }
   dx /= l; dz /= l;
-  const px = -dz, pz = dx;                 // beside the ramp, not across it
-  const at = (a, b) => {
-    const x = path[top].x + dx * a + px * b, z = path[top].z + dz * a + pz * b;
-    return { x, y: lawnY(x, z), z };
+  /* Beside the way out, not on it: past the end of the ramp (the trench's footprint stops
+     there) and off to one side. Which side: the one whose ground is lower, so the heap
+     does not sit on the hill. */
+  const M = path[top];
+  const px = -dz, pz = dx;
+  const at = (fw, sd) => { const x = M.x + dx * fw + px * sd, z = M.z + dz * fw + pz * sd; return { x, y: lawnY(x, z), z }; };
+  const side = lawnY(M.x + dx * 12 + px * 14, M.z + dz * 12 + pz * 14) <= lawnY(M.x + dx * 12 - px * 14, M.z + dz * 12 - pz * 14) ? 1 : -1;
+  return {
+    mouth: M, dir: { x: dx, z: dz },
+    drop: at(12, 7 * side),
+    heap: at(15, 15 * side),
   };
-  return { mouth: path[top], dir: { x: dx, z: dz }, drop: at(7, 6), heap: at(9, 15) };
 }
 
 export function createSpoilMound(scene) {
