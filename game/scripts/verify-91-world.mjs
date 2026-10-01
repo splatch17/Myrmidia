@@ -282,6 +282,9 @@ async function main() {
       const mine = window.__lights().filter((L) => L.planned);
       mine.forEach((L, i) => { const c = on ? window.__savedPlanned[i] : [0, 0, 0]; L.c[0] = c[0]; L.c[1] = c[1]; L.c[2] = c[2]; });
       const dx = sd.x - H.x, dz = sd.z - H.z, l = Math.hypot(dx, dz);
+      // the queen can walk into this room now (#91 stacked floors): hide the
+      // ants so the free eye does not sit inside her body
+      window.__scene.traverse((o) => { if (o.name === 'ant' || o.name.startsWith('crowd-')) o.visible = false; });
       const fl = window.__world6.floorAt(sd.x, sd.z, sd.fy + 1) ?? sd.fy;
       window.__renderView([sd.x - dx / l * sd.R * 0.7, fl + 5, sd.z - dz / l * sd.R * 0.7], [sd.x + dx / l * sd.R, fl + 1.5, sd.z + dz / l * sd.R], 3);
     }, [side, hall, lamps]);
